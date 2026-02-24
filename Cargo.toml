@@ -1,0 +1,23 @@
+[package]
+name = "spike"
+version = "0.1.0"
+edition = "2021"
+description = "Haplotype-based read spike-in simulator for genomic variants"
+
+[[bin]]
+name = "spike"
+path = "src/main.rs"
+
+[dependencies]
+noodles = { version = "0.88", features = ["bam", "sam", "bgzf", "core", "fasta"] }
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+rand_distr = "0.4"
+flate2 = "1"
+
+[profile.release]
+opt-level = 3
+lto = true

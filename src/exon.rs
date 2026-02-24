@@ -1,0 +1,562 @@
+//! Exon BED parsing and event specification parsing.
+//!
+//! Replicated from sv_exon to avoid the fermi-lite C FFI build dependency.
+
+use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
+
+use crate::types::SimEvent;
+
+/// Allele fraction specification from event syntax.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AfSpec {
+    /// Exact allele fraction value.
+    Exact(f64),
+    /// Germline heterozygous: sample from Beta(40,40) centered at 0.5.
+    Het,
+    /// Homozygous: fixed at 1.0.
+    Hom,
+}
+
+/// Exon region definition.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Exon {
+    pub chrom: String,
+    pub start: u64, // 0-based
+    pub end: u64,   // 0-based half-open
+    pub name: String,
+    pub gene: String,
+    pub number: u32, // 1-based exon ordinal
+}
+
+/// Gene target with exons.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct GeneTarget {
+    pub gene: String,
+    pub chrom: String,
+    pub gene_start: u64, // min exon start (0-based)
+    pub gene_end: u64,   // max exon end (0-based half-open)
+    pub exons: Vec<Exon>,
+}
+
+/// Parse an exon BED file into gene targets.
+///
+/// Expected format: tab-separated, at least 4 columns:
+///   chrom  start  end  name  [gene]
+///
+/// If 5th column (gene) is absent, gene is parsed from name (e.g. "LDLR_exon1" -> "LDLR").
+pub fn parse_exon_bed(path: &str) -> Result<Vec<GeneTarget>> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read BED: {}", path))?;
+
+    let mut gene_exons: HashMap<(String, String), Vec<Exon>> = HashMap::new();
+
+    for (line_no, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("track") {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 4 {
+            bail!(
+                "BED line {} has fewer than 4 columns: {}",
+                line_no + 1,
+                line
+            );
+        }
+
+        let chrom = fields[0].to_string();
+        let start: u64 = fields[1]
+            .parse()
+            .with_context(|| format!("invalid start at line {}", line_no + 1))?;
+        let end: u64 = fields[2]
+            .parse()
+            .with_context(|| format!("invalid end at line {}", line_no + 1))?;
+        let name = fields[3].to_string();
+
+        let gene = if fields.len() >= 5 && !fields[4].is_empty() {
+            fields[4].to_string()
+        } else {
+            name.split('_').next().unwrap_or(&name).to_string()
+        };
+
+        gene_exons
+            .entry((gene.clone(), chrom.clone()))
+            .or_default()
+            .push(Exon {
+                chrom,
+                start,
+                end,
+                name,
+                gene,
+                number: 0,
+            });
+    }
+
+    let mut targets = Vec::new();
+    for ((gene, _chrom), mut exons) in gene_exons {
+        exons.sort_by_key(|e| e.start);
+        for (i, exon) in exons.iter_mut().enumerate() {
+            exon.number = (i + 1) as u32;
+        }
+        let chrom = exons[0].chrom.clone();
+        let gene_start = exons.iter().map(|e| e.start).min().unwrap();
+        let gene_end = exons.iter().map(|e| e.end).max().unwrap();
+        targets.push(GeneTarget {
+            gene,
+            chrom,
+            gene_start,
+            gene_end,
+            exons,
+        });
+    }
+
+    targets.sort_by(|a, b| a.chrom.cmp(&b.chrom).then(a.gene_start.cmp(&b.gene_start)));
+    Ok(targets)
+}
+
+/// Parse an event specification string into a SimEvent and optional AF spec.
+///
+/// Supported formats:
+///   "del:chr20:30000000-30005000"             — deletion by coordinates
+///   "del:GENE:exon4-exon8"                   — deletion by exon range (requires --exon-bed)
+///   "fusion:GENEA:exon14:GENEB:exon2"        — gene fusion by exon boundaries (requires --exon-bed)
+///   "dup:chr20:30000000-30005000"             — tandem duplication
+///   "inv:chr20:30000000-30005000"             — inversion
+///   "ins:chr20:30000000:500"                  — insertion (500bp random seq)
+///   "del:GENE:exon4-exon8;af=0.15"           — with explicit allele fraction
+///   "fusion:GENEA:exon14:GENEB:exon2;af=het" — with heterozygous AF distribution
+///   "del:GENE:exon4-exon8;af=hom"            — with homozygous AF (1.0)
+pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, Option<AfSpec>)> {
+    // Split on ';' to separate event spec from options.
+    let (event_part, options_part) = match spec.split_once(';') {
+        Some((ev, opts)) => (ev, Some(opts)),
+        None => (spec, None),
+    };
+
+    let parts: Vec<&str> = event_part.split(':').collect();
+    if parts.is_empty() {
+        bail!("empty event specification");
+    }
+
+    let mut event = match parts[0].to_lowercase().as_str() {
+        "del" => parse_deletion_spec(&parts[1..], genes)?,
+        "fusion" => parse_fusion_spec(&parts[1..], genes)?,
+        "dup" => parse_coord_region_spec(&parts[1..], "dup")?,
+        "inv" => parse_coord_region_spec(&parts[1..], "inv")?,
+        "ins" => parse_insertion_spec(&parts[1..])?,
+        other => bail!("unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', or 'ins'", other),
+    };
+
+    // Parse options (currently only af=...).
+    let af_spec = if let Some(opts) = options_part {
+        parse_event_options(opts, &mut event)?
+    } else {
+        None
+    };
+
+    Ok((event, af_spec))
+}
+
+/// Parse key=value options from the part after ';'.
+fn parse_event_options(opts: &str, _event: &mut SimEvent) -> Result<Option<AfSpec>> {
+    let mut af_spec = None;
+    for kv in opts.split(';') {
+        let kv = kv.trim();
+        if kv.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = kv.split_once('=') {
+            match key.to_lowercase().as_str() {
+                "af" => {
+                    af_spec = Some(parse_af_value(value)?);
+                }
+                other => bail!("unknown event option '{}'", other),
+            }
+        } else {
+            bail!("invalid option format '{}', expected key=value", kv);
+        }
+    }
+    Ok(af_spec)
+}
+
+/// Parse an AF value: a number, "het", or "hom".
+fn parse_af_value(value: &str) -> Result<AfSpec> {
+    let value = value.trim().to_lowercase();
+    match value.as_str() {
+        "het" => Ok(AfSpec::Het),
+        "hom" => Ok(AfSpec::Hom),
+        _ => {
+            let v: f64 = value
+                .parse()
+                .with_context(|| format!("invalid af value '{}', expected number, 'het', or 'hom'", value))?;
+            if v <= 0.0 || v > 1.0 {
+                bail!("af must be in (0.0, 1.0], got {}", v);
+            }
+            Ok(AfSpec::Exact(v))
+        }
+    }
+}
+
+fn parse_deletion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
+    if parts.len() < 2 {
+        bail!("deletion spec requires at least 2 parts: 'del:CHR:START-END' or 'del:GENE:exonN-exonM'");
+    }
+
+    let first = parts[0];
+    let second = parts[1];
+
+    // Try coordinate-based: first looks like a chromosome name, second has a dash with numbers.
+    if let Some((start_str, end_str)) = second.split_once('-') {
+        if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
+            // Coordinate-based deletion.
+            return Ok(SimEvent::Deletion {
+                chrom: first.to_string(),
+                del_start: start,
+                del_end: end,
+                gene: "unknown".to_string(),
+                exons: Vec::new(),
+                allele_fraction: None,
+            });
+        }
+    }
+
+    // Exon-based: "del:GENE:exonN-exonM"
+    let gene_name = first;
+    let gene = genes
+        .iter()
+        .find(|g| g.gene.eq_ignore_ascii_case(gene_name))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "gene '{}' not found. Available: {}",
+                gene_name,
+                genes.iter().map(|g| g.gene.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        })?;
+
+    let exon_range = second;
+    let (start_exon_str, end_exon_str) = exon_range.split_once('-').ok_or_else(|| {
+        anyhow::anyhow!(
+            "expected exon range 'exonN-exonM', got '{}'",
+            exon_range
+        )
+    })?;
+
+    let start_num = parse_exon_number(start_exon_str)?;
+    let end_num = parse_exon_number(end_exon_str)?;
+
+    let (start_num, end_num) = if start_num <= end_num {
+        (start_num, end_num)
+    } else {
+        (end_num, start_num)
+    };
+
+    let start_exon = gene
+        .exons
+        .iter()
+        .find(|e| e.number == start_num)
+        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", start_num, gene_name))?;
+    let end_exon = gene
+        .exons
+        .iter()
+        .find(|e| e.number == end_num)
+        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", end_num, gene_name))?;
+
+    let affected_exons: Vec<String> = gene
+        .exons
+        .iter()
+        .filter(|e| e.number >= start_num && e.number <= end_num)
+        .map(|e| e.name.clone())
+        .collect();
+
+    Ok(SimEvent::Deletion {
+        chrom: gene.chrom.clone(),
+        del_start: start_exon.start,
+        del_end: end_exon.end,
+        gene: gene.gene.clone(),
+        exons: affected_exons,
+        allele_fraction: None,
+    })
+}
+
+fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
+    // "fusion:GENEA:exonN:GENEB:exonM"
+    if parts.len() < 4 {
+        bail!("fusion spec requires 4 parts: 'fusion:GENEA:exonN:GENEB:exonM'");
+    }
+
+    let gene_a_name = parts[0];
+    let exon_a_str = parts[1];
+    let gene_b_name = parts[2];
+    let exon_b_str = parts[3];
+
+    let gene_a = genes
+        .iter()
+        .find(|g| g.gene.eq_ignore_ascii_case(gene_a_name))
+        .ok_or_else(|| anyhow::anyhow!("gene '{}' not found", gene_a_name))?;
+    let gene_b = genes
+        .iter()
+        .find(|g| g.gene.eq_ignore_ascii_case(gene_b_name))
+        .ok_or_else(|| anyhow::anyhow!("gene '{}' not found", gene_b_name))?;
+
+    let exon_a_num = parse_exon_number(exon_a_str)?;
+    let exon_b_num = parse_exon_number(exon_b_str)?;
+
+    let exon_a = gene_a
+        .exons
+        .iter()
+        .find(|e| e.number == exon_a_num)
+        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", exon_a_num, gene_a_name))?;
+    let exon_b = gene_b
+        .exons
+        .iter()
+        .find(|e| e.number == exon_b_num)
+        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", exon_b_num, gene_b_name))?;
+
+    // Breakpoint: end of exon A (intron boundary) joined to start of exon B.
+    Ok(SimEvent::Fusion {
+        chrom_a: gene_a.chrom.clone(),
+        bp_a: exon_a.end, // first base NOT included from gene A
+        gene_a: gene_a.gene.clone(),
+        chrom_b: gene_b.chrom.clone(),
+        bp_b: exon_b.start, // first base included from gene B
+        gene_b: gene_b.gene.clone(),
+        allele_fraction: None,
+    })
+}
+
+/// Parse a coordinate-based region spec for DUP or INV.
+///
+/// Format: "dup:chr20:30000000-30005000" or "inv:chr20:30000000-30005000"
+fn parse_coord_region_spec(parts: &[&str], sv_type: &str) -> Result<SimEvent> {
+    if parts.len() < 2 {
+        bail!("{} spec requires: '{}:CHR:START-END'", sv_type, sv_type);
+    }
+
+    let chrom = parts[0].to_string();
+    let range = parts[1];
+
+    let (start_str, end_str) = range.split_once('-')
+        .ok_or_else(|| anyhow::anyhow!("expected START-END range, got '{}'", range))?;
+
+    let start: u64 = start_str.parse()
+        .with_context(|| format!("invalid start position: '{}'", start_str))?;
+    let end: u64 = end_str.parse()
+        .with_context(|| format!("invalid end position: '{}'", end_str))?;
+
+    match sv_type {
+        "dup" => Ok(SimEvent::Duplication {
+            chrom,
+            dup_start: start,
+            dup_end: end,
+            gene: "unknown".to_string(),
+            allele_fraction: None,
+        }),
+        "inv" => Ok(SimEvent::Inversion {
+            chrom,
+            inv_start: start,
+            inv_end: end,
+            gene: "unknown".to_string(),
+            allele_fraction: None,
+        }),
+        _ => bail!("unexpected sv_type '{}' in parse_coord_region_spec", sv_type),
+    }
+}
+
+/// Parse an insertion spec.
+///
+/// Format: "ins:chr20:30000000:500" (chrom:pos:length)
+fn parse_insertion_spec(parts: &[&str]) -> Result<SimEvent> {
+    if parts.len() < 3 {
+        bail!("ins spec requires: 'ins:CHR:POS:LENGTH'");
+    }
+
+    let chrom = parts[0].to_string();
+    let pos: u64 = parts[1].parse()
+        .with_context(|| format!("invalid position: '{}'", parts[1]))?;
+    let ins_len: u64 = parts[2].parse()
+        .with_context(|| format!("invalid insertion length: '{}'", parts[2]))?;
+
+    if ins_len == 0 {
+        bail!("insertion length must be > 0");
+    }
+
+    Ok(SimEvent::Insertion {
+        chrom,
+        pos,
+        ins_seq: None, // will generate random sequence at simulation time
+        ins_len,
+        gene: "unknown".to_string(),
+        allele_fraction: None,
+    })
+}
+
+/// Parse "exon4" or "exon14" or just "4" into exon number.
+fn parse_exon_number(s: &str) -> Result<u32> {
+    let s = s.trim();
+    let num_str = if s.to_lowercase().starts_with("exon") {
+        &s[4..]
+    } else {
+        s
+    };
+    num_str
+        .parse::<u32>()
+        .with_context(|| format!("invalid exon number: '{}'", s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Synthetic gene fixtures for testing (no real coordinates).
+    fn test_genes() -> Vec<GeneTarget> {
+        // GENEA on chr1: 8 exons, 200bp each, 500bp spacing.
+        let gene_a = GeneTarget {
+            gene: "GENEA".to_string(),
+            chrom: "chr1".to_string(),
+            gene_start: 1000,
+            gene_end: 1000 + 7 * 500 + 200, // 4700
+            exons: (1..=8)
+                .map(|i| {
+                    let start = 1000 + (i as u64 - 1) * 500;
+                    Exon {
+                        chrom: "chr1".to_string(),
+                        start,
+                        end: start + 200,
+                        name: format!("GENEA_exon{}", i),
+                        gene: "GENEA".to_string(),
+                        number: i,
+                    }
+                })
+                .collect(),
+        };
+        // GENEB on chr2: 5 exons, 300bp each, 2000bp spacing.
+        let gene_b = GeneTarget {
+            gene: "GENEB".to_string(),
+            chrom: "chr2".to_string(),
+            gene_start: 10000,
+            gene_end: 10000 + 4 * 2000 + 300, // 18300
+            exons: (1..=5)
+                .map(|i| {
+                    let start = 10000 + (i as u64 - 1) * 2000;
+                    Exon {
+                        chrom: "chr2".to_string(),
+                        start,
+                        end: start + 300,
+                        name: format!("GENEB_exon{}", i),
+                        gene: "GENEB".to_string(),
+                        number: i,
+                    }
+                })
+                .collect(),
+        };
+        vec![gene_a, gene_b]
+    }
+
+    #[test]
+    fn test_parse_coordinate_deletion() {
+        let genes = test_genes();
+        let (event, af) = parse_event_spec("del:chr20:30000000-30005000", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::Deletion {
+                chrom,
+                del_start,
+                del_end,
+                ..
+            } => {
+                assert_eq!(chrom, "chr20");
+                assert_eq!(del_start, 30_000_000);
+                assert_eq!(del_end, 30_005_000);
+            }
+            _ => panic!("expected Deletion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_exon_deletion() {
+        let genes = test_genes();
+        // GENEA exon 4 start = 1000 + 3*500 = 2500, exon 8 end = 1000 + 7*500 + 200 = 4700
+        let (event, af) = parse_event_spec("del:GENEA:exon4-exon8", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::Deletion {
+                chrom,
+                del_start,
+                del_end,
+                exons,
+                ..
+            } => {
+                assert_eq!(chrom, "chr1");
+                assert_eq!(del_start, 2500);
+                assert_eq!(del_end, 4700);
+                assert_eq!(exons.len(), 5);
+            }
+            _ => panic!("expected Deletion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fusion() {
+        let genes = test_genes();
+        // GENEA exon 3 end = 1000 + 2*500 + 200 = 2200
+        // GENEB exon 2 start = 10000 + 1*2000 = 12000
+        let (event, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::Fusion {
+                chrom_a,
+                bp_a,
+                chrom_b,
+                bp_b,
+                ..
+            } => {
+                assert_eq!(chrom_a, "chr1");
+                assert_eq!(bp_a, 2200);
+                assert_eq!(chrom_b, "chr2");
+                assert_eq!(bp_b, 12000);
+            }
+            _ => panic!("expected Fusion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_with_af_exact() {
+        let genes = test_genes();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=0.15", &genes).unwrap();
+        assert_eq!(af, Some(AfSpec::Exact(0.15)));
+    }
+
+    #[test]
+    fn test_parse_with_af_het() {
+        let genes = test_genes();
+        let (_, af) =
+            parse_event_spec("fusion:GENEA:exon3:GENEB:exon2;af=het", &genes).unwrap();
+        assert_eq!(af, Some(AfSpec::Het));
+    }
+
+    #[test]
+    fn test_parse_with_af_hom() {
+        let genes = test_genes();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=hom", &genes).unwrap();
+        assert_eq!(af, Some(AfSpec::Hom));
+    }
+
+    #[test]
+    fn test_parse_af_invalid() {
+        let genes = test_genes();
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=0.0", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.5", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=abc", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_exon_number() {
+        assert_eq!(parse_exon_number("exon4").unwrap(), 4);
+        assert_eq!(parse_exon_number("exon14").unwrap(), 14);
+        assert_eq!(parse_exon_number("4").unwrap(), 4);
+        assert!(parse_exon_number("exonXX").is_err());
+    }
+}
