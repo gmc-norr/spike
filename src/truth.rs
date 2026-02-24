@@ -180,6 +180,30 @@ pub fn write_truth_vcf(
                     chrom, pos, i + 1, ins_len, event_af, gene, gt,
                 )?;
             }
+            SimEvent::SmallVariant {
+                chrom,
+                pos,
+                ref_allele,
+                alt_allele,
+                gene,
+                ..
+            } => {
+                let ref_str = String::from_utf8_lossy(ref_allele);
+                let alt_str = String::from_utf8_lossy(alt_allele);
+                // VCF POS is 1-based.
+                writeln!(
+                    f,
+                    "{}\t{}\tsim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                    chrom,
+                    pos + 1, // 0-based → 1-based
+                    i + 1,
+                    ref_str,
+                    alt_str,
+                    event_af,
+                    gene,
+                    gt,
+                )?;
+            }
         }
     }
 

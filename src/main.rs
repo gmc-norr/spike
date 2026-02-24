@@ -52,6 +52,10 @@ struct Args {
     ///   --event "dup:chr20:30000000-30005000"
     ///   --event "inv:chr20:30000000-30005000"
     ///   --event "ins:chr20:30000000:500"
+    ///   --event "snp:chr20:30000000:A:T"                (SNP/small variant)
+    ///   --event "snp:chr20:30000000:A>T"                (alternate syntax)
+    ///   --event "snp:chr20:30000000:ACG:A"              (small deletion)
+    ///   --event "snp:chr20:30000000:A:ACGT"             (small insertion)
     /// Per-event AF (appended with ;):
     ///   --event "del:GENE:exon4-exon8;af=0.15"
     ///   --event "fusion:GENEA:exon14:GENEB:exon2;af=het"
@@ -59,7 +63,8 @@ struct Args {
     #[arg(short, long)]
     event: Vec<String>,
 
-    /// Input VCF file with SV records. Supports DEL, INS, DUP, INV, BND.
+    /// Input VCF file with variant records. Supports DEL, INS, DUP, INV, BND,
+    /// and standard SNP/indel records (no SVTYPE, explicit REF/ALT alleles).
     /// Can be combined with --event. At least one of --event or --vcf required.
     #[arg(long)]
     vcf: Option<String>,
@@ -272,7 +277,8 @@ fn main() -> Result<()> {
             SimEvent::Deletion { chrom, .. }
             | SimEvent::Duplication { chrom, .. }
             | SimEvent::Inversion { chrom, .. }
-            | SimEvent::Insertion { chrom, .. } => vec![chrom.clone()],
+            | SimEvent::Insertion { chrom, .. }
+            | SimEvent::SmallVariant { chrom, .. } => vec![chrom.clone()],
             SimEvent::Fusion {
                 chrom_a, chrom_b, ..
             } => vec![chrom_a.clone(), chrom_b.clone()],
@@ -558,5 +564,12 @@ fn build_haplotype(
             bp_b,
             ..
         } => VariantHaplotype::from_fusion(reference, chrom_a, *bp_a, chrom_b, *bp_b, flank),
+        SimEvent::SmallVariant {
+            chrom,
+            pos,
+            ref_allele,
+            alt_allele,
+            ..
+        } => VariantHaplotype::from_small_variant(reference, chrom, *pos, ref_allele, alt_allele, flank),
     }
 }

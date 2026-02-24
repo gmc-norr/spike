@@ -38,6 +38,7 @@ struct SvRecord {
     chrom: String,
     pos: u64,    // 0-based SV start (DEL/DUP/INV/INS) or 0-based breakpoint (BND)
     id: String,
+    ref_allele: String,
     alt: String,
     info: String,
     sv_type: SvTypeTag,
@@ -50,6 +51,7 @@ enum SvTypeTag {
     Dup,
     Inv,
     Bnd,
+    SmallVar,
 }
 
 fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
@@ -67,6 +69,8 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
         }
 
         let info = fields[7];
+        let ref_col = fields[3];
+        let alt_col = fields[4];
 
         let sv_type = match parse_info_field(info, "SVTYPE") {
             Some(t) => match t {
@@ -77,7 +81,15 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
                 "BND" => SvTypeTag::Bnd,
                 _ => continue,
             },
-            None => continue,
+            None => {
+                // No SVTYPE: check if this is a standard SNP/indel record.
+                // Both REF and ALT must be pure DNA bases (no symbolic <...> alleles).
+                if is_dna_allele(ref_col) && is_dna_allele(alt_col) {
+                    SvTypeTag::SmallVar
+                } else {
+                    continue;
+                }
+            }
         };
 
         // VCF POS is 1-based. For symbolic SVs (DEL/DUP/INV/INS), POS is the
@@ -89,6 +101,7 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
         };
         let pos = match sv_type {
             SvTypeTag::Bnd => raw_pos - 1, // BND: 1-based breakpoint → 0-based
+            SvTypeTag::SmallVar => raw_pos - 1, // Small variant: 1-based → 0-based
             _ => raw_pos,                   // Others: 1-based preceding base == 0-based start
         };
 
@@ -96,7 +109,8 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
             chrom: fields[0].to_string(),
             pos,
             id: fields[2].to_string(),
-            alt: fields[4].to_string(),
+            ref_allele: ref_col.to_string(),
+            alt: alt_col.to_string(),
             info: info.to_string(),
             sv_type,
         });
@@ -219,6 +233,21 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     allele_fraction: af,
                 });
             }
+            SvTypeTag::SmallVar => {
+                let af = extract_af(&record.info);
+                let gene = parse_info_field(&record.info, "SIM_GENE")
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                events.push(SimEvent::SmallVariant {
+                    chrom: record.chrom.clone(),
+                    pos: record.pos,
+                    ref_allele: record.ref_allele.as_bytes().to_vec(),
+                    alt_allele: record.alt.as_bytes().to_vec(),
+                    gene,
+                    allele_fraction: af,
+                });
+            }
             SvTypeTag::Bnd => {
                 // Skip if already processed as part of a MATEID pair.
                 if bnd_processed.contains(&record.id) {
@@ -329,6 +358,16 @@ fn parse_info_i64(info: &str, key: &str) -> Option<i64> {
     parse_info_field(info, key)?.parse().ok()
 }
 
+/// Check if a VCF allele string contains only valid DNA bases (A, C, G, T).
+/// Returns false for symbolic alleles like `<DEL>`, empty strings, or alleles with non-DNA chars.
+fn is_dna_allele(allele: &str) -> bool {
+    !allele.is_empty()
+        && !allele.starts_with('<')
+        && allele
+            .bytes()
+            .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +420,89 @@ mod tests {
         assert_eq!(parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "END"), Some("100"));
         assert_eq!(parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "SVLEN"), Some("-500"));
         assert_eq!(parse_info_field("SVTYPE=DEL;END=100", "GENE"), None);
+    }
+
+    #[test]
+    fn test_parse_snp_record() {
+        // SNP: no SVTYPE, REF=A, ALT=T at POS=100 (1-based) → 0-based pos=99
+        let vcf = "chr1\t100\ttest_snp\tA\tT\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::SmallVariant { chrom, pos, ref_allele, alt_allele, .. } => {
+                assert_eq!(chrom, "chr1");
+                assert_eq!(*pos, 99);
+                assert_eq!(ref_allele, b"A");
+                assert_eq!(alt_allele, b"T");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_small_deletion_record() {
+        // Small del: REF=ACG, ALT=A at POS=100 (1-based) → 0-based pos=99
+        let vcf = "chr1\t100\ttest_del\tACG\tA\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::SmallVariant { pos, ref_allele, alt_allele, .. } => {
+                assert_eq!(*pos, 99);
+                assert_eq!(ref_allele, b"ACG");
+                assert_eq!(alt_allele, b"A");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_small_insertion_record() {
+        // Small ins: REF=A, ALT=ACGT at POS=100 (1-based) → 0-based pos=99
+        let vcf = "chr1\t100\ttest_ins\tA\tACGT\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::SmallVariant { pos, ref_allele, alt_allele, .. } => {
+                assert_eq!(*pos, 99);
+                assert_eq!(ref_allele, b"A");
+                assert_eq!(alt_allele, b"ACGT");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_small_variant_with_af() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=0.25\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        match &events[0] {
+            SimEvent::SmallVariant { allele_fraction, .. } => {
+                assert_eq!(*allele_fraction, Some(0.25));
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_symbolic_alt_skipped() {
+        // Symbolic ALT without SVTYPE should be skipped.
+        let vcf = "chr1\t100\ttest\tA\t<DEL>\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn test_is_dna_allele() {
+        assert!(is_dna_allele("A"));
+        assert!(is_dna_allele("ACGT"));
+        assert!(is_dna_allele("acgt")); // lowercase ok
+        assert!(!is_dna_allele("<DEL>"));
+        assert!(!is_dna_allele(""));
+        assert!(!is_dna_allele("N")); // N is not A/C/G/T
     }
 
     /// Test that VCF coordinates are parsed correctly for all SV types.

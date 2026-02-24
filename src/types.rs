@@ -47,6 +47,15 @@ pub enum SimEvent {
         gene: String,
         allele_fraction: Option<f64>,
     },
+    /// Small variant: SNP, MNV, or small indel represented by explicit REF/ALT alleles.
+    SmallVariant {
+        chrom: String,
+        pos: u64,              // 0-based start position
+        ref_allele: Vec<u8>,   // reference allele bases (uppercase)
+        alt_allele: Vec<u8>,   // alternate allele bases (uppercase)
+        gene: String,
+        allele_fraction: Option<f64>,
+    },
 }
 
 impl SimEvent {
@@ -57,7 +66,8 @@ impl SimEvent {
             | SimEvent::Fusion { allele_fraction, .. }
             | SimEvent::Duplication { allele_fraction, .. }
             | SimEvent::Inversion { allele_fraction, .. }
-            | SimEvent::Insertion { allele_fraction, .. } => *allele_fraction,
+            | SimEvent::Insertion { allele_fraction, .. }
+            | SimEvent::SmallVariant { allele_fraction, .. } => *allele_fraction,
         }
     }
 
@@ -84,6 +94,12 @@ impl SimEvent {
                 ..
             } => Some((chrom, *inv_start, *inv_end)),
             SimEvent::Insertion { chrom, pos, .. } => Some((chrom, *pos, *pos)),
+            SimEvent::SmallVariant {
+                chrom,
+                pos,
+                ref_allele,
+                ..
+            } => Some((chrom, *pos, *pos + ref_allele.len() as u64)),
             SimEvent::Fusion { .. } => None,
         }
     }
@@ -95,7 +111,8 @@ impl SimEvent {
             | SimEvent::Fusion { allele_fraction, .. }
             | SimEvent::Duplication { allele_fraction, .. }
             | SimEvent::Inversion { allele_fraction, .. }
-            | SimEvent::Insertion { allele_fraction, .. } => *allele_fraction = af,
+            | SimEvent::Insertion { allele_fraction, .. }
+            | SimEvent::SmallVariant { allele_fraction, .. } => *allele_fraction = af,
         }
     }
 }

@@ -31,13 +31,14 @@ Real BAM + Reference FASTA + Variant specs
 
 ## Supported variant types
 
-| Type | Event spec | VCF SVTYPE | Description |
+| Type | Event spec | VCF format | Description |
 |------|-----------|------------|-------------|
-| Deletion | `del:chr:start-end` | DEL | Region removed from one haplotype |
-| Duplication | `dup:chr:start-end` | DUP | Tandem duplication in place |
-| Inversion | `inv:chr:start-end` | INV | Region reversed in place |
-| Insertion | `ins:chr:pos:length` | INS | Novel sequence inserted at position |
-| Fusion | `fusion:GENEA:exonN:GENEB:exonM` | BND | Two breakpoints joined across genes/chromosomes |
+| Deletion | `del:chr:start-end` | SVTYPE=DEL | Region removed from one haplotype |
+| Duplication | `dup:chr:start-end` | SVTYPE=DUP | Tandem duplication in place |
+| Inversion | `inv:chr:start-end` | SVTYPE=INV | Region reversed in place |
+| Insertion | `ins:chr:pos:length` | SVTYPE=INS | Novel sequence inserted at position |
+| Fusion | `fusion:GENEA:exonN:GENEB:exonM` | SVTYPE=BND | Two breakpoints joined across genes/chromosomes |
+| SNP/Indel | `snp:chr:pos:REF:ALT` | Standard REF/ALT | SNPs, MNVs, small insertions/deletions |
 
 All types support per-event allele fraction control.
 
@@ -97,6 +98,19 @@ spike \
   -o /tmp/spike_output
 ```
 
+### SNP/indel events
+
+```bash
+spike \
+  --bam sample.bam \
+  --reference GRCh38.fasta \
+  --event "snp:chr17:7577120:C:T;af=0.3" \
+  --event "snp:chr17:7577530:ACG:A" \
+  -o /tmp/spike_output
+```
+
+Format: `snp:CHR:POS:REF:ALT` or `snp:CHR:POS:REF>ALT` (POS is 1-based). Handles SNPs, MNVs, small deletions (longer REF), and small insertions (longer ALT).
+
 ### VCF input
 
 ```bash
@@ -107,7 +121,7 @@ spike \
   -o /tmp/spike_output
 ```
 
-Supports DEL, INS, DUP, INV, and BND (paired by MATEID) from VCF 4.3 files. Plain `.vcf` and bgzip-compressed `.vcf.gz` are both supported. Per-event AF is read from the `VAF` or `SIM_VAF` INFO field if present.
+Supports DEL, INS, DUP, INV, BND (paired by MATEID), and standard SNP/indel records (no SVTYPE, explicit REF/ALT alleles) from VCF 4.3 files. Plain `.vcf` and bgzip-compressed `.vcf.gz` are both supported. Per-event AF is read from the `VAF` or `SIM_VAF` INFO field if present.
 
 ### With LOH from a gVCF
 
@@ -152,7 +166,7 @@ Options:
   -b, --bam <BAM>                  Input BAM file (coordinate-sorted, indexed)
   -r, --reference <FASTA>          Reference FASTA (with .fai index)
   -e, --event <SPEC>               Event specification(s), can be repeated
-      --vcf <VCF>                  Input VCF file with SV records
+      --vcf <VCF>                  Input VCF file with variant records
       --exon-bed <BED>             Exon BED file (required for gene-based events)
       --allele-fraction <AF>       Target allele fraction [default: 0.5]
   -o, --output <DIR>               Output directory [default: /tmp/spike]
@@ -177,7 +191,7 @@ extract.rs       BAM read pair extraction
 stats.rs         Fragment length distribution
 loh.rs           Loss of heterozygosity / allelic imbalance
 exon.rs          Exon BED and event spec parsing
-vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND)
+vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND/SNP/indel)
 truth.rs         Truth VCF output
 fastq.rs         Gzipped paired FASTQ writer
 reference.rs     Indexed FASTA reading + in-memory sequence store

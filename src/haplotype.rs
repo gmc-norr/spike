@@ -288,6 +288,60 @@ impl VariantHaplotype {
         ]))
     }
 
+    /// Build a small variant haplotype (SNP, MNV, or small indel).
+    ///
+    /// `ref[pos-flank..pos] | alt_allele | ref[pos+len(ref_allele)..pos+len(ref_allele)+flank]`
+    ///
+    /// Works for all small variant types:
+    /// - SNP (A→T): left flank + [T] + right flank, skipping 1 ref base
+    /// - Small del (ACG→A): left flank + [A] + right flank, skipping 3 ref bases
+    /// - Small ins (A→ACGT): left flank + [ACGT] + right flank, skipping 1 ref base
+    /// - MNV (AC→TG): left flank + [TG] + right flank, skipping 2 ref bases
+    pub fn from_small_variant(
+        reference: &SharedReference,
+        chrom: &str,
+        pos: u64,
+        ref_allele: &[u8],
+        alt_allele: &[u8],
+        flank: u64,
+    ) -> Result<Self> {
+        let left_start = pos.saturating_sub(flank);
+        let ref_end_pos = pos + ref_allele.len() as u64;
+        let right_end = ref_end_pos.saturating_add(flank);
+
+        let left_seq = fetch_upper(reference, chrom, left_start, pos)?;
+        let right_seq = fetch_upper(reference, chrom, ref_end_pos, right_end)?;
+        let alt_upper: Vec<u8> = alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
+
+        Ok(Self::from_segments(vec![
+            HaplotypeSegment {
+                sequence: left_seq,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: left_start,
+                    ref_end: pos,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: alt_upper,
+                origin: None, // alt allele treated as novel sequence
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: right_seq,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: ref_end_pos,
+                    ref_end: right_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+        ]))
+    }
+
     /// Get a subsequence from the linear haplotype.
     ///
     /// Returns a slice of the concatenated sequence at `[hap_start, hap_start+len)`.
@@ -693,5 +747,114 @@ mod tests {
         // Request beyond end.
         let seq = hap.get_sequence(195, 20);
         assert_eq!(seq.len(), 5); // only 5 bases left
+    }
+
+    // Helper for small variant haplotypes using MockRef.
+    fn mock_segments_small_variant(
+        pos: u64,
+        ref_allele: &[u8],
+        alt_allele: &[u8],
+        flank: u64,
+    ) -> VariantHaplotype {
+        let mock = MockRef;
+        let left_start = pos.saturating_sub(flank);
+        let ref_end_pos = pos + ref_allele.len() as u64;
+        let right_end = ref_end_pos.saturating_add(flank);
+
+        VariantHaplotype::from_segments(vec![
+            HaplotypeSegment {
+                sequence: mock.fetch("chr1", left_start, pos),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: left_start,
+                    ref_end: pos,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: alt_allele.to_vec(),
+                origin: None,
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: mock.fetch("chr1", ref_end_pos, right_end),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: ref_end_pos,
+                    ref_end: right_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+        ])
+    }
+
+    #[test]
+    fn test_snp_haplotype() {
+        // SNP at pos 500: ref=A, alt=T, flank=100
+        let hap = mock_segments_small_variant(500, b"A", b"T", 100);
+        // 3 segments: left [400,500) = 100bp, alt [T] = 1bp, right [501,601) = 100bp
+        assert_eq!(hap.segments.len(), 3);
+        assert_eq!(hap.total_len, 201); // 100 + 1 + 100
+
+        let bps = hap.breakpoints();
+        assert_eq!(bps.len(), 2);
+        assert_eq!(bps[0], 100); // left→alt boundary
+        assert_eq!(bps[1], 101); // alt→right boundary
+
+        // The alt base should be T.
+        let alt_seq = hap.get_sequence(100, 1);
+        assert_eq!(alt_seq, b"T");
+    }
+
+    #[test]
+    fn test_snp_coordinate_mapping() {
+        let hap = mock_segments_small_variant(500, b"A", b"T", 100);
+
+        // Left: hap 0 → ref 400.
+        let (_, pos) = hap.hap_to_ref(0).unwrap();
+        assert_eq!(pos, 400);
+
+        // Last left: hap 99 → ref 499.
+        let (_, pos) = hap.hap_to_ref(99).unwrap();
+        assert_eq!(pos, 499);
+
+        // Alt base at hap 100 → None (novel, no ref origin).
+        assert!(hap.hap_to_ref(100).is_none());
+
+        // Right: hap 101 → ref 501.
+        let (_, pos) = hap.hap_to_ref(101).unwrap();
+        assert_eq!(pos, 501);
+    }
+
+    #[test]
+    fn test_small_deletion_haplotype() {
+        // Small del at pos 500: ref=ACG (3bp), alt=A (1bp) → delete CG
+        let hap = mock_segments_small_variant(500, b"ACG", b"A", 100);
+        // 3 segments: left [400,500)=100, alt [A]=1, right [503,603)=100
+        assert_eq!(hap.segments.len(), 3);
+        assert_eq!(hap.total_len, 201); // 100 + 1 + 100 (shorter than ref span of 203)
+
+        // Right flank starts at ref 503 (pos + 3).
+        let (_, pos) = hap.hap_to_ref(101).unwrap();
+        assert_eq!(pos, 503);
+    }
+
+    #[test]
+    fn test_small_insertion_haplotype() {
+        // Small ins at pos 500: ref=A (1bp), alt=ACGT (4bp) → insert CGT
+        let hap = mock_segments_small_variant(500, b"A", b"ACGT", 100);
+        // 3 segments: left [400,500)=100, alt [ACGT]=4, right [501,601)=100
+        assert_eq!(hap.segments.len(), 3);
+        assert_eq!(hap.total_len, 204); // 100 + 4 + 100
+
+        // Inserted sequence should be ACGT.
+        let ins_seq = hap.get_sequence(100, 4);
+        assert_eq!(ins_seq, b"ACGT");
+
+        // Right flank starts at ref 501 (pos + 1).
+        let (_, pos) = hap.hap_to_ref(104).unwrap();
+        assert_eq!(pos, 501);
     }
 }

@@ -147,7 +147,8 @@ pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, O
         "dup" => parse_coord_region_spec(&parts[1..], "dup")?,
         "inv" => parse_coord_region_spec(&parts[1..], "inv")?,
         "ins" => parse_insertion_spec(&parts[1..])?,
-        other => bail!("unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', or 'ins'", other),
+        "snp" => parse_snp_spec(&parts[1..])?,
+        other => bail!("unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', 'ins', or 'snp'", other),
     };
 
     // Parse options (currently only af=...).
@@ -393,6 +394,65 @@ fn parse_insertion_spec(parts: &[&str]) -> Result<SimEvent> {
     })
 }
 
+/// Parse a SNP/small variant spec.
+///
+/// Formats:
+///   "snp:chr1:100:A:T"    — explicit REF and ALT bases
+///   "snp:chr1:100:A>T"    — REF>ALT shorthand
+///   "snp:chr1:100:ACG:A"  — small deletion (REF=ACG, ALT=A)
+///   "snp:chr1:100:A:ACGT" — small insertion (REF=A, ALT=ACGT)
+fn parse_snp_spec(parts: &[&str]) -> Result<SimEvent> {
+    if parts.len() < 3 {
+        bail!("snp spec requires: 'snp:CHR:POS:REF:ALT' or 'snp:CHR:POS:REF>ALT'");
+    }
+
+    let chrom = parts[0].to_string();
+    let pos: u64 = parts[1]
+        .parse()
+        .with_context(|| format!("invalid position: '{}'", parts[1]))?;
+
+    // Parse REF and ALT: either "REF:ALT" (two parts) or "REF>ALT" (one part with >).
+    let (ref_str, alt_str) = if parts.len() >= 4 {
+        // "snp:chr:pos:REF:ALT"
+        (parts[2], parts[3])
+    } else if let Some((r, a)) = parts[2].split_once('>') {
+        // "snp:chr:pos:REF>ALT"
+        (r, a)
+    } else {
+        bail!(
+            "snp spec requires REF:ALT or REF>ALT, got '{}'",
+            parts[2]
+        );
+    };
+
+    let ref_allele: Vec<u8> = ref_str.as_bytes().to_vec();
+    let alt_allele: Vec<u8> = alt_str.as_bytes().to_vec();
+
+    // Validate: must be non-empty DNA bases.
+    if ref_allele.is_empty() || alt_allele.is_empty() {
+        bail!("REF and ALT alleles must be non-empty");
+    }
+    for &b in ref_allele.iter().chain(alt_allele.iter()) {
+        if !matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T') {
+            bail!("invalid base '{}' in allele, expected A/C/G/T", b as char);
+        }
+    }
+
+    // REF and ALT must differ.
+    if ref_allele == alt_allele {
+        bail!("REF and ALT alleles are identical: '{}'", ref_str);
+    }
+
+    Ok(SimEvent::SmallVariant {
+        chrom,
+        pos,
+        ref_allele: ref_allele.iter().map(|b| b.to_ascii_uppercase()).collect(),
+        alt_allele: alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect(),
+        gene: "unknown".to_string(),
+        allele_fraction: None,
+    })
+}
+
 /// Parse "exon4" or "exon14" or just "4" into exon number.
 fn parse_exon_number(s: &str) -> Result<u32> {
     let s = s.trim();
@@ -550,6 +610,82 @@ mod tests {
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=0.0", &genes).is_err());
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.5", &genes).is_err());
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=abc", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_snp_colon_format() {
+        let genes = test_genes();
+        let (event, af) = parse_event_spec("snp:chr1:100:A:T", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::SmallVariant {
+                chrom, pos, ref_allele, alt_allele, ..
+            } => {
+                assert_eq!(chrom, "chr1");
+                assert_eq!(pos, 100);
+                assert_eq!(ref_allele, b"A");
+                assert_eq!(alt_allele, b"T");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_snp_arrow_format() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("snp:chr1:100:A>T", &genes).unwrap();
+        match event {
+            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+                assert_eq!(ref_allele, b"A");
+                assert_eq!(alt_allele, b"T");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_snp_with_af() {
+        let genes = test_genes();
+        let (_, af) = parse_event_spec("snp:chr1:100:A:T;af=0.3", &genes).unwrap();
+        assert_eq!(af, Some(AfSpec::Exact(0.3)));
+    }
+
+    #[test]
+    fn test_parse_snp_small_del() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("snp:chr1:100:ACG:A", &genes).unwrap();
+        match event {
+            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+                assert_eq!(ref_allele, b"ACG");
+                assert_eq!(alt_allele, b"A");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_snp_small_ins() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("snp:chr1:100:A:ACGT", &genes).unwrap();
+        match event {
+            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+                assert_eq!(ref_allele, b"A");
+                assert_eq!(alt_allele, b"ACGT");
+            }
+            _ => panic!("expected SmallVariant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_snp_invalid_base() {
+        let genes = test_genes();
+        assert!(parse_event_spec("snp:chr1:100:A:X", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_snp_same_alleles() {
+        let genes = test_genes();
+        assert!(parse_event_spec("snp:chr1:100:A:A", &genes).is_err());
     }
 
     #[test]
