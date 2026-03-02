@@ -249,7 +249,8 @@ impl VariantHaplotype {
 
     /// Build a fusion haplotype.
     ///
-    /// `ref_A[bp_a-flank..bp_a] | ref_B[bp_b..bp_b+flank]`
+    /// Normal: `ref_A[bp_a-flank..bp_a] | ref_B[bp_b..bp_b+flank]`
+    /// Inverted: `ref_A[bp_a-flank..bp_a] | revcomp(ref_B[bp_b..bp_b+flank])`
     pub fn from_fusion(
         reference: &SharedReference,
         chrom_a: &str,
@@ -257,12 +258,17 @@ impl VariantHaplotype {
         chrom_b: &str,
         bp_b: u64,
         flank: u64,
+        inverted: bool,
     ) -> Result<Self> {
         let left_start = bp_a.saturating_sub(flank);
         let right_end = bp_b.saturating_add(flank);
 
         let left_seq = fetch_upper(reference, chrom_a, left_start, bp_a)?;
-        let right_seq = fetch_upper(reference, chrom_b, bp_b, right_end)?;
+        let mut right_seq = fetch_upper(reference, chrom_b, bp_b, right_end)?;
+
+        if inverted {
+            reverse_complement(&mut right_seq);
+        }
 
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
@@ -281,7 +287,7 @@ impl VariantHaplotype {
                     chrom: chrom_b.to_string(),
                     ref_start: bp_b,
                     ref_end: right_end,
-                    is_reverse: false,
+                    is_reverse: inverted,
                 }),
                 hap_offset: 0,
             },
@@ -313,6 +319,21 @@ impl VariantHaplotype {
         let right_seq = fetch_upper(reference, chrom, ref_end_pos, right_end)?;
         let alt_upper: Vec<u8> = alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
 
+        // For SNPs/MNVs (equal length ref and alt), the alt segment has a 1:1
+        // mapping to the reference. Give it a SegmentOrigin so hap_to_ref works
+        // correctly through the variant site (needed for read coordinate mapping).
+        // For indels (different lengths), there's no 1:1 mapping → origin = None.
+        let alt_origin = if ref_allele.len() == alt_allele.len() {
+            Some(SegmentOrigin {
+                chrom: chrom.to_string(),
+                ref_start: pos,
+                ref_end: ref_end_pos,
+                is_reverse: false,
+            })
+        } else {
+            None
+        };
+
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
                 sequence: left_seq,
@@ -326,7 +347,7 @@ impl VariantHaplotype {
             },
             HaplotypeSegment {
                 sequence: alt_upper,
-                origin: None, // alt allele treated as novel sequence
+                origin: alt_origin,
                 hap_offset: 0,
             },
             HaplotypeSegment {
@@ -431,6 +452,54 @@ impl VariantHaplotype {
             Some((min_pos, max_pos))
         } else {
             None
+        }
+    }
+
+    /// Apply het SNP variants to the haplotype sequence.
+    ///
+    /// `variants` maps reference position → alternate allele base (uppercase).
+    /// For each reference-origin segment, every base whose reference position
+    /// appears in the map is replaced with the alt allele. This ensures that
+    /// reads tiled across the haplotype carry the correct het SNP alleles
+    /// instead of reference-only bases.
+    pub fn apply_variants(&mut self, variants: &std::collections::HashMap<u64, u8>) {
+        if variants.is_empty() {
+            return;
+        }
+        let mut applied = 0usize;
+        for seg in &mut self.segments {
+            let origin = match &seg.origin {
+                Some(o) => o,
+                None => continue, // novel insertion — no reference positions
+            };
+            let seg_len = seg.sequence.len() as u64;
+            for offset in 0..seg_len {
+                let ref_pos = if origin.is_reverse {
+                    origin.ref_end.saturating_sub(1).saturating_sub(offset)
+                } else {
+                    origin.ref_start + offset
+                };
+                if let Some(&alt) = variants.get(&ref_pos) {
+                    let base = if origin.is_reverse {
+                        crate::extract::complement_base(alt)
+                    } else {
+                        alt
+                    };
+                    seg.sequence[offset as usize] = base;
+                    // Also update the concatenated sequence.
+                    let concat_idx = (seg.hap_offset + offset) as usize;
+                    if concat_idx < self.sequence.len() {
+                        self.sequence[concat_idx] = base;
+                    }
+                    applied += 1;
+                }
+            }
+        }
+        if applied > 0 {
+            log::info!(
+                "Applied {} het SNP variants to haplotype sequence",
+                applied,
+            );
         }
     }
 
@@ -761,6 +830,18 @@ mod tests {
         let ref_end_pos = pos + ref_allele.len() as u64;
         let right_end = ref_end_pos.saturating_add(flank);
 
+        // SNPs/MNVs (equal length) get a reference origin; indels do not.
+        let alt_origin = if ref_allele.len() == alt_allele.len() {
+            Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: pos,
+                ref_end: ref_end_pos,
+                is_reverse: false,
+            })
+        } else {
+            None
+        };
+
         VariantHaplotype::from_segments(vec![
             HaplotypeSegment {
                 sequence: mock.fetch("chr1", left_start, pos),
@@ -774,7 +855,7 @@ mod tests {
             },
             HaplotypeSegment {
                 sequence: alt_allele.to_vec(),
-                origin: None,
+                origin: alt_origin,
                 hap_offset: 0,
             },
             HaplotypeSegment {
@@ -820,8 +901,9 @@ mod tests {
         let (_, pos) = hap.hap_to_ref(99).unwrap();
         assert_eq!(pos, 499);
 
-        // Alt base at hap 100 → None (novel, no ref origin).
-        assert!(hap.hap_to_ref(100).is_none());
+        // SNP alt base at hap 100 → ref 500 (SNPs have 1:1 ref mapping).
+        let (_, pos) = hap.hap_to_ref(100).unwrap();
+        assert_eq!(pos, 500);
 
         // Right: hap 101 → ref 501.
         let (_, pos) = hap.hap_to_ref(101).unwrap();

@@ -182,6 +182,9 @@ pub struct SynthReadGenerator<'a> {
     /// Het SNP positions → allele on the duplicated haplotype.
     /// Synthetic reads substitute these bases instead of reference.
     haplotype_variants: HashMap<u64, u8>,
+    /// Fraction of sequencing errors that are indels (vs substitutions).
+    /// 0.0 = substitution-only (default), ~0.05 = typical Illumina.
+    indel_error_rate: f64,
 }
 
 impl<'a> SynthReadGenerator<'a> {
@@ -189,12 +192,14 @@ impl<'a> SynthReadGenerator<'a> {
         profile: QualityProfile,
         reference: &'a SharedReference,
         read_length: usize,
+        indel_error_rate: f64,
     ) -> Self {
         Self {
             profile,
             reference,
             read_length,
             haplotype_variants: HashMap::new(),
+            indel_error_rate,
         }
     }
 
@@ -233,63 +238,84 @@ impl<'a> SynthReadGenerator<'a> {
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
         let rl = self.read_length;
-        let ref_end = ref_start + rl as u64;
+        // Fetch extra ref bases in case indel errors shift our position.
+        let fetch_extra = if self.indel_error_rate > 0.0 { 10 } else { 0 };
+        let ref_end = ref_start + (rl + fetch_extra) as u64;
 
         let ref_seq = self
             .reference
             .fetch_sequence(chrom, ref_start, ref_end)
-            .unwrap_or_else(|_| vec![b'N'; rl]);
+            .unwrap_or_else(|_| vec![b'N'; rl + fetch_extra]);
 
         let mut seq = Vec::with_capacity(rl);
         let mut qual = Vec::with_capacity(rl);
+        let mut ref_idx = 0usize; // current position in ref_seq
 
-        for c in 0..rl {
-            // Uppercase: reference FASTA may contain lowercase (soft-masked repeats).
-            let ref_base = ref_seq.get(c).unwrap_or(&b'N').to_ascii_uppercase();
+        while seq.len() < rl && ref_idx < ref_seq.len() {
+            let c = seq.len(); // cycle position in the read
 
-            // Haplotype variant substitution: if this position is a het SNP on
-            // the duplicated haplotype, use the haplotype's allele instead of
-            // the reference. This ensures synthetic depth copies carry the
-            // correct alleles for realistic BAF (2:1 at het sites in a DUP).
-            let genomic_pos = ref_start + c as u64;
+            let ref_base = ref_seq[ref_idx].to_ascii_uppercase();
+
+            let genomic_pos = ref_start + ref_idx as u64;
             let true_base = self
                 .haplotype_variants
                 .get(&genomic_pos)
                 .copied()
                 .unwrap_or(ref_base);
 
-            // For R2: sample in reverse cycle order so that after qual2.reverse()
-            // the FASTQ-oriented quality matches the profile (cycle 0 = first
-            // sequenced base = rightmost reference position for FR pairs).
             let qual_cycle = if reverse_cycles { rl - 1 - c } else { c };
-            // For base-conditioned quality: use the base as it appears in FASTQ
-            // orientation (matching how the profile was learned from seq1/seq2).
-            // R1 (forward): FASTQ base == true_base.
-            // R2 (reverse_cycles=true): FASTQ base == complement of true_base,
-            // since seq2 is stored reverse-complemented from reference.
             let profile_base = if reverse_cycles {
                 complement(true_base)
             } else {
                 true_base
             };
             let q = self.profile.sample_quality(read_num, qual_cycle, profile_base, rng);
-            qual.push(q);
 
             if true_base == b'N' {
                 seq.push(b'N');
+                qual.push(q);
+                ref_idx += 1;
                 continue;
             }
 
-            // Error probability from Phred quality.
             let phred = (q as f64 - 33.0).max(0.0);
             let p_err = 10.0_f64.powf(-phred / 10.0);
 
             if rng.gen::<f64>() < p_err {
-                seq.push(random_different_base(true_base, rng));
+                if self.indel_error_rate > 0.0 && rng.gen::<f64>() < self.indel_error_rate {
+                    // Indel error: 50/50 insertion vs deletion.
+                    if rng.gen::<bool>() {
+                        // Insertion: add a random base without consuming ref.
+                        seq.push(random_base(rng));
+                        qual.push(q);
+                        // Don't advance ref_idx — the ref base will be read next cycle.
+                    } else {
+                        // Deletion: skip this ref base entirely.
+                        ref_idx += 1;
+                        // Don't add to seq/qual — next iteration will read next ref base.
+                    }
+                } else {
+                    // Substitution error.
+                    seq.push(random_different_base(true_base, rng));
+                    qual.push(q);
+                    ref_idx += 1;
+                }
             } else {
                 seq.push(true_base);
+                qual.push(q);
+                ref_idx += 1;
             }
         }
+
+        // Pad if we ran out of ref bases due to deletions.
+        while seq.len() < rl {
+            seq.push(b'N');
+            qual.push(b'!' + 2); // Q2
+        }
+
+        // Truncate if insertions made it too long (shouldn't happen with while < rl, but safety).
+        seq.truncate(rl);
+        qual.truncate(rl);
 
         (seq, qual)
     }
@@ -371,6 +397,7 @@ impl<'a> SynthReadGenerator<'a> {
     /// - Classified reads in `hap_set` → always copy (target haplotype).
     /// - Classified reads NOT in `hap_set` → never copy (other haplotype).
     /// - Unclassified reads (not in `classified_set`) → randomly copy at VAF rate.
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_dup_depth_copies(
         &self,
         pool: &ReadPool,
@@ -401,7 +428,15 @@ impl<'a> SynthReadGenerator<'a> {
 
             let should_copy = if use_hap {
                 if classified_set.contains(&pair.name) {
-                    hap_set.contains(&pair.name)
+                    if hap_set.contains(&pair.name) {
+                        // Variant haplotype: copy at rate min(1, 2*vaf).
+                        // At VAF=0.5 this copies all hap reads (50% of total).
+                        // At VAF=0.3 this copies 60% of hap reads (30% of total).
+                        rng.gen::<f64>() < (2.0 * vaf).min(1.0)
+                    } else {
+                        // Other haplotype: only copy when VAF > 0.5.
+                        rng.gen::<f64>() < (2.0 * vaf - 1.0).max(0.0)
+                    }
                 } else {
                     rng.gen::<f64>() < vaf
                 }
@@ -451,9 +486,11 @@ impl<'a> SynthReadGenerator<'a> {
         let rl = self.read_length.min(seq.len());
         let mut out_seq = Vec::with_capacity(rl);
         let mut out_qual = Vec::with_capacity(rl);
+        let mut seq_idx = 0usize;
 
-        for c in 0..rl {
-            let true_base = seq[c].to_ascii_uppercase();
+        while out_seq.len() < rl && seq_idx < seq.len() {
+            let c = out_seq.len();
+            let true_base = seq[seq_idx].to_ascii_uppercase();
 
             let qual_cycle = if reverse_cycles { rl - 1 - c } else { c };
             let profile_base = if reverse_cycles {
@@ -462,10 +499,11 @@ impl<'a> SynthReadGenerator<'a> {
                 true_base
             };
             let q = self.profile.sample_quality(read_num, qual_cycle, profile_base, rng);
-            out_qual.push(q);
 
             if true_base == b'N' {
                 out_seq.push(b'N');
+                out_qual.push(q);
+                seq_idx += 1;
                 continue;
             }
 
@@ -473,11 +511,34 @@ impl<'a> SynthReadGenerator<'a> {
             let p_err = 10.0_f64.powf(-phred / 10.0);
 
             if rng.gen::<f64>() < p_err {
-                out_seq.push(random_different_base(true_base, rng));
+                if self.indel_error_rate > 0.0 && rng.gen::<f64>() < self.indel_error_rate {
+                    if rng.gen::<bool>() {
+                        // Insertion error.
+                        out_seq.push(random_base(rng));
+                        out_qual.push(q);
+                    } else {
+                        // Deletion error.
+                        seq_idx += 1;
+                    }
+                } else {
+                    out_seq.push(random_different_base(true_base, rng));
+                    out_qual.push(q);
+                    seq_idx += 1;
+                }
             } else {
                 out_seq.push(true_base);
+                out_qual.push(q);
+                seq_idx += 1;
             }
         }
+
+        while out_seq.len() < rl {
+            out_seq.push(b'N');
+            out_qual.push(b'!' + 2);
+        }
+
+        out_seq.truncate(rl);
+        out_qual.truncate(rl);
 
         (out_seq, out_qual)
     }
@@ -565,6 +626,11 @@ fn complement(base: u8) -> u8 {
         b'G' => b'C',
         _ => base, // N stays N
     }
+}
+
+/// Pick a random base (uniform among A, C, G, T).
+fn random_base(rng: &mut StdRng) -> u8 {
+    b"ACGT"[rng.gen_range(0..4)]
 }
 
 /// Pick a random base different from the given one (uniform among the other 3).

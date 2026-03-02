@@ -116,6 +116,7 @@ pub fn write_truth_vcf(
                 chrom_b,
                 bp_b,
                 gene_b,
+                inverted,
                 ..
             } => {
                 let id_a = format!("sim_fus_{}", i + 1);
@@ -125,14 +126,27 @@ pub fn write_truth_vcf(
                 // where POS is 1-based preceding base == 0-based start).
                 let bp_a_1based = bp_a + 1;
                 let bp_b_1based = bp_b + 1;
-                let alt_a = format!("N[{}:{}[", chrom_b, bp_b_1based);
+
+                // BND bracket notation encodes orientation:
+                //   Forward:  N[chr:pos[  and  ]chr:pos]N
+                //   Inverted: N]chr:pos]  and  [chr:pos[N
+                let (alt_a, alt_b) = if *inverted {
+                    (
+                        format!("N]{}:{}]", chrom_b, bp_b_1based),
+                        format!("[{}:{}[N", chrom_a, bp_a_1based),
+                    )
+                } else {
+                    (
+                        format!("N[{}:{}[", chrom_b, bp_b_1based),
+                        format!("]{}:{}]N", chrom_a, bp_a_1based),
+                    )
+                };
                 writeln!(
                     f,
                     "{}\t{}\t{}\tN\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
                     chrom_a, bp_a_1based, id_a, alt_a, id_b, event_af, gene_a, gt,
                 )?;
 
-                let alt_b = format!("]{}:{}]N", chrom_a, bp_a_1based);
                 writeln!(
                     f,
                     "{}\t{}\t{}\tN\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",

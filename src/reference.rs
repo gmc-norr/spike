@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use noodles::fasta;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -10,7 +10,7 @@ struct ReferenceReader {
     index: fasta::fai::Index,
     reader: fasta::IndexedReader<BufReader<File>>,
     cache: HashMap<(String, u64, u64), Vec<u8>>,
-    cache_order: Vec<(String, u64, u64)>,
+    cache_order: VecDeque<(String, u64, u64)>,
     max_cache_entries: usize,
 }
 
@@ -38,7 +38,7 @@ impl ReferenceReader {
             index,
             reader,
             cache: HashMap::new(),
-            cache_order: Vec::new(),
+            cache_order: VecDeque::new(),
             max_cache_entries: 256,
         })
     }
@@ -85,12 +85,11 @@ impl ReferenceReader {
 
         // Cache management (simple FIFO eviction)
         if self.cache.len() >= self.max_cache_entries {
-            if let Some(oldest) = self.cache_order.first().cloned() {
+            if let Some(oldest) = self.cache_order.pop_front() {
                 self.cache.remove(&oldest);
-                self.cache_order.remove(0);
             }
         }
-        self.cache_order.push(key.clone());
+        self.cache_order.push_back(key.clone());
         self.cache.insert(key, seq.clone());
 
         Ok(seq)
@@ -108,7 +107,7 @@ impl ReferenceReader {
             })
             .with_context(|| format!("chromosome '{}' not found in FASTA index", chrom))?;
 
-        Ok(record.length() as u64)
+        Ok(record.length())
     }
 }
 
@@ -143,6 +142,11 @@ impl SharedReference {
         );
 
         Ok(Self { sequences })
+    }
+
+    /// Get the length of a loaded chromosome, or None if not loaded.
+    pub fn chromosome_length(&self, chrom: &str) -> Option<u64> {
+        self.sequences.get(chrom).map(|s| s.len() as u64)
     }
 
     /// Fetch a reference sequence region.

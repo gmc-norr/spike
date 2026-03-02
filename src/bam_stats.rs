@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use log::info;
-use noodles::bam;
 
-/// Summary statistics computed from a BAM file.
+/// Summary statistics computed from a BAM/CRAM file.
 #[derive(Debug, Clone)]
 pub struct BamStats {
     /// Mean insert size (template length) of properly-paired reads.
@@ -17,15 +16,31 @@ pub struct BamStats {
     pub records_sampled: usize,
 }
 
-/// Compute BAM statistics by sampling the first `sample_size` primary, mapped,
-/// properly-paired records.
-pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
+/// Compute alignment statistics by sampling the first `sample_size` primary, mapped,
+/// properly-paired records. Supports both BAM and CRAM formats.
+pub fn compute_stats(
+    alignment_path: &str,
+    sample_size: usize,
+    ref_path: Option<&str>,
+) -> Result<BamStats> {
+    if crate::extract::is_cram(alignment_path) {
+        let rp = ref_path.ok_or_else(|| {
+            anyhow::anyhow!("CRAM input requires a reference FASTA (--reference)")
+        })?;
+        compute_stats_cram(alignment_path, sample_size, rp)
+    } else {
+        compute_stats_bam(alignment_path, sample_size)
+    }
+}
+
+/// BAM-specific stats computation.
+fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     info!(
         "Computing BAM statistics from first {} records...",
         sample_size
     );
 
-    let mut reader = bam::io::reader::Builder::default()
+    let mut reader = noodles::bam::io::reader::Builder
         .build_from_path(bam_path)
         .with_context(|| format!("Failed to open BAM file: {}", bam_path))?;
     let header = reader.read_header()?;
@@ -34,24 +49,12 @@ pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
 
-    // Compute total reference length from header for coverage estimation.
-    let genome_size: u64 = header
-        .reference_sequences()
-        .values()
-        .map(|rs| {
-            rs.length()
-                .try_into()
-                .map(|v: usize| v as u64)
-                .unwrap_or(0)
-        })
-        .sum();
+    let genome_size: u64 = header_genome_size(&header);
 
     for result in reader.records() {
         let record = result?;
-
         let flags = record.flags();
 
-        // Skip unmapped, secondary, supplementary, duplicate, or failing QC reads.
         if flags.is_unmapped()
             || flags.is_secondary()
             || flags.is_supplementary()
@@ -63,16 +66,13 @@ pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
 
         total_records += 1;
 
-        // Collect read length from sequence.
         let seq_len = record.sequence().len();
         if seq_len > 0 {
             read_lengths.push(seq_len as f64);
         }
 
-        // Collect insert size from properly-paired reads.
         if flags.is_properly_segmented() && !flags.is_mate_unmapped() {
             let tlen = record.template_length();
-            // Only use positive template lengths (one mate per pair).
             if tlen > 0 {
                 insert_sizes.push(tlen as f64);
             }
@@ -83,10 +83,88 @@ pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
         }
     }
 
-    // Compute insert size statistics.
+    finalize_stats(insert_sizes, read_lengths, total_records, genome_size)
+}
+
+/// CRAM-specific stats computation.
+fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Result<BamStats> {
+    info!(
+        "Computing CRAM statistics from first {} records...",
+        sample_size
+    );
+
+    let repository = crate::extract::build_fasta_repository(ref_path)?;
+
+    let mut reader = noodles::cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(cram_path)
+        .with_context(|| format!("Failed to open CRAM file: {}", cram_path))?;
+    let header = reader.read_header()?;
+
+    let mut insert_sizes: Vec<f64> = Vec::with_capacity(sample_size);
+    let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
+    let mut total_records: usize = 0;
+
+    let genome_size: u64 = header_genome_size(&header);
+
+    for result in reader.records(&header) {
+        let cram_record = result?;
+        let buf = cram_record
+            .try_into_alignment_record(&header)
+            .with_context(|| "failed to convert CRAM record")?;
+
+        let flags = buf.flags();
+
+        if flags.is_unmapped()
+            || flags.is_secondary()
+            || flags.is_supplementary()
+            || flags.is_duplicate()
+            || flags.is_qc_fail()
+        {
+            continue;
+        }
+
+        total_records += 1;
+
+        let seq_len = buf.sequence().len();
+        if seq_len > 0 {
+            read_lengths.push(seq_len as f64);
+        }
+
+        if flags.is_properly_segmented() && !flags.is_mate_unmapped() {
+            let tlen = buf.template_length();
+            if tlen > 0 {
+                insert_sizes.push(tlen as f64);
+            }
+        }
+
+        if insert_sizes.len() >= sample_size {
+            break;
+        }
+    }
+
+    finalize_stats(insert_sizes, read_lengths, total_records, genome_size)
+}
+
+/// Compute genome size from header reference sequences.
+fn header_genome_size(header: &noodles::sam::Header) -> u64 {
+    header
+        .reference_sequences()
+        .values()
+        .map(|rs| usize::from(rs.length()) as u64)
+        .sum()
+}
+
+/// Compute final statistics from collected samples.
+fn finalize_stats(
+    insert_sizes: Vec<f64>,
+    read_lengths: Vec<f64>,
+    total_records: usize,
+    genome_size: u64,
+) -> Result<BamStats> {
     let (insert_mean, insert_stddev) = if insert_sizes.is_empty() {
         log::warn!("No properly-paired reads found for insert size estimation");
-        (350.0, 50.0) // sensible defaults for typical Illumina libraries
+        (350.0, 50.0)
     } else {
         let mean = insert_sizes.iter().sum::<f64>() / insert_sizes.len() as f64;
         let variance = insert_sizes
@@ -97,15 +175,12 @@ pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
         (mean, variance.sqrt())
     };
 
-    // Compute read length statistics.
     let read_length = if read_lengths.is_empty() {
-        150.0 // sensible default
+        150.0
     } else {
         read_lengths.iter().sum::<f64>() / read_lengths.len() as f64
     };
 
-    // Estimate coverage: (total_records_in_file * read_length) / genome_size.
-    // This is a rough approximation from the sample; refined during the evidence pass.
     let mean_coverage = if genome_size > 0 {
         (total_records as f64 * read_length) / genome_size as f64
     } else {
@@ -121,7 +196,7 @@ pub fn compute_stats(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     };
 
     info!(
-        "BAM stats: insert_mean={:.1}, insert_stddev={:.1}, read_len={:.0}, est_coverage={:.1}x ({} records sampled)",
+        "Stats: insert_mean={:.1}, insert_stddev={:.1}, read_len={:.0}, est_coverage={:.1}x ({} records sampled)",
         stats.insert_mean, stats.insert_stddev, stats.read_length, stats.mean_coverage, stats.records_sampled
     );
 

@@ -142,10 +142,10 @@ pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, O
     }
 
     let mut event = match parts[0].to_lowercase().as_str() {
-        "del" => parse_deletion_spec(&parts[1..], genes)?,
+        "del" => parse_region_spec(&parts[1..], "del", genes)?,
         "fusion" => parse_fusion_spec(&parts[1..], genes)?,
-        "dup" => parse_coord_region_spec(&parts[1..], "dup")?,
-        "inv" => parse_coord_region_spec(&parts[1..], "inv")?,
+        "dup" => parse_region_spec(&parts[1..], "dup", genes)?,
+        "inv" => parse_region_spec(&parts[1..], "inv", genes)?,
         "ins" => parse_insertion_spec(&parts[1..])?,
         "snp" => parse_snp_spec(&parts[1..])?,
         other => bail!("unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', 'ins', or 'snp'", other),
@@ -201,30 +201,29 @@ fn parse_af_value(value: &str) -> Result<AfSpec> {
     }
 }
 
-fn parse_deletion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
+/// Unified region parser for DEL, DUP, and INV events.
+///
+/// Supports both coordinate-based and exon-based specifications:
+///   "del:chr20:30000000-30005000"     — coordinate-based
+///   "del:GENE:exon4-exon8"           — exon-based (requires --exon-bed)
+///   "dup:GENE:exon4-exon8"           — exon-based duplication
+///   "inv:chr20:30000000-30005000"     — coordinate-based inversion
+fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Result<SimEvent> {
     if parts.len() < 2 {
-        bail!("deletion spec requires at least 2 parts: 'del:CHR:START-END' or 'del:GENE:exonN-exonM'");
+        bail!("{} spec requires at least 2 parts: '{}:CHR:START-END' or '{}:GENE:exonN-exonM'", sv_type, sv_type, sv_type);
     }
 
     let first = parts[0];
     let second = parts[1];
 
-    // Try coordinate-based: first looks like a chromosome name, second has a dash with numbers.
+    // Try coordinate-based: second has a dash with numbers on both sides.
     if let Some((start_str, end_str)) = second.split_once('-') {
         if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
-            // Coordinate-based deletion.
-            return Ok(SimEvent::Deletion {
-                chrom: first.to_string(),
-                del_start: start,
-                del_end: end,
-                gene: "unknown".to_string(),
-                exons: Vec::new(),
-                allele_fraction: None,
-            });
+            return make_region_event(sv_type, first.to_string(), start, end, "unknown".to_string(), Vec::new());
         }
     }
 
-    // Exon-based: "del:GENE:exonN-exonM"
+    // Exon-based: "sv_type:GENE:exonN-exonM"
     let gene_name = first;
     let gene = genes
         .iter()
@@ -272,26 +271,65 @@ fn parse_deletion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent>
         .map(|e| e.name.clone())
         .collect();
 
-    Ok(SimEvent::Deletion {
-        chrom: gene.chrom.clone(),
-        del_start: start_exon.start,
-        del_end: end_exon.end,
-        gene: gene.gene.clone(),
-        exons: affected_exons,
-        allele_fraction: None,
-    })
+    make_region_event(
+        sv_type,
+        gene.chrom.clone(),
+        start_exon.start,
+        end_exon.end,
+        gene.gene.clone(),
+        affected_exons,
+    )
+}
+
+/// Create the appropriate SimEvent for a region-based SV type.
+fn make_region_event(
+    sv_type: &str,
+    chrom: String,
+    start: u64,
+    end: u64,
+    gene: String,
+    exons: Vec<String>,
+) -> Result<SimEvent> {
+    match sv_type {
+        "del" => Ok(SimEvent::Deletion {
+            chrom,
+            del_start: start,
+            del_end: end,
+            gene,
+            exons,
+            allele_fraction: None,
+        }),
+        "dup" => Ok(SimEvent::Duplication {
+            chrom,
+            dup_start: start,
+            dup_end: end,
+            gene,
+            allele_fraction: None,
+        }),
+        "inv" => Ok(SimEvent::Inversion {
+            chrom,
+            inv_start: start,
+            inv_end: end,
+            gene,
+            allele_fraction: None,
+        }),
+        _ => bail!("unexpected sv_type '{}' in make_region_event", sv_type),
+    }
 }
 
 fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
-    // "fusion:GENEA:exonN:GENEB:exonM"
+    // "fusion:GENEA:exonN:GENEB:exonM" or "fusion:GENEA:exonN:GENEB:exonM:inv"
     if parts.len() < 4 {
-        bail!("fusion spec requires 4 parts: 'fusion:GENEA:exonN:GENEB:exonM'");
+        bail!("fusion spec requires at least 4 parts: 'fusion:GENEA:exonN:GENEB:exonM[:inv]'");
     }
 
     let gene_a_name = parts[0];
     let exon_a_str = parts[1];
     let gene_b_name = parts[2];
     let exon_b_str = parts[3];
+
+    // Check for optional ":inv" suffix.
+    let inverted = parts.len() >= 5 && parts[4].eq_ignore_ascii_case("inv");
 
     let gene_a = genes
         .iter()
@@ -325,73 +363,62 @@ fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
         bp_b: exon_b.start, // first base included from gene B
         gene_b: gene_b.gene.clone(),
         allele_fraction: None,
+        inverted,
     })
-}
-
-/// Parse a coordinate-based region spec for DUP or INV.
-///
-/// Format: "dup:chr20:30000000-30005000" or "inv:chr20:30000000-30005000"
-fn parse_coord_region_spec(parts: &[&str], sv_type: &str) -> Result<SimEvent> {
-    if parts.len() < 2 {
-        bail!("{} spec requires: '{}:CHR:START-END'", sv_type, sv_type);
-    }
-
-    let chrom = parts[0].to_string();
-    let range = parts[1];
-
-    let (start_str, end_str) = range.split_once('-')
-        .ok_or_else(|| anyhow::anyhow!("expected START-END range, got '{}'", range))?;
-
-    let start: u64 = start_str.parse()
-        .with_context(|| format!("invalid start position: '{}'", start_str))?;
-    let end: u64 = end_str.parse()
-        .with_context(|| format!("invalid end position: '{}'", end_str))?;
-
-    match sv_type {
-        "dup" => Ok(SimEvent::Duplication {
-            chrom,
-            dup_start: start,
-            dup_end: end,
-            gene: "unknown".to_string(),
-            allele_fraction: None,
-        }),
-        "inv" => Ok(SimEvent::Inversion {
-            chrom,
-            inv_start: start,
-            inv_end: end,
-            gene: "unknown".to_string(),
-            allele_fraction: None,
-        }),
-        _ => bail!("unexpected sv_type '{}' in parse_coord_region_spec", sv_type),
-    }
 }
 
 /// Parse an insertion spec.
 ///
-/// Format: "ins:chr20:30000000:500" (chrom:pos:length)
+/// Formats:
+///   "ins:chr20:30000000:500"          — random insertion of 500bp
+///   "ins:chr20:30000000:ACGTACGT"     — explicit DNA insertion sequence
 fn parse_insertion_spec(parts: &[&str]) -> Result<SimEvent> {
     if parts.len() < 3 {
-        bail!("ins spec requires: 'ins:CHR:POS:LENGTH'");
+        bail!("ins spec requires: 'ins:CHR:POS:LENGTH' or 'ins:CHR:POS:SEQUENCE'");
     }
 
     let chrom = parts[0].to_string();
     let pos: u64 = parts[1].parse()
         .with_context(|| format!("invalid position: '{}'", parts[1]))?;
-    let ins_len: u64 = parts[2].parse()
-        .with_context(|| format!("invalid insertion length: '{}'", parts[2]))?;
 
-    if ins_len == 0 {
-        bail!("insertion length must be > 0");
+    // Try parsing third part as a length (u64). If that fails, treat as DNA sequence.
+    if let Ok(ins_len) = parts[2].parse::<u64>() {
+        if ins_len == 0 {
+            bail!("insertion length must be > 0");
+        }
+        Ok(SimEvent::Insertion {
+            chrom,
+            pos,
+            ins_seq: None,
+            ins_len,
+            gene: "unknown".to_string(),
+            allele_fraction: None,
+        })
+    } else {
+        // Validate as DNA sequence.
+        let seq_str = parts[2];
+        if seq_str.is_empty() {
+            bail!("insertion sequence must be non-empty");
+        }
+        for &b in seq_str.as_bytes() {
+            if !matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T') {
+                bail!(
+                    "invalid base '{}' in insertion sequence, expected A/C/G/T",
+                    b as char
+                );
+            }
+        }
+        let seq: Vec<u8> = seq_str.bytes().map(|b| b.to_ascii_uppercase()).collect();
+        let len = seq.len() as u64;
+        Ok(SimEvent::Insertion {
+            chrom,
+            pos,
+            ins_seq: Some(seq),
+            ins_len: len,
+            gene: "unknown".to_string(),
+            allele_fraction: None,
+        })
     }
-
-    Ok(SimEvent::Insertion {
-        chrom,
-        pos,
-        ins_seq: None, // will generate random sequence at simulation time
-        ins_len,
-        gene: "unknown".to_string(),
-        allele_fraction: None,
-    })
 }
 
 /// Parse a SNP/small variant spec.
@@ -694,5 +721,125 @@ mod tests {
         assert_eq!(parse_exon_number("exon14").unwrap(), 14);
         assert_eq!(parse_exon_number("4").unwrap(), 4);
         assert!(parse_exon_number("exonXX").is_err());
+    }
+
+    #[test]
+    fn test_parse_exon_duplication() {
+        let genes = test_genes();
+        // GENEA exon 4 start = 2500, exon 6 end = 1000 + 5*500 + 200 = 3700
+        let (event, af) = parse_event_spec("dup:GENEA:exon4-exon6", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::Duplication { chrom, dup_start, dup_end, gene, .. } => {
+                assert_eq!(chrom, "chr1");
+                assert_eq!(dup_start, 2500);
+                assert_eq!(dup_end, 3700);
+                assert_eq!(gene, "GENEA");
+            }
+            _ => panic!("expected Duplication"),
+        }
+    }
+
+    #[test]
+    fn test_parse_exon_inversion() {
+        let genes = test_genes();
+        // GENEB exon 2 start = 12000, exon 4 end = 10000 + 3*2000 + 300 = 16300
+        let (event, af) = parse_event_spec("inv:GENEB:exon2-exon4", &genes).unwrap();
+        assert!(af.is_none());
+        match event {
+            SimEvent::Inversion { chrom, inv_start, inv_end, gene, .. } => {
+                assert_eq!(chrom, "chr2");
+                assert_eq!(inv_start, 12000);
+                assert_eq!(inv_end, 16300);
+                assert_eq!(gene, "GENEB");
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_coord_duplication() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("dup:chr20:30000000-30005000", &genes).unwrap();
+        match event {
+            SimEvent::Duplication { chrom, dup_start, dup_end, .. } => {
+                assert_eq!(chrom, "chr20");
+                assert_eq!(dup_start, 30_000_000);
+                assert_eq!(dup_end, 30_005_000);
+            }
+            _ => panic!("expected Duplication"),
+        }
+    }
+
+    #[test]
+    fn test_parse_coord_inversion() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("inv:chr20:30000000-30005000", &genes).unwrap();
+        match event {
+            SimEvent::Inversion { chrom, inv_start, inv_end, .. } => {
+                assert_eq!(chrom, "chr20");
+                assert_eq!(inv_start, 30_000_000);
+                assert_eq!(inv_end, 30_005_000);
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_explicit_insertion_sequence() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("ins:chr20:30000000:ACGTACGT", &genes).unwrap();
+        match event {
+            SimEvent::Insertion { chrom, pos, ins_seq, ins_len, .. } => {
+                assert_eq!(chrom, "chr20");
+                assert_eq!(pos, 30_000_000);
+                assert_eq!(ins_seq, Some(b"ACGTACGT".to_vec()));
+                assert_eq!(ins_len, 8);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_random_insertion_length() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("ins:chr20:30000000:500", &genes).unwrap();
+        match event {
+            SimEvent::Insertion { ins_seq, ins_len, .. } => {
+                assert!(ins_seq.is_none());
+                assert_eq!(ins_len, 500);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insertion_invalid_sequence() {
+        let genes = test_genes();
+        assert!(parse_event_spec("ins:chr20:30000000:ACGXYZ", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_inverted_fusion() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2:inv", &genes).unwrap();
+        match event {
+            SimEvent::Fusion { inverted, .. } => {
+                assert!(inverted, "fusion with :inv suffix should be inverted");
+            }
+            _ => panic!("expected Fusion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_forward_fusion() {
+        let genes = test_genes();
+        let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes).unwrap();
+        match event {
+            SimEvent::Fusion { inverted, .. } => {
+                assert!(!inverted, "fusion without :inv suffix should be forward");
+            }
+            _ => panic!("expected Fusion"),
+        }
     }
 }

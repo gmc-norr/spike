@@ -15,6 +15,7 @@ mod stats;
 mod synth;
 mod truth;
 mod types;
+mod validate;
 mod vcf_input;
 
 use anyhow::{bail, Result};
@@ -48,10 +49,14 @@ struct Args {
     /// Formats:
     ///   --event "del:chr20:30000000-30005000"           (coordinate-based)
     ///   --event "del:GENE:exon4-exon8"                  (gene-based, requires --exon-bed)
+    ///   --event "dup:GENE:exon4-exon8"                  (gene-based duplication)
+    ///   --event "inv:GENE:exon4-exon8"                  (gene-based inversion)
     ///   --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion, requires --exon-bed)
+    ///   --event "fusion:GENEA:exon14:GENEB:exon2:inv"   (inverted fusion)
     ///   --event "dup:chr20:30000000-30005000"
     ///   --event "inv:chr20:30000000-30005000"
-    ///   --event "ins:chr20:30000000:500"
+    ///   --event "ins:chr20:30000000:500"                (random insertion sequence)
+    ///   --event "ins:chr20:30000000:ACGTACGT"           (explicit insertion sequence)
     ///   --event "snp:chr20:30000000:A:T"                (SNP/small variant)
     ///   --event "snp:chr20:30000000:A>T"                (alternate syntax)
     ///   --event "snp:chr20:30000000:ACG:A"              (small deletion)
@@ -103,9 +108,25 @@ struct Args {
     #[arg(long, default_value_t = 20)]
     min_mapq: u8,
 
-    /// Automatically run bwa-mem2 alignment after FASTQ generation.
+    /// Aligner for alignment script. Presets: "bwa-mem2" (default),
+    /// "minimap2", "bowtie2", or a custom command that accepts
+    /// <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout.
+    #[arg(long, default_value = "bwa-mem2")]
+    aligner: String,
+
+    /// Path to samtools binary (used for sort/index in align script).
+    #[arg(long, default_value = "samtools")]
+    samtools: String,
+
+    /// Automatically run alignment after FASTQ generation.
     #[arg(long)]
     align: bool,
+
+    /// Indel error rate per base in synthetic reads (fraction of total error
+    /// that is indel rather than substitution). Default 0.0 means substitution-only.
+    /// Typical Illumina: 0.0 to 0.05.
+    #[arg(long, default_value_t = 0.0)]
+    indel_error_rate: f64,
 
     /// Optional gVCF/VCF with SNP calls for LOH simulation.
     /// When provided, het SNP positions are extracted from this file to
@@ -176,6 +197,19 @@ fn parse_region(s: &str) -> Result<ExtractionRegion> {
 }
 
 fn main() -> Result<()> {
+    // Intercept "validate" subcommand before clap parses (backward-compatible).
+    let raw_args: Vec<String> = std::env::args().collect();
+    if raw_args.get(1).is_some_and(|s| s == "validate") {
+        match validate::run() {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // Log the error (table output already printed), exit non-zero.
+                log::error!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
@@ -220,7 +254,7 @@ fn main() -> Result<()> {
     );
 
     // Compute BAM stats for read length.
-    let bam_stats = crate::bam_stats::compute_stats(&args.bam, 50_000)?;
+    let bam_stats = crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
     let read_length = bam_stats.read_length.round() as usize;
 
     let config = SimConfig {
@@ -231,6 +265,7 @@ fn main() -> Result<()> {
         read_length,
         min_mapq: args.min_mapq,
         gvcf_path: args.gvcf.clone(),
+        indel_error_rate: args.indel_error_rate,
     };
 
     // Parse --region if provided.
@@ -290,6 +325,9 @@ fn main() -> Result<()> {
     let shared_ref =
         crate::reference::SharedReference::load(&config.ref_path, &chrom_refs)?;
 
+    // Validate event coordinates against reference chromosome lengths.
+    validate_event_coordinates(&events, &shared_ref)?;
+
     let mut all_output_pairs: Vec<ReadPair> = Vec::new();
 
     // Haplotype flank: must be >= max expected fragment length so reads near
@@ -313,16 +351,16 @@ fn main() -> Result<()> {
         let quality_profile =
             synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
         let mut synth_gen =
-            synth::SynthReadGenerator::new(quality_profile, &shared_ref, config.read_length);
+            synth::SynthReadGenerator::new(quality_profile, &shared_ref, config.read_length, config.indel_error_rate);
 
         // Build variant haplotype.
-        let haplotype = build_haplotype(event, &shared_ref, hap_flank, &mut rng)?;
+        let mut haplotype = build_haplotype(event, &shared_ref, hap_flank, &mut rng)?;
 
         // Simulate: suppress reads + tile synthetic reads across haplotype.
         let output = simulate::simulate_event(
             event,
             &pool,
-            &haplotype,
+            &mut haplotype,
             &config,
             &mut synth_gen,
             vaf,
@@ -365,7 +403,7 @@ fn main() -> Result<()> {
     )?;
 
     // Write alignment convenience script.
-    write_align_script(&args.output, &args.reference, args.threads)?;
+    write_align_script(&args.output, &args.reference, args.threads, &args.aligner, &args.samtools)?;
 
     // Summary.
     log::info!("=== spike complete ===");
@@ -393,30 +431,45 @@ fn dedup_by_name(pairs: &mut Vec<ReadPair>) {
     pairs.retain(|p| seen.insert(p.name.clone()));
 }
 
-/// Write a convenience shell script for bwa-mem2 alignment.
-fn write_align_script(output_dir: &str, ref_path: &str, threads: usize) -> Result<()> {
+/// Write a convenience shell script for alignment.
+///
+/// Supports presets: bwa-mem2, minimap2, bowtie2, or a custom command.
+fn write_align_script(
+    output_dir: &str,
+    ref_path: &str,
+    threads: usize,
+    aligner: &str,
+    samtools: &str,
+) -> Result<()> {
     let script_path = Path::new(output_dir).join("align.sh");
+
+    let align_cmd = match aligner {
+        "bwa-mem2" => "bwa-mem2 mem -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:SIM\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"".to_string(),
+        "minimap2" => "minimap2 -a -x sr -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:SIM\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"".to_string(),
+        "bowtie2" => "bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg SM:SIM --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\"".to_string(),
+        custom => format!(
+            "{custom} \"$REF\" \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"",
+        ),
+    };
+
     let script = format!(
         r#"#!/bin/bash
 set -euo pipefail
-# Align simulated reads with bwa-mem2 and sort.
+# Align simulated reads and sort.
 # Usage: bash align.sh [REF] [THREADS]
 REF="${{1:-{ref_path}}}"
 THREADS="${{2:-{threads}}}"
+SAMTOOLS="{samtools}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Aligning $DIR/R1.fq.gz + R2.fq.gz with bwa-mem2 ($THREADS threads)..."
-pixi run bwa-mem2 mem -t "$THREADS" \
-    -R '@RG\tID:sim\tSM:SIM\tPL:ILLUMINA' \
-    "$REF" \
-    "$DIR/R1.fq.gz" "$DIR/R2.fq.gz" \
-    2>"$DIR/bwamem2.log" | \
-    pixi run samtools sort -@ 4 -o "$DIR/sim.bam" -
+echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ({aligner}, $THREADS threads)..."
+{align_cmd} | \
+    "$SAMTOOLS" sort -@ "$THREADS" -o "$DIR/sim.bam" -
 
-pixi run samtools index "$DIR/sim.bam"
+"$SAMTOOLS" index "$DIR/sim.bam"
 
-TOTAL=$(pixi run samtools view -c "$DIR/sim.bam" 2>/dev/null || echo "?")
-SA_COUNT=$(pixi run samtools view "$DIR/sim.bam" | grep -c "SA:Z:" 2>/dev/null || echo "0")
+TOTAL=$("$SAMTOOLS" view -c "$DIR/sim.bam" 2>/dev/null || echo "?")
+SA_COUNT=$("$SAMTOOLS" view "$DIR/sim.bam" | grep -c "SA:Z:" 2>/dev/null || echo "0")
 echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
 "#
     );
@@ -433,9 +486,9 @@ echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
     Ok(())
 }
 
-/// Run bwa-mem2 alignment.
+/// Run alignment.
 fn run_alignment(output_dir: &str, ref_path: &str, threads: usize) -> Result<()> {
-    log::info!("Running bwa-mem2 alignment...");
+    log::info!("Running alignment...");
 
     let script_path = Path::new(output_dir).join("align.sh");
     let status = std::process::Command::new("bash")
@@ -445,11 +498,67 @@ fn run_alignment(output_dir: &str, ref_path: &str, threads: usize) -> Result<()>
         .status()?;
 
     if !status.success() {
-        bail!("bwa-mem2 alignment failed with exit code {:?}", status.code());
+        bail!("alignment failed with exit code {:?}", status.code());
     }
 
     let bam_path = Path::new(output_dir).join("sim.bam");
     log::info!("Aligned BAM: {}", bam_path.display());
+    Ok(())
+}
+
+/// Validate that all event coordinates fall within reference chromosome bounds.
+fn validate_event_coordinates(
+    events: &[SimEvent],
+    reference: &crate::reference::SharedReference,
+) -> Result<()> {
+    for event in events {
+        match event {
+            SimEvent::Deletion { chrom, del_start, del_end, .. } => {
+                validate_range(reference, chrom, *del_start, *del_end, "DEL")?;
+            }
+            SimEvent::Duplication { chrom, dup_start, dup_end, .. } => {
+                validate_range(reference, chrom, *dup_start, *dup_end, "DUP")?;
+            }
+            SimEvent::Inversion { chrom, inv_start, inv_end, .. } => {
+                validate_range(reference, chrom, *inv_start, *inv_end, "INV")?;
+            }
+            SimEvent::Insertion { chrom, pos, .. } => {
+                validate_range(reference, chrom, *pos, *pos, "INS")?;
+            }
+            SimEvent::SmallVariant { chrom, pos, ref_allele, .. } => {
+                let end = *pos + ref_allele.len() as u64;
+                validate_range(reference, chrom, *pos, end, "SNP/indel")?;
+            }
+            SimEvent::Fusion { chrom_a, bp_a, chrom_b, bp_b, .. } => {
+                validate_range(reference, chrom_a, *bp_a, *bp_a, "Fusion-A")?;
+                validate_range(reference, chrom_b, *bp_b, *bp_b, "Fusion-B")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_range(
+    reference: &crate::reference::SharedReference,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    label: &str,
+) -> Result<()> {
+    if let Some(chrom_len) = reference.chromosome_length(chrom) {
+        if start > chrom_len {
+            bail!(
+                "{} event start on {} exceeds chromosome length ({} > {})",
+                label, chrom, start, chrom_len,
+            );
+        }
+        if end > chrom_len {
+            bail!(
+                "{} event on {} extends beyond chromosome length ({} > {})",
+                label, chrom, end, chrom_len,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -481,6 +590,7 @@ fn extract_pool_for_event(
             region_a_start,
             region_a_end,
             config.min_mapq,
+            Some(config.ref_path.as_str()),
         )?;
         let pairs_b = extract::extract_read_pairs(
             &config.bam_path,
@@ -488,6 +598,7 @@ fn extract_pool_for_event(
             region_b_start,
             region_b_end,
             config.min_mapq,
+            Some(config.ref_path.as_str()),
         )?;
 
         let mut all_pairs = pairs_a;
@@ -507,6 +618,7 @@ fn extract_pool_for_event(
         region_start,
         region_end,
         config.min_mapq,
+        Some(config.ref_path.as_str()),
     )?;
     let frag_dist = stats::FragmentDist::from_read_pairs(&pairs);
     let pool = extract::build_read_pool(pairs, frag_dist);
@@ -562,8 +674,9 @@ fn build_haplotype(
             bp_a,
             chrom_b,
             bp_b,
+            inverted,
             ..
-        } => VariantHaplotype::from_fusion(reference, chrom_a, *bp_a, chrom_b, *bp_b, flank),
+        } => VariantHaplotype::from_fusion(reference, chrom_a, *bp_a, chrom_b, *bp_b, flank, *inverted),
         SimEvent::SmallVariant {
             chrom,
             pos,

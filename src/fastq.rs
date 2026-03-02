@@ -30,18 +30,18 @@ pub fn write_paired_fastq(pairs: &[ReadPair], output_dir: &str) -> Result<(Strin
 
     for pair in pairs {
         // Read 1.
-        write!(r1_gz, "@{}/1\n", pair.name)?;
+        writeln!(r1_gz, "@{}/1", pair.name)?;
         r1_gz.write_all(&pair.seq1)?;
         write!(r1_gz, "\n+\n")?;
         r1_gz.write_all(&pair.qual1)?;
-        write!(r1_gz, "\n")?;
+        writeln!(r1_gz)?;
 
         // Read 2.
-        write!(r2_gz, "@{}/2\n", pair.name)?;
+        writeln!(r2_gz, "@{}/2", pair.name)?;
         r2_gz.write_all(&pair.seq2)?;
         write!(r2_gz, "\n+\n")?;
         r2_gz.write_all(&pair.qual2)?;
-        write!(r2_gz, "\n")?;
+        writeln!(r2_gz)?;
     }
 
     r1_gz.finish()?;

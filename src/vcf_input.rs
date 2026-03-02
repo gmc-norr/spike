@@ -4,7 +4,7 @@
 //! Supports DEL, INS, DUP, INV, and BND (fusion) SVTYPE records.
 
 use anyhow::{bail, Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 
 use crate::types::SimEvent;
@@ -124,13 +124,6 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     let mut events = Vec::new();
     let mut bnd_processed: HashSet<String> = HashSet::new();
 
-    // Index BND records by ID for MATEID pairing.
-    let _bnd_by_id: HashMap<&str, &SvRecord> = records
-        .iter()
-        .filter(|r| r.sv_type == SvTypeTag::Bnd)
-        .map(|r| (r.id.as_str(), r))
-        .collect();
-
     for record in &records {
         match record.sv_type {
             SvTypeTag::Del => {
@@ -206,7 +199,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 // Check if ALT has explicit sequence (not symbolic <INS>).
                 let ins_seq = if !record.alt.starts_with('<') && record.alt.len() > 1 {
                     // ALT contains the inserted sequence (first base = ref base).
-                    let seq = record.alt[1..].as_bytes().to_vec();
+                    let seq = record.alt.as_bytes()[1..].to_vec();
                     Some(seq)
                 } else {
                     None
@@ -254,7 +247,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     continue;
                 }
 
-                let (partner_chrom, partner_pos_1based) = parse_bnd_alt(&record.alt)
+                let (partner_chrom, partner_pos_1based, inverted) = parse_bnd_alt(&record.alt)
                     .with_context(|| {
                         format!(
                             "failed to parse BND ALT '{}' for record {}",
@@ -287,6 +280,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     bp_b: partner_pos,
                     gene_b,
                     allele_fraction: af,
+                    inverted,
                 });
             }
         }
@@ -295,15 +289,16 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     Ok(events)
 }
 
-/// Parse BND ALT allele to extract partner chromosome and position.
+/// Parse BND ALT allele to extract partner chromosome, position, and orientation.
 ///
 /// Handles all four VCF 4.3 BND orientations:
-///   N[chr:pos[   N]chr:pos]   [chr:pos[N   ]chr:pos]N
-fn parse_bnd_alt(alt: &str) -> Result<(String, u64)> {
-    // Find the chr:pos substring between brackets.
-    // BND ALT formats: N[chr:pos[  N]chr:pos]  [chr:pos[N  ]chr:pos]N
-    // The reference base(s) can be any nucleotide (not just N), so we locate
-    // chr:pos by finding the bracket pair and extracting what's between them.
+///   N[chr:pos[   — forward join (partner on + strand)
+///   ]chr:pos]N   — forward join (reciprocal)
+///   N]chr:pos]   — inverted join (partner on - strand)
+///   [chr:pos[N   — inverted join (reciprocal)
+///
+/// Returns `(chrom, pos, inverted)`.
+fn parse_bnd_alt(alt: &str) -> Result<(String, u64, bool)> {
     let open = alt.find('[').or_else(|| alt.find(']'));
     let close = alt.rfind('[').or_else(|| alt.rfind(']'));
 
@@ -320,7 +315,14 @@ fn parse_bnd_alt(alt: &str) -> Result<(String, u64)> {
     let pos: u64 = pos_str.parse()
         .with_context(|| format!("invalid position in BND ALT '{}': '{}'", alt, pos_str))?;
 
-    Ok((chrom.to_string(), pos))
+    // Detect orientation from bracket characters:
+    //   `[` brackets → forward join (partner + strand)
+    //   `]` brackets → inverted join (partner - strand)
+    let open_char = alt.as_bytes()[open_idx];
+    let close_char = alt.as_bytes()[close_idx];
+    let inverted = open_char == b']' && close_char == b']';
+
+    Ok((chrom.to_string(), pos, inverted))
 }
 
 /// Extract allele fraction from INFO field.
@@ -374,30 +376,34 @@ mod tests {
 
     #[test]
     fn test_parse_bnd_alt_n_bracket_open() {
-        let (chrom, pos) = parse_bnd_alt("N[chr9:130854070[").unwrap();
+        let (chrom, pos, inv) = parse_bnd_alt("N[chr9:130854070[").unwrap();
         assert_eq!(chrom, "chr9");
         assert_eq!(pos, 130854070);
+        assert!(!inv, "N[chr:pos[ should be forward");
     }
 
     #[test]
     fn test_parse_bnd_alt_bracket_close_n() {
-        let (chrom, pos) = parse_bnd_alt("]chr22:23285370]N").unwrap();
+        let (chrom, pos, inv) = parse_bnd_alt("]chr22:23285370]N").unwrap();
         assert_eq!(chrom, "chr22");
         assert_eq!(pos, 23285370);
+        assert!(inv, "]chr:pos]N should be inverted");
     }
 
     #[test]
     fn test_parse_bnd_alt_n_bracket_close() {
-        let (chrom, pos) = parse_bnd_alt("N]chr9:130854070]").unwrap();
+        let (chrom, pos, inv) = parse_bnd_alt("N]chr9:130854070]").unwrap();
         assert_eq!(chrom, "chr9");
         assert_eq!(pos, 130854070);
+        assert!(inv, "N]chr:pos] should be inverted");
     }
 
     #[test]
     fn test_parse_bnd_alt_bracket_open_n() {
-        let (chrom, pos) = parse_bnd_alt("[chr22:23285370[N").unwrap();
+        let (chrom, pos, inv) = parse_bnd_alt("[chr22:23285370[N").unwrap();
         assert_eq!(chrom, "chr22");
         assert_eq!(pos, 23285370);
+        assert!(!inv, "[chr:pos[N should be forward");
     }
 
     #[test]
@@ -539,9 +545,10 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         match &events[0] {
-            SimEvent::Fusion { bp_a, bp_b, .. } => {
+            SimEvent::Fusion { bp_a, bp_b, inverted, .. } => {
                 assert_eq!(*bp_a, 99);   // POS 100 → 0-based 99
                 assert_eq!(*bp_b, 199);  // ALT pos 200 → 0-based 199
+                assert!(!inverted, "N[chr:pos[ should be forward");
             }
             _ => panic!("expected Fusion"),
         }

@@ -33,7 +33,7 @@ enum PairRelation {
 pub fn simulate_event(
     event: &SimEvent,
     pool: &ReadPool,
-    haplotype: &VariantHaplotype,
+    haplotype: &mut VariantHaplotype,
     config: &SimConfig,
     synth_gen: &mut SynthReadGenerator,
     vaf: f64,
@@ -59,8 +59,11 @@ pub fn simulate_event(
     let (loh_set, classified_set, hap_variants) = get_haplotype_info(event, config, vaf, rng);
     let use_loh = !loh_set.is_empty();
 
-    // Set haplotype variants on synth_gen for correct BAF in DUP depth copies.
+    // Apply het SNP variants to both the haplotype sequence (for tiled chimeric
+    // reads) and synth_gen (for DUP depth copies). This ensures all synthetic
+    // reads carry the correct alleles instead of reference-only bases.
     if !hap_variants.is_empty() {
+        haplotype.apply_variants(&hap_variants);
         synth_gen.set_haplotype_variants(hap_variants);
     }
 
@@ -124,13 +127,27 @@ pub fn simulate_event(
         if use_loh_for_this {
             if classified_set.contains(&pair.name) {
                 // Read was classified via het SNPs — use LOH decision.
-                // For overlapping reads, still scale by overlap fraction.
-                if loh_set.contains(&pair.name) && rng.gen::<f64>() < overlap_frac {
-                    suppressed += 1;
-                } else if !loh_set.contains(&pair.name) {
-                    kept.push(pair.clone());
+                //
+                // loh_set contains ~50% of classified reads (one haplotype).
+                // To achieve the target VAF we must scale: at VAF=0.5 suppress
+                // all loh_set reads (100% × 50% ≈ 50% total). At VAF=0.3
+                // suppress 60% of loh_set reads (60% × 50% ≈ 30% total).
+                // For VAF>0.5 we also suppress some non-loh classified reads.
+                if loh_set.contains(&pair.name) {
+                    let hap_prob = (2.0 * vaf).min(1.0) * overlap_frac;
+                    if rng.gen::<f64>() < hap_prob {
+                        suppressed += 1;
+                    } else {
+                        kept.push(pair.clone());
+                    }
                 } else {
-                    kept.push(pair.clone()); // LOH target but overlap too small
+                    // Non-variant haplotype: only suppress when VAF > 0.5.
+                    let other_prob = (2.0 * vaf - 1.0).max(0.0) * overlap_frac;
+                    if rng.gen::<f64>() < other_prob {
+                        suppressed += 1;
+                    } else {
+                        kept.push(pair.clone());
+                    }
                 }
             } else {
                 // Read couldn't be classified (no het SNP overlap) —
@@ -221,7 +238,7 @@ fn get_haplotype_info(
     rng: &mut StdRng,
 ) -> (HashSet<String>, HashSet<String>, HashMap<u64, u8>) {
     // Only use haplotype-aware suppression for het events (VAF 0.3-0.7).
-    if vaf < 0.3 || vaf > 0.7 {
+    if !(0.3..=0.7).contains(&vaf) {
         return (HashSet::new(), HashSet::new(), HashMap::new());
     }
 
@@ -239,6 +256,7 @@ fn get_haplotype_info(
                 *del_end,
                 config.min_mapq,
                 config.gvcf_path.as_deref(),
+                Some(config.ref_path.as_str()),
                 rng,
             )
             .unwrap_or_else(|e| {
@@ -260,6 +278,7 @@ fn get_haplotype_info(
                 *dup_end,
                 config.min_mapq,
                 config.gvcf_path.as_deref(),
+                Some(config.ref_path.as_str()),
                 rng,
             )
             .unwrap_or_else(|e| {

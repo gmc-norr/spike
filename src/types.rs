@@ -21,6 +21,7 @@ pub enum SimEvent {
         bp_b: u64, // 0-based breakpoint in gene B (first base included on right side)
         gene_b: String,
         allele_fraction: Option<f64>, // per-event AF override (None = use global)
+        inverted: bool, // true for reverse-complement join at gene B
     },
     /// Tandem duplication: region is duplicated in place.
     Duplication {
@@ -128,6 +129,9 @@ pub struct SimConfig {
     pub min_mapq: u8,
     /// Optional gVCF file for LOH simulation (het SNP positions).
     pub gvcf_path: Option<String>,
+    /// Indel error rate: fraction of sequencing errors that are indels (vs substitutions).
+    /// 0.0 = substitution-only errors (default), ~0.05 = typical Illumina.
+    pub indel_error_rate: f64,
 }
 
 /// A read pair extracted from BAM, stored in FASTQ-ready form.

@@ -9,7 +9,7 @@ name = "spike"
 path = "src/main.rs"
 
 [dependencies]
-noodles = { version = "0.88", features = ["bam", "sam", "bgzf", "core", "fasta"] }
+noodles = { version = "0.88", features = ["bam", "sam", "bgzf", "core", "fasta", "cram"] }
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
