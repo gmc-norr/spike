@@ -1,0 +1,7 @@
+[2026-Mar-02 14:12:22] delly call -t DEL -g data/giab_hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta -o data/validation/hg002_delly.bcf data/giab_hg38/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam 
+[2026-Mar-02 14:12:23] Paired-end and split-read scanning
+[2026-Mar-02 14:19:41] Split-read clustering
+[2026-Mar-02 14:19:47] Paired-end clustering
+[2026-Mar-02 14:19:49] Split-read assembly
+[2026-Mar-02 14:26:40] Generate REF and ALT probes
+[2026-Mar-02 14:26:54] SV annotation

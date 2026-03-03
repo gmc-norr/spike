@@ -66,8 +66,8 @@ impl ReferenceReader {
         // noodles uses 1-based, closed coordinates for the region
         let noodles_start = noodles::core::Position::try_from((start as usize) + 1)
             .context("invalid start position")?;
-        let noodles_end = noodles::core::Position::try_from(end as usize)
-            .context("invalid end position")?;
+        let noodles_end =
+            noodles::core::Position::try_from(end as usize).context("invalid end position")?;
 
         let region = noodles::core::Region::new(chrom, noodles_start..=noodles_end);
 
@@ -147,6 +147,12 @@ impl SharedReference {
     /// Get the length of a loaded chromosome, or None if not loaded.
     pub fn chromosome_length(&self, chrom: &str) -> Option<u64> {
         self.sequences.get(chrom).map(|s| s.len() as u64)
+    }
+
+    /// Create a SharedReference from pre-built in-memory sequences (for testing).
+    #[cfg(test)]
+    pub fn from_sequences(sequences: HashMap<String, Vec<u8>>) -> Self {
+        Self { sequences }
     }
 
     /// Fetch a reference sequence region.

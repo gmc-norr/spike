@@ -1,0 +1,4 @@
+VAF	N_truth	N_delly	TP	FP	FN	Recall	Precision	F1	Spike_validate
+0.5	26	4	0	0	0	N/A	N/A	N/A	39/55
+0.25	26	4	0	0	0	N/A	N/A	N/A	37/55
+0.1	26	3	0	0	0	N/A	N/A	N/A	37/55

@@ -167,10 +167,7 @@ fn finalize_stats(
         (350.0, 50.0)
     } else {
         let mean = insert_sizes.iter().sum::<f64>() / insert_sizes.len() as f64;
-        let variance = insert_sizes
-            .iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>()
+        let variance = insert_sizes.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
             / insert_sizes.len() as f64;
         (mean, variance.sqrt())
     };

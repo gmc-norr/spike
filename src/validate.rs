@@ -24,8 +24,8 @@ struct ValidateArgs {
 #[derive(Debug)]
 struct TruthEvent {
     chrom: String,
-    start: u64,     // 0-based
-    end: u64,       // 0-based, exclusive
+    start: u64,      // 0-based
+    end: u64,        // 0-based, exclusive
     sv_type: String, // DEL, DUP, INV, INS, BND, SNP
     expected_vaf: f64,
     gene: String,
@@ -86,12 +86,7 @@ pub fn run() -> Result<()> {
             event.sv_type.as_str(),
             "DEL" | "DUP" | "INV" | "INS" | "BND"
         ) {
-            match check_split_reads(
-                &args.bam_path,
-                &args.ref_path,
-                event,
-                args.min_mapq,
-            ) {
+            match check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq) {
                 Ok(r) => results.push(r),
                 Err(e) => {
                     log::warn!("split_reads check failed for {}: {}", label, e);
@@ -102,12 +97,7 @@ pub fn run() -> Result<()> {
 
         // Allele frequency (meaningful for SNPs/small variants).
         if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
-            match check_allele_freq(
-                &args.bam_path,
-                &args.ref_path,
-                event,
-                args.min_mapq,
-            ) {
+            match check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq) {
                 Ok(r) => results.push(r),
                 Err(e) => {
                     log::warn!("allele_freq check failed for {}: {}", label, e);
@@ -150,7 +140,10 @@ pub fn run() -> Result<()> {
         );
     }
     if n_errors > 0 {
-        log::warn!("{} check(s) could not be executed (see warnings above)", n_errors);
+        log::warn!(
+            "{} check(s) could not be executed (see warnings above)",
+            n_errors
+        );
     }
 
     // Print results.
@@ -189,26 +182,40 @@ fn parse_validate_args() -> Result<ValidateArgs> {
         match args[i].as_str() {
             "--bam" | "-b" => {
                 i += 1;
-                bam_path = Some(args.get(i).cloned().ok_or_else(|| anyhow::anyhow!("--bam requires a value"))?);
+                bam_path = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--bam requires a value"))?,
+                );
             }
             "--truth" | "-t" => {
                 i += 1;
-                truth_path = Some(args.get(i).cloned().ok_or_else(|| anyhow::anyhow!("--truth requires a value"))?);
+                truth_path = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--truth requires a value"))?,
+                );
             }
             "--reference" | "-r" => {
                 i += 1;
-                ref_path = Some(args.get(i).cloned().ok_or_else(|| anyhow::anyhow!("--reference requires a value"))?);
+                ref_path = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--reference requires a value"))?,
+                );
             }
             "--min-mapq" => {
                 i += 1;
-                min_mapq = args.get(i)
+                min_mapq = args
+                    .get(i)
                     .ok_or_else(|| anyhow::anyhow!("--min-mapq requires a value"))?
                     .parse()
                     .context("--min-mapq must be a number")?;
             }
             "--flank" => {
                 i += 1;
-                flank_bp = args.get(i)
+                flank_bp = args
+                    .get(i)
                     .ok_or_else(|| anyhow::anyhow!("--flank requires a value"))?
                     .parse()
                     .context("--flank must be a number")?;
@@ -404,7 +411,12 @@ fn check_coverage_ratio(
 
     // Compute depth in the event region.
     let event_depth = count_depth_in_region(
-        bam_path, ref_path, &event.chrom, event.start, event.end, min_mapq,
+        bam_path,
+        ref_path,
+        &event.chrom,
+        event.start,
+        event.end,
+        min_mapq,
     )?;
 
     // Compute depth in left and right flanking regions.
@@ -414,10 +426,20 @@ fn check_coverage_ratio(
     let right_end = event.end.saturating_add(flank_bp);
 
     let left_depth = count_depth_in_region(
-        bam_path, ref_path, &event.chrom, left_start, left_end, min_mapq,
+        bam_path,
+        ref_path,
+        &event.chrom,
+        left_start,
+        left_end,
+        min_mapq,
     )?;
     let right_depth = count_depth_in_region(
-        bam_path, ref_path, &event.chrom, right_start, right_end, min_mapq,
+        bam_path,
+        ref_path,
+        &event.chrom,
+        right_start,
+        right_end,
+        min_mapq,
     )?;
 
     // Average only flanking regions that have non-zero length (handles events
@@ -484,7 +506,12 @@ fn check_split_reads(
     let query_end = event.end.saturating_add(pad);
 
     let sa_count = count_sa_tags_in_region(
-        bam_path, ref_path, &event.chrom, query_start, query_end, min_mapq,
+        bam_path,
+        ref_path,
+        &event.chrom,
+        query_start,
+        query_end,
+        min_mapq,
     )?;
 
     let pass = sa_count > 0;
@@ -679,8 +706,11 @@ fn count_depth_in_region(
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
             let flags = buf.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -704,8 +734,11 @@ fn count_depth_in_region(
         for rec_result in query {
             let record = rec_result?;
             let flags = record.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -751,8 +784,11 @@ fn count_sa_tags_in_region(
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
             let flags = buf.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -779,8 +815,11 @@ fn count_sa_tags_in_region(
         for rec_result in query {
             let record = rec_result?;
             let flags = record.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -841,8 +880,11 @@ fn pileup_region(
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
             let flags = buf.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -885,8 +927,11 @@ fn pileup_region(
         for rec_result in query {
             let record = rec_result?;
             let flags = record.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary()
-                || flags.is_duplicate() || flags.is_qc_fail()
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
             {
                 continue;
             }
@@ -925,7 +970,9 @@ fn pileup_region(
 #[allow(clippy::too_many_arguments)]
 fn walk_cigar_pileup(
     seq: &[u8],
-    cigar_ops: Box<dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_>,
+    cigar_ops: Box<
+        dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_,
+    >,
     align_start: u64,
     region_start: u64,
     region_end: u64,
@@ -1098,7 +1145,10 @@ fn compute_mean_mapq(bam_path: &str, ref_path: Option<&str>) -> Result<f64> {
 
 fn parse_info_field<'a>(info: &'a str, key: &str) -> Option<&'a str> {
     for field in info.split(';') {
-        if let Some(value) = field.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+        if let Some(value) = field
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
             return Some(value);
         }
     }
@@ -1167,11 +1217,7 @@ fn print_results_text(
     }
 
     writeln!(out)?;
-    writeln!(
-        out,
-        "Result: {}/{} PASS",
-        n_pass, n_total,
-    )?;
+    writeln!(out, "Result: {}/{} PASS", n_pass, n_total,)?;
 
     Ok(())
 }
@@ -1241,10 +1287,7 @@ mod tests {
             parse_info_field("SVTYPE=DEL;END=100;SIM_VAF=0.500", "SIM_VAF"),
             Some("0.500")
         );
-        assert_eq!(
-            parse_info_field("SVTYPE=DEL;END=100", "MISSING"),
-            None
-        );
+        assert_eq!(parse_info_field("SVTYPE=DEL;END=100", "MISSING"), None);
     }
 
     #[test]

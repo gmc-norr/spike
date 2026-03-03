@@ -15,8 +15,8 @@ use crate::reference::SharedReference;
 #[derive(Debug, Clone)]
 pub struct SegmentOrigin {
     pub chrom: String,
-    pub ref_start: u64,  // 0-based
-    pub ref_end: u64,    // 0-based, exclusive
+    pub ref_start: u64,   // 0-based
+    pub ref_end: u64,     // 0-based, exclusive
     pub is_reverse: bool, // true for reverse-complemented segments (INV)
 }
 
@@ -54,7 +54,10 @@ impl VariantHaplotype {
             offset += seg.sequence.len() as u64;
         }
 
-        let sequence: Vec<u8> = segments.iter().flat_map(|s| s.sequence.iter().copied()).collect();
+        let sequence: Vec<u8> = segments
+            .iter()
+            .flat_map(|s| s.sequence.iter().copied())
+            .collect();
         let total_len = sequence.len() as u64;
 
         Self {
@@ -139,6 +142,73 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: dup_start,
+                    ref_end: right_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+        ]))
+    }
+
+    /// Build a full tandem duplication haplotype.
+    ///
+    /// `ref[dup_start-flank..dup_start] | ref[dup_start..dup_end] | ref[dup_start..dup_end] | ref[dup_end..dup_end+flank]`
+    ///
+    /// The duplicated region appears twice in tandem. Reads tiled across this
+    /// haplotype naturally produce both junction evidence (split reads and
+    /// discordant pairs at the copy1→copy2 boundary) and correct depth increase
+    /// (2x in the DUP region from two copies).
+    pub fn from_tandem_duplication(
+        reference: &SharedReference,
+        chrom: &str,
+        dup_start: u64,
+        dup_end: u64,
+        flank: u64,
+    ) -> Result<Self> {
+        let left_start = dup_start.saturating_sub(flank);
+        let right_end = dup_end.saturating_add(flank);
+
+        let left_seq = fetch_upper(reference, chrom, left_start, dup_start)?;
+        let dup_seq_1 = fetch_upper(reference, chrom, dup_start, dup_end)?;
+        let dup_seq_2 = fetch_upper(reference, chrom, dup_start, dup_end)?;
+        let right_seq = fetch_upper(reference, chrom, dup_end, right_end)?;
+
+        Ok(Self::from_segments(vec![
+            HaplotypeSegment {
+                sequence: left_seq,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: left_start,
+                    ref_end: dup_start,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: dup_seq_1,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: dup_start,
+                    ref_end: dup_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: dup_seq_2,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: dup_start,
+                    ref_end: dup_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: right_seq,
+                origin: Some(SegmentOrigin {
+                    chrom: chrom.to_string(),
+                    ref_start: dup_end,
                     ref_end: right_end,
                     is_reverse: false,
                 }),
@@ -386,7 +456,10 @@ impl VariantHaplotype {
                 let offset_in_seg = hap_pos - seg.hap_offset;
                 let ref_pos = if origin.is_reverse {
                     // Reverse segment: haplotype offset 0 corresponds to ref_end-1.
-                    origin.ref_end.saturating_sub(1).saturating_sub(offset_in_seg)
+                    origin
+                        .ref_end
+                        .saturating_sub(1)
+                        .saturating_sub(offset_in_seg)
                 } else {
                     origin.ref_start + offset_in_seg
                 };
@@ -428,6 +501,22 @@ impl VariantHaplotype {
             .filter_map(|seg| seg.origin.as_ref())
             .map(|o| o.ref_end.saturating_sub(o.ref_start))
             .sum()
+    }
+
+    /// Check if a haplotype range [start, start+len) crosses a segment boundary.
+    ///
+    /// Returns true if the range falls entirely within a single segment, false
+    /// if it spans two or more segments.
+    pub fn is_within_single_segment(&self, start: u64, len: u64) -> bool {
+        let end = start + len; // exclusive
+        for seg in &self.segments {
+            let seg_start = seg.hap_offset;
+            let seg_end = seg.hap_offset + seg.sequence.len() as u64;
+            if start >= seg_start && end <= seg_end {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get the reference coordinate range covered by all segments.
@@ -496,10 +585,7 @@ impl VariantHaplotype {
             }
         }
         if applied > 0 {
-            log::info!(
-                "Applied {} het SNP variants to haplotype sequence",
-                applied,
-            );
+            log::info!("Applied {} het SNP variants to haplotype sequence", applied,);
         }
     }
 
@@ -525,12 +611,7 @@ impl VariantHaplotype {
 }
 
 /// Fetch reference sequence and uppercase it.
-fn fetch_upper(
-    reference: &SharedReference,
-    chrom: &str,
-    start: u64,
-    end: u64,
-) -> Result<Vec<u8>> {
+fn fetch_upper(reference: &SharedReference, chrom: &str, start: u64, end: u64) -> Result<Vec<u8>> {
     if start >= end {
         return Ok(Vec::new());
     }
@@ -548,9 +629,7 @@ mod tests {
     impl MockRef {
         fn fetch(&self, _chrom: &str, start: u64, end: u64) -> Vec<u8> {
             let pattern = b"ACGT";
-            (start..end)
-                .map(|i| pattern[(i % 4) as usize])
-                .collect()
+            (start..end).map(|i| pattern[(i % 4) as usize]).collect()
         }
     }
 
@@ -735,7 +814,7 @@ mod tests {
 
         let bps = hap.breakpoints();
         assert_eq!(bps.len(), 2);
-        assert_eq!(bps[0], 50);  // left→inverted boundary
+        assert_eq!(bps[0], 50); // left→inverted boundary
         assert_eq!(bps[1], 150); // inverted→right boundary
     }
 
@@ -938,5 +1017,197 @@ mod tests {
         // Right flank starts at ref 501 (pos + 1).
         let (_, pos) = hap.hap_to_ref(104).unwrap();
         assert_eq!(pos, 501);
+    }
+
+    // ── is_within_single_segment tests ──────────────────────────────────
+
+    #[test]
+    fn test_within_single_segment_left() {
+        // DEL: ref[500..1500) deleted, flanks 500bp each → hap [0..500) + [500..1000)
+        let hap = mock_segments_deletion(500, 1500, 500);
+        assert_eq!(hap.total_len, 1000);
+
+        // Fully within left segment [0..500)
+        assert!(hap.is_within_single_segment(0, 150));
+        assert!(hap.is_within_single_segment(200, 150));
+        assert!(hap.is_within_single_segment(350, 150)); // ends at 500 = boundary (exclusive, OK)
+    }
+
+    #[test]
+    fn test_within_single_segment_right() {
+        let hap = mock_segments_deletion(500, 1500, 500);
+
+        // Fully within right segment [500..1000)
+        assert!(hap.is_within_single_segment(500, 150));
+        assert!(hap.is_within_single_segment(700, 150));
+        assert!(hap.is_within_single_segment(850, 150)); // ends at 1000
+    }
+
+    #[test]
+    fn test_within_single_segment_crossing_boundary() {
+        let hap = mock_segments_deletion(500, 1500, 500);
+
+        // Crosses the boundary at 500
+        assert!(!hap.is_within_single_segment(400, 200)); // 400..600 crosses 500
+        assert!(!hap.is_within_single_segment(490, 150)); // 490..640 crosses 500
+        assert!(!hap.is_within_single_segment(351, 150)); // 351..501 crosses 500
+    }
+
+    #[test]
+    fn test_within_single_segment_three_segments() {
+        // INV: left flank + inverted middle + right flank
+        let hap = mock_segments_inversion(1000, 2000, 500);
+        // 3 segments: [0..500) [500..1500) [1500..2000)
+        assert_eq!(hap.segments.len(), 3);
+        assert_eq!(hap.total_len, 2000);
+
+        // Within left segment
+        assert!(hap.is_within_single_segment(0, 150));
+        assert!(hap.is_within_single_segment(350, 150)); // ends at 500
+
+        // Within inverted middle
+        assert!(hap.is_within_single_segment(500, 150));
+        assert!(hap.is_within_single_segment(1000, 150));
+        assert!(hap.is_within_single_segment(1350, 150)); // ends at 1500
+
+        // Within right segment
+        assert!(hap.is_within_single_segment(1500, 150));
+        assert!(hap.is_within_single_segment(1850, 150));
+
+        // Crosses left→middle boundary at 500
+        assert!(!hap.is_within_single_segment(450, 150));
+        // Crosses middle→right boundary at 1500
+        assert!(!hap.is_within_single_segment(1450, 150));
+    }
+
+    // ── tandem duplication tests ──────────────────────────────────────────
+
+    fn mock_tandem_dup(dup_start: u64, dup_end: u64, flank: u64) -> VariantHaplotype {
+        let pattern = b"ACGT";
+        let left_start = dup_start.saturating_sub(flank);
+        let right_end = dup_end + flank;
+
+        let make_seq = |start: u64, end: u64| -> Vec<u8> {
+            (start..end).map(|i| pattern[(i % 4) as usize]).collect()
+        };
+
+        VariantHaplotype::from_segments(vec![
+            HaplotypeSegment {
+                sequence: make_seq(left_start, dup_start),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: left_start,
+                    ref_end: dup_start,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: make_seq(dup_start, dup_end),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: dup_start,
+                    ref_end: dup_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: make_seq(dup_start, dup_end),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: dup_start,
+                    ref_end: dup_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: make_seq(dup_end, right_end),
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: dup_end,
+                    ref_end: right_end,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+        ])
+    }
+
+    #[test]
+    fn test_tandem_dup_haplotype_structure() {
+        // DUP [1000, 2000) with 500bp flanks
+        let hap = mock_tandem_dup(1000, 2000, 500);
+
+        assert_eq!(hap.segments.len(), 4);
+        // total_len = flank + dup + dup + flank = 500 + 1000 + 1000 + 500 = 3000
+        assert_eq!(hap.total_len, 3000);
+
+        // 3 breakpoints between 4 segments
+        let bps = hap.breakpoints();
+        assert_eq!(bps.len(), 3);
+        assert_eq!(bps[0], 500);  // left_flank → copy1
+        assert_eq!(bps[1], 1500); // copy1 → copy2 (the novel junction)
+        assert_eq!(bps[2], 2500); // copy2 → right_flank
+    }
+
+    #[test]
+    fn test_tandem_dup_ref_mapped_len() {
+        let hap = mock_tandem_dup(1000, 2000, 500);
+        // All 4 segments are reference-mapped
+        // ref_mapped_len = 500 + 1000 + 1000 + 500 = 3000
+        assert_eq!(hap.ref_mapped_len(), 3000);
+    }
+
+    #[test]
+    fn test_tandem_dup_ref_range() {
+        let hap = mock_tandem_dup(1000, 2000, 500);
+        let (min_ref, max_ref) = hap.ref_range().unwrap();
+        // min = dup_start - flank = 500
+        assert_eq!(min_ref, 500);
+        // max = dup_end + flank = 2500
+        assert_eq!(max_ref, 2500);
+    }
+
+    #[test]
+    fn test_tandem_dup_hap_to_ref_both_copies() {
+        let hap = mock_tandem_dup(1000, 2000, 500);
+
+        // Position in copy1 (offset 500 = start of copy1)
+        let (chrom, ref_pos) = hap.hap_to_ref(500).unwrap();
+        assert_eq!(chrom, "chr1");
+        assert_eq!(ref_pos, 1000); // dup_start
+
+        // Position in copy2 (offset 1500 = start of copy2)
+        let (chrom, ref_pos) = hap.hap_to_ref(1500).unwrap();
+        assert_eq!(chrom, "chr1");
+        assert_eq!(ref_pos, 1000); // same ref coord as copy1 start
+
+        // Mid-copy1 (offset 1000 = 500 into the dup region)
+        let (_, ref_pos) = hap.hap_to_ref(1000).unwrap();
+        assert_eq!(ref_pos, 1500);
+
+        // Mid-copy2 (offset 2000 = 500 into the dup region in copy2)
+        let (_, ref_pos) = hap.hap_to_ref(2000).unwrap();
+        assert_eq!(ref_pos, 1500); // same ref coord
+    }
+
+    #[test]
+    fn test_tandem_dup_junction_sequence() {
+        // Verify the sequence at the copy1→copy2 junction is correct:
+        // end of copy1 (ref near dup_end) followed by start of copy2 (ref near dup_start)
+        let hap = mock_tandem_dup(1000, 2000, 500);
+        let pattern = b"ACGT";
+
+        // Last 10bp of copy1 = ref[1990..2000)
+        let end_copy1 = hap.get_sequence(1490, 10);
+        let expected_end: Vec<u8> = (1990u64..2000).map(|i| pattern[(i % 4) as usize]).collect();
+        assert_eq!(end_copy1, &expected_end[..]);
+
+        // First 10bp of copy2 = ref[1000..1010)
+        let start_copy2 = hap.get_sequence(1500, 10);
+        let expected_start: Vec<u8> = (1000u64..1010).map(|i| pattern[(i % 4) as usize]).collect();
+        assert_eq!(start_copy2, &expected_start[..]);
     }
 }

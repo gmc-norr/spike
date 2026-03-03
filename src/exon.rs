@@ -148,7 +148,10 @@ pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, O
         "inv" => parse_region_spec(&parts[1..], "inv", genes)?,
         "ins" => parse_insertion_spec(&parts[1..])?,
         "snp" => parse_snp_spec(&parts[1..])?,
-        other => bail!("unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', 'ins', or 'snp'", other),
+        other => bail!(
+            "unknown event type '{}', expected 'del', 'fusion', 'dup', 'inv', 'ins', or 'snp'",
+            other
+        ),
     };
 
     // Parse options (currently only af=...).
@@ -190,9 +193,12 @@ fn parse_af_value(value: &str) -> Result<AfSpec> {
         "het" => Ok(AfSpec::Het),
         "hom" => Ok(AfSpec::Hom),
         _ => {
-            let v: f64 = value
-                .parse()
-                .with_context(|| format!("invalid af value '{}', expected number, 'het', or 'hom'", value))?;
+            let v: f64 = value.parse().with_context(|| {
+                format!(
+                    "invalid af value '{}', expected number, 'het', or 'hom'",
+                    value
+                )
+            })?;
             if v <= 0.0 || v > 1.0 {
                 bail!("af must be in (0.0, 1.0], got {}", v);
             }
@@ -210,7 +216,12 @@ fn parse_af_value(value: &str) -> Result<AfSpec> {
 ///   "inv:chr20:30000000-30005000"     — coordinate-based inversion
 fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Result<SimEvent> {
     if parts.len() < 2 {
-        bail!("{} spec requires at least 2 parts: '{}:CHR:START-END' or '{}:GENE:exonN-exonM'", sv_type, sv_type, sv_type);
+        bail!(
+            "{} spec requires at least 2 parts: '{}:CHR:START-END' or '{}:GENE:exonN-exonM'",
+            sv_type,
+            sv_type,
+            sv_type
+        );
     }
 
     let first = parts[0];
@@ -219,7 +230,14 @@ fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Res
     // Try coordinate-based: second has a dash with numbers on both sides.
     if let Some((start_str, end_str)) = second.split_once('-') {
         if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
-            return make_region_event(sv_type, first.to_string(), start, end, "unknown".to_string(), Vec::new());
+            return make_region_event(
+                sv_type,
+                first.to_string(),
+                start,
+                end,
+                "unknown".to_string(),
+                Vec::new(),
+            );
         }
     }
 
@@ -232,16 +250,17 @@ fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Res
             anyhow::anyhow!(
                 "gene '{}' not found. Available: {}",
                 gene_name,
-                genes.iter().map(|g| g.gene.as_str()).collect::<Vec<_>>().join(", ")
+                genes
+                    .iter()
+                    .map(|g| g.gene.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         })?;
 
     let exon_range = second;
     let (start_exon_str, end_exon_str) = exon_range.split_once('-').ok_or_else(|| {
-        anyhow::anyhow!(
-            "expected exon range 'exonN-exonM', got '{}'",
-            exon_range
-        )
+        anyhow::anyhow!("expected exon range 'exonN-exonM', got '{}'", exon_range)
     })?;
 
     let start_num = parse_exon_number(start_exon_str)?;
@@ -378,7 +397,8 @@ fn parse_insertion_spec(parts: &[&str]) -> Result<SimEvent> {
     }
 
     let chrom = parts[0].to_string();
-    let pos: u64 = parts[1].parse()
+    let pos: u64 = parts[1]
+        .parse()
         .with_context(|| format!("invalid position: '{}'", parts[1]))?;
 
     // Try parsing third part as a length (u64). If that fails, treat as DNA sequence.
@@ -428,15 +448,22 @@ fn parse_insertion_spec(parts: &[&str]) -> Result<SimEvent> {
 ///   "snp:chr1:100:A>T"    — REF>ALT shorthand
 ///   "snp:chr1:100:ACG:A"  — small deletion (REF=ACG, ALT=A)
 ///   "snp:chr1:100:A:ACGT" — small insertion (REF=A, ALT=ACGT)
+///
+/// Position (`POS`) is 1-based in the CLI syntax and converted to internal
+/// 0-based coordinates.
 fn parse_snp_spec(parts: &[&str]) -> Result<SimEvent> {
     if parts.len() < 3 {
         bail!("snp spec requires: 'snp:CHR:POS:REF:ALT' or 'snp:CHR:POS:REF>ALT'");
     }
 
     let chrom = parts[0].to_string();
-    let pos: u64 = parts[1]
+    let pos_1based: u64 = parts[1]
         .parse()
         .with_context(|| format!("invalid position: '{}'", parts[1]))?;
+    if pos_1based == 0 {
+        bail!("snp position must be >= 1 (1-based), got 0");
+    }
+    let pos = pos_1based - 1;
 
     // Parse REF and ALT: either "REF:ALT" (two parts) or "REF>ALT" (one part with >).
     let (ref_str, alt_str) = if parts.len() >= 4 {
@@ -446,10 +473,7 @@ fn parse_snp_spec(parts: &[&str]) -> Result<SimEvent> {
         // "snp:chr:pos:REF>ALT"
         (r, a)
     } else {
-        bail!(
-            "snp spec requires REF:ALT or REF>ALT, got '{}'",
-            parts[2]
-        );
+        bail!("snp spec requires REF:ALT or REF>ALT, got '{}'", parts[2]);
     };
 
     let ref_allele: Vec<u8> = ref_str.as_bytes().to_vec();
@@ -619,8 +643,7 @@ mod tests {
     #[test]
     fn test_parse_with_af_het() {
         let genes = test_genes();
-        let (_, af) =
-            parse_event_spec("fusion:GENEA:exon3:GENEB:exon2;af=het", &genes).unwrap();
+        let (_, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2;af=het", &genes).unwrap();
         assert_eq!(af, Some(AfSpec::Het));
     }
 
@@ -646,10 +669,14 @@ mod tests {
         assert!(af.is_none());
         match event {
             SimEvent::SmallVariant {
-                chrom, pos, ref_allele, alt_allele, ..
+                chrom,
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
             } => {
                 assert_eq!(chrom, "chr1");
-                assert_eq!(pos, 100);
+                assert_eq!(pos, 99); // 1-based input -> 0-based internal
                 assert_eq!(ref_allele, b"A");
                 assert_eq!(alt_allele, b"T");
             }
@@ -662,7 +689,13 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("snp:chr1:100:A>T", &genes).unwrap();
         match event {
-            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
+                assert_eq!(pos, 99); // 1-based input -> 0-based internal
                 assert_eq!(ref_allele, b"A");
                 assert_eq!(alt_allele, b"T");
             }
@@ -682,7 +715,13 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("snp:chr1:100:ACG:A", &genes).unwrap();
         match event {
-            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
+                assert_eq!(pos, 99); // 1-based input -> 0-based internal
                 assert_eq!(ref_allele, b"ACG");
                 assert_eq!(alt_allele, b"A");
             }
@@ -695,7 +734,13 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("snp:chr1:100:A:ACGT", &genes).unwrap();
         match event {
-            SimEvent::SmallVariant { ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
+                assert_eq!(pos, 99); // 1-based input -> 0-based internal
                 assert_eq!(ref_allele, b"A");
                 assert_eq!(alt_allele, b"ACGT");
             }
@@ -716,6 +761,12 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_snp_zero_position_invalid() {
+        let genes = test_genes();
+        assert!(parse_event_spec("snp:chr1:0:A:T", &genes).is_err());
+    }
+
+    #[test]
     fn test_parse_exon_number() {
         assert_eq!(parse_exon_number("exon4").unwrap(), 4);
         assert_eq!(parse_exon_number("exon14").unwrap(), 14);
@@ -730,7 +781,13 @@ mod tests {
         let (event, af) = parse_event_spec("dup:GENEA:exon4-exon6", &genes).unwrap();
         assert!(af.is_none());
         match event {
-            SimEvent::Duplication { chrom, dup_start, dup_end, gene, .. } => {
+            SimEvent::Duplication {
+                chrom,
+                dup_start,
+                dup_end,
+                gene,
+                ..
+            } => {
                 assert_eq!(chrom, "chr1");
                 assert_eq!(dup_start, 2500);
                 assert_eq!(dup_end, 3700);
@@ -747,7 +804,13 @@ mod tests {
         let (event, af) = parse_event_spec("inv:GENEB:exon2-exon4", &genes).unwrap();
         assert!(af.is_none());
         match event {
-            SimEvent::Inversion { chrom, inv_start, inv_end, gene, .. } => {
+            SimEvent::Inversion {
+                chrom,
+                inv_start,
+                inv_end,
+                gene,
+                ..
+            } => {
                 assert_eq!(chrom, "chr2");
                 assert_eq!(inv_start, 12000);
                 assert_eq!(inv_end, 16300);
@@ -762,7 +825,12 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("dup:chr20:30000000-30005000", &genes).unwrap();
         match event {
-            SimEvent::Duplication { chrom, dup_start, dup_end, .. } => {
+            SimEvent::Duplication {
+                chrom,
+                dup_start,
+                dup_end,
+                ..
+            } => {
                 assert_eq!(chrom, "chr20");
                 assert_eq!(dup_start, 30_000_000);
                 assert_eq!(dup_end, 30_005_000);
@@ -776,7 +844,12 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("inv:chr20:30000000-30005000", &genes).unwrap();
         match event {
-            SimEvent::Inversion { chrom, inv_start, inv_end, .. } => {
+            SimEvent::Inversion {
+                chrom,
+                inv_start,
+                inv_end,
+                ..
+            } => {
                 assert_eq!(chrom, "chr20");
                 assert_eq!(inv_start, 30_000_000);
                 assert_eq!(inv_end, 30_005_000);
@@ -790,7 +863,13 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("ins:chr20:30000000:ACGTACGT", &genes).unwrap();
         match event {
-            SimEvent::Insertion { chrom, pos, ins_seq, ins_len, .. } => {
+            SimEvent::Insertion {
+                chrom,
+                pos,
+                ins_seq,
+                ins_len,
+                ..
+            } => {
                 assert_eq!(chrom, "chr20");
                 assert_eq!(pos, 30_000_000);
                 assert_eq!(ins_seq, Some(b"ACGTACGT".to_vec()));
@@ -805,7 +884,9 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("ins:chr20:30000000:500", &genes).unwrap();
         match event {
-            SimEvent::Insertion { ins_seq, ins_len, .. } => {
+            SimEvent::Insertion {
+                ins_seq, ins_len, ..
+            } => {
                 assert!(ins_seq.is_none());
                 assert_eq!(ins_len, 500);
             }

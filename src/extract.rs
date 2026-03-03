@@ -67,8 +67,12 @@ fn extract_read_pairs_bam(
         min_mapq,
     );
 
-    // Pass 1: collect read1 records.
-    let mut read1_map: HashMap<String, PartialPair> = HashMap::new();
+    // Pass 1: collect both read1 and read2 records in the target region.
+    let mut read1_map: HashMap<String, PartialRead> = HashMap::new();
+    let mut read2_map: HashMap<String, PartialRead> = HashMap::new();
+    let mut pass1_read1_count = 0usize;
+    let mut pass1_read2_count = 0usize;
+    let mut max_abs_tlen = 0u64;
 
     {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -88,10 +92,10 @@ fn extract_read_pairs_bam(
             if !passes_filters_bam(&flags, min_mapq, &record) {
                 continue;
             }
-            if !flags.is_first_segment() {
+            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
                 continue;
             }
-            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
+            if !flags.is_first_segment() && !flags.is_last_segment() {
                 continue;
             }
 
@@ -99,51 +103,42 @@ fn extract_read_pairs_bam(
                 Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
                 None => continue,
             };
-
-            let pos = match record.alignment_start() {
-                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
-                _ => continue,
+            let partial = match parse_partial_from_bam_record(&record, &flags) {
+                Some(p) => p,
+                None => continue,
             };
+            max_abs_tlen = max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
 
-            let mate_pos = match record.mate_alignment_start() {
-                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
-                _ => continue,
-            };
-
-            let tlen = record.template_length();
-            let is_reverse = flags.is_reverse_complemented();
-
-            let mut seq: Vec<u8> = record.sequence().iter().collect();
-            let mut qual: Vec<u8> = record
-                .quality_scores()
-                .as_ref()
-                .iter()
-                .map(|s| s.wrapping_add(33))
-                .collect();
-
-            // Reverse-complement back to FASTQ orientation if needed.
-            if is_reverse {
-                reverse_complement(&mut seq);
-                qual.reverse();
+            if flags.is_first_segment() {
+                read1_map.insert(name, partial);
+                pass1_read1_count += 1;
+            } else {
+                read2_map.insert(name, partial);
+                pass1_read2_count += 1;
             }
-
-            read1_map.insert(
-                name,
-                PartialPair {
-                    seq1: seq,
-                    qual1: qual,
-                    pos,
-                    mate_pos,
-                    tlen,
-                },
-            );
         }
     }
 
-    log::info!("Pass 1: collected {} read1 records", read1_map.len());
+    // Pair records already complete in pass 1.
+    let mut pairs: Vec<ReadPair> = Vec::new();
+    let pass1_names: Vec<String> = read1_map.keys().cloned().collect();
+    let mut pass1_paired = 0usize;
+    for name in pass1_names {
+        if let (Some(read1), Some(read2)) = (read1_map.remove(&name), read2_map.remove(&name)) {
+            pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+            pass1_paired += 1;
+        }
+    }
 
-    // Pass 2: collect read2 records, match by name.
-    let mut pairs: Vec<ReadPair> = Vec::with_capacity(read1_map.len());
+    log::info!(
+        "Pass 1: collected {} read1 + {} read2 records ({} pairs already complete)",
+        pass1_read1_count,
+        pass1_read2_count,
+        pass1_paired,
+    );
+
+    // Pass 2: query a wider region to recover missing mates.
+    let wider_padding = max_abs_tlen.saturating_add(200).max(1000);
 
     {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -151,9 +146,8 @@ fn extract_read_pairs_bam(
             .with_context(|| format!("failed to open BAM for pass 2: {}", bam_path))?;
         let header = reader.read_header()?;
 
-        // Query a wider region to capture mates that may be slightly outside.
-        let wider_start = start.saturating_sub(1000);
-        let wider_end = end.saturating_add(1000);
+        let wider_start = start.saturating_sub(wider_padding);
+        let wider_end = end.saturating_add(wider_padding);
 
         let start_pos = safe_noodles_position(wider_start + 1);
         let end_pos = safe_noodles_position(wider_end);
@@ -167,7 +161,10 @@ fn extract_read_pairs_bam(
             if !passes_filters_bam(&flags, min_mapq, &record) {
                 continue;
             }
-            if !flags.is_last_segment() {
+            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
+                continue;
+            }
+            if !flags.is_first_segment() && !flags.is_last_segment() {
                 continue;
             }
 
@@ -176,41 +173,32 @@ fn extract_read_pairs_bam(
                 None => continue,
             };
 
-            if let Some(partial) = read1_map.remove(&name) {
-                let is_reverse = flags.is_reverse_complemented();
-
-                let mut seq: Vec<u8> = record.sequence().iter().collect();
-                let mut qual: Vec<u8> = record
-                    .quality_scores()
-                    .as_ref()
-                    .iter()
-                    .map(|s| s.wrapping_add(33))
-                    .collect();
-
-                if is_reverse {
-                    reverse_complement(&mut seq);
-                    qual.reverse();
+            if flags.is_first_segment() {
+                if read1_map.contains_key(&name) {
+                    continue;
                 }
-
-                let ref_start = partial.pos.min(partial.mate_pos);
-                let ref_end = compute_ref_end(&partial, ref_start, seq.len());
-
-                pairs.push(ReadPair {
-                    name,
-                    seq1: partial.seq1,
-                    qual1: partial.qual1,
-                    seq2: seq,
-                    qual2: qual,
-                    ref_start,
-                    ref_end,
-                    insert_size: partial.tlen as i64,
-                    chrom: chrom.to_string(),
-                });
+                if let Some(read2) = read2_map.remove(&name) {
+                    let Some(read1) = parse_partial_from_bam_record(&record, &flags) else {
+                        continue;
+                    };
+                    pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+                }
+            } else {
+                if read2_map.contains_key(&name) {
+                    continue;
+                }
+                if let Some(read1) = read1_map.remove(&name) {
+                    let Some(read2) = parse_partial_from_bam_record(&record, &flags) else {
+                        continue;
+                    };
+                    pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+                }
             }
         }
     }
 
-    log_extraction_result(&read1_map, pairs.len(), chrom, start, end);
+    let unmatched = read1_map.len() + read2_map.len();
+    log_extraction_result(unmatched, pairs.len(), chrom, start, end);
     Ok(pairs)
 }
 
@@ -235,8 +223,12 @@ fn extract_read_pairs_cram(
 
     let repository = build_fasta_repository(ref_path)?;
 
-    // Pass 1: collect read1 records.
-    let mut read1_map: HashMap<String, PartialPair> = HashMap::new();
+    // Pass 1: collect both read1 and read2 records in the target region.
+    let mut read1_map: HashMap<String, PartialRead> = HashMap::new();
+    let mut read2_map: HashMap<String, PartialRead> = HashMap::new();
+    let mut pass1_read1_count = 0usize;
+    let mut pass1_read2_count = 0usize;
+    let mut max_abs_tlen = 0u64;
 
     {
         let mut reader = noodles::cram::io::indexed_reader::Builder::default()
@@ -261,10 +253,10 @@ fn extract_read_pairs_cram(
             if !passes_filters_buf(min_mapq, &buf) {
                 continue;
             }
-            if !flags.is_first_segment() {
+            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
                 continue;
             }
-            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
+            if !flags.is_first_segment() && !flags.is_last_segment() {
                 continue;
             }
 
@@ -272,50 +264,42 @@ fn extract_read_pairs_cram(
                 Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
                 None => continue,
             };
-
-            let pos = match buf.alignment_start() {
-                Some(p) => usize::from(p).saturating_sub(1) as u64,
+            let partial = match parse_partial_from_record_buf(&buf, &flags) {
+                Some(p) => p,
                 None => continue,
             };
+            max_abs_tlen = max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
 
-            let mate_pos = match buf.mate_alignment_start() {
-                Some(p) => usize::from(p).saturating_sub(1) as u64,
-                None => continue,
-            };
-
-            let tlen = buf.template_length();
-            let is_reverse = flags.is_reverse_complemented();
-
-            let mut seq: Vec<u8> = buf.sequence().as_ref().to_vec();
-            let mut qual: Vec<u8> = buf
-                .quality_scores()
-                .as_ref()
-                .iter()
-                .map(|s| s.wrapping_add(33))
-                .collect();
-
-            if is_reverse {
-                reverse_complement(&mut seq);
-                qual.reverse();
+            if flags.is_first_segment() {
+                read1_map.insert(name, partial);
+                pass1_read1_count += 1;
+            } else {
+                read2_map.insert(name, partial);
+                pass1_read2_count += 1;
             }
-
-            read1_map.insert(
-                name,
-                PartialPair {
-                    seq1: seq,
-                    qual1: qual,
-                    pos,
-                    mate_pos,
-                    tlen,
-                },
-            );
         }
     }
 
-    log::info!("Pass 1 (CRAM): collected {} read1 records", read1_map.len());
+    // Pair records already complete in pass 1.
+    let mut pairs: Vec<ReadPair> = Vec::new();
+    let pass1_names: Vec<String> = read1_map.keys().cloned().collect();
+    let mut pass1_paired = 0usize;
+    for name in pass1_names {
+        if let (Some(read1), Some(read2)) = (read1_map.remove(&name), read2_map.remove(&name)) {
+            pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+            pass1_paired += 1;
+        }
+    }
 
-    // Pass 2: collect read2 records, match by name.
-    let mut pairs: Vec<ReadPair> = Vec::with_capacity(read1_map.len());
+    log::info!(
+        "Pass 1 (CRAM): collected {} read1 + {} read2 records ({} pairs already complete)",
+        pass1_read1_count,
+        pass1_read2_count,
+        pass1_paired,
+    );
+
+    // Pass 2: query a wider region to recover missing mates.
+    let wider_padding = max_abs_tlen.saturating_add(200).max(1000);
 
     {
         let mut reader = noodles::cram::io::indexed_reader::Builder::default()
@@ -324,8 +308,8 @@ fn extract_read_pairs_cram(
             .with_context(|| format!("failed to open CRAM for pass 2: {}", cram_path))?;
         let header = reader.read_header()?;
 
-        let wider_start = start.saturating_sub(1000);
-        let wider_end = end.saturating_add(1000);
+        let wider_start = start.saturating_sub(wider_padding);
+        let wider_end = end.saturating_add(wider_padding);
 
         let start_pos = safe_noodles_position(wider_start + 1);
         let end_pos = safe_noodles_position(wider_end);
@@ -343,7 +327,10 @@ fn extract_read_pairs_cram(
             if !passes_filters_buf(min_mapq, &buf) {
                 continue;
             }
-            if !flags.is_last_segment() {
+            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
+                continue;
+            }
+            if !flags.is_first_segment() && !flags.is_last_segment() {
                 continue;
             }
 
@@ -352,41 +339,32 @@ fn extract_read_pairs_cram(
                 None => continue,
             };
 
-            if let Some(partial) = read1_map.remove(&name) {
-                let is_reverse = flags.is_reverse_complemented();
-
-                let mut seq: Vec<u8> = buf.sequence().as_ref().to_vec();
-                let mut qual: Vec<u8> = buf
-                    .quality_scores()
-                    .as_ref()
-                    .iter()
-                    .map(|s| s.wrapping_add(33))
-                    .collect();
-
-                if is_reverse {
-                    reverse_complement(&mut seq);
-                    qual.reverse();
+            if flags.is_first_segment() {
+                if read1_map.contains_key(&name) {
+                    continue;
                 }
-
-                let ref_start = partial.pos.min(partial.mate_pos);
-                let ref_end = compute_ref_end(&partial, ref_start, seq.len());
-
-                pairs.push(ReadPair {
-                    name,
-                    seq1: partial.seq1,
-                    qual1: partial.qual1,
-                    seq2: seq,
-                    qual2: qual,
-                    ref_start,
-                    ref_end,
-                    insert_size: partial.tlen as i64,
-                    chrom: chrom.to_string(),
-                });
+                if let Some(read2) = read2_map.remove(&name) {
+                    let Some(read1) = parse_partial_from_record_buf(&buf, &flags) else {
+                        continue;
+                    };
+                    pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+                }
+            } else {
+                if read2_map.contains_key(&name) {
+                    continue;
+                }
+                if let Some(read1) = read1_map.remove(&name) {
+                    let Some(read2) = parse_partial_from_record_buf(&buf, &flags) else {
+                        continue;
+                    };
+                    pairs.push(build_pair_from_partials(name, read1, read2, chrom));
+                }
             }
         }
     }
 
-    log_extraction_result(&read1_map, pairs.len(), chrom, start, end);
+    let unmatched = read1_map.len() + read2_map.len();
+    log_extraction_result(unmatched, pairs.len(), chrom, start, end);
     Ok(pairs)
 }
 
@@ -404,40 +382,135 @@ pub fn build_read_pool(pairs: Vec<ReadPair>, frag_dist: FragmentDist) -> ReadPoo
 
 // --- Internal helpers ---
 
-struct PartialPair {
-    seq1: Vec<u8>,
-    qual1: Vec<u8>,
+struct PartialRead {
+    seq: Vec<u8>,
+    qual: Vec<u8>,
     pos: u64,
-    mate_pos: u64,
     tlen: i32,
 }
 
 /// Compute the fragment end position from template length and read positions.
-fn compute_ref_end(partial: &PartialPair, ref_start: u64, r2_seq_len: usize) -> u64 {
-    if partial.tlen > 0 {
-        ref_start + partial.tlen as u64
-    } else if partial.tlen < 0 {
-        ref_start + (partial.tlen as i64).unsigned_abs()
+fn compute_ref_end(read1: &PartialRead, read2: &PartialRead, ref_start: u64) -> u64 {
+    let tlen = if read1.tlen != 0 {
+        read1.tlen
+    } else {
+        read2.tlen
+    };
+    if tlen > 0 {
+        ref_start + tlen as u64
+    } else if tlen < 0 {
+        ref_start + (tlen as i64).unsigned_abs()
     } else {
         // tlen == 0: estimate from positions + read length.
-        let r1_end = partial.pos + partial.seq1.len() as u64;
-        let r2_end = partial.mate_pos + r2_seq_len as u64;
+        let r1_end = read1.pos + read1.seq.len() as u64;
+        let r2_end = read2.pos + read2.seq.len() as u64;
         r1_end.max(r2_end)
     }
 }
 
-/// Log extraction results (shared between BAM and CRAM paths).
-fn log_extraction_result(
-    read1_map: &HashMap<String, PartialPair>,
-    pair_count: usize,
+/// Build a complete ReadPair from read1/read2 partial records.
+fn build_pair_from_partials(
+    name: String,
+    read1: PartialRead,
+    read2: PartialRead,
     chrom: &str,
-    start: u64,
-    end: u64,
-) {
-    let unmatched = read1_map.len();
+) -> ReadPair {
+    let ref_start = read1.pos.min(read2.pos);
+    let ref_end = compute_ref_end(&read1, &read2, ref_start);
+    let insert_size = if read1.tlen != 0 {
+        (read1.tlen as i64).unsigned_abs() as i64
+    } else {
+        (read2.tlen as i64).unsigned_abs() as i64
+    };
+
+    ReadPair {
+        name,
+        seq1: read1.seq,
+        qual1: read1.qual,
+        seq2: read2.seq,
+        qual2: read2.qual,
+        ref_start,
+        ref_end,
+        insert_size,
+        chrom: chrom.to_string(),
+    }
+}
+
+/// Parse sequence/quality/position fields from a BAM record into a partial read.
+fn parse_partial_from_bam_record(
+    record: &noodles::bam::Record,
+    flags: &noodles::sam::alignment::record::Flags,
+) -> Option<PartialRead> {
+    let pos = match record.alignment_start() {
+        Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
+        _ => return None,
+    };
+    if record.mate_alignment_start().is_none() {
+        return None;
+    }
+    let tlen = record.template_length();
+
+    let mut seq: Vec<u8> = record.sequence().iter().collect();
+    let mut qual: Vec<u8> = record
+        .quality_scores()
+        .as_ref()
+        .iter()
+        .map(|s| s.wrapping_add(33))
+        .collect();
+
+    if flags.is_reverse_complemented() {
+        reverse_complement(&mut seq);
+        qual.reverse();
+    }
+
+    Some(PartialRead {
+        seq,
+        qual,
+        pos,
+        tlen,
+    })
+}
+
+/// Parse sequence/quality/position fields from a CRAM RecordBuf into a partial read.
+fn parse_partial_from_record_buf(
+    buf: &noodles::sam::alignment::RecordBuf,
+    flags: &noodles::sam::alignment::record::Flags,
+) -> Option<PartialRead> {
+    let pos = match buf.alignment_start() {
+        Some(p) => usize::from(p).saturating_sub(1) as u64,
+        None => return None,
+    };
+    if buf.mate_alignment_start().is_none() {
+        return None;
+    }
+    let tlen = buf.template_length();
+
+    let mut seq: Vec<u8> = buf.sequence().as_ref().to_vec();
+    let mut qual: Vec<u8> = buf
+        .quality_scores()
+        .as_ref()
+        .iter()
+        .map(|s| s.wrapping_add(33))
+        .collect();
+
+    if flags.is_reverse_complemented() {
+        reverse_complement(&mut seq);
+        qual.reverse();
+    }
+
+    Some(PartialRead {
+        seq,
+        qual,
+        pos,
+        tlen,
+    })
+}
+
+/// Log extraction results (shared between BAM and CRAM paths).
+fn log_extraction_result(unmatched: usize, pair_count: usize, chrom: &str, start: u64, end: u64) {
     if unmatched > 0 {
         log::debug!(
-            "{} read1 records had no matching read2 in the query region",
+            "{} records had no matching mate in the queried windows",
             unmatched,
         );
     }
@@ -472,10 +545,7 @@ fn passes_filters_bam(
 }
 
 /// Filter check for RecordBuf (used by CRAM path).
-fn passes_filters_buf(
-    min_mapq: u8,
-    buf: &noodles::sam::alignment::RecordBuf,
-) -> bool {
+fn passes_filters_buf(min_mapq: u8, buf: &noodles::sam::alignment::RecordBuf) -> bool {
     let flags = buf.flags();
     if flags.is_unmapped()
         || flags.is_secondary()
@@ -495,8 +565,7 @@ fn passes_filters_buf(
 /// Convert a 0-based half-open end coordinate to a noodles 1-based Position.
 /// Noodles positions must be >= 1, so we clamp.
 pub fn safe_noodles_position(pos: u64) -> noodles::core::Position {
-    noodles::core::Position::try_from((pos as usize).max(1))
-        .expect("position must be >= 1")
+    noodles::core::Position::try_from((pos as usize).max(1)).expect("position must be >= 1")
 }
 
 /// Reverse-complement a DNA sequence in place.
@@ -532,6 +601,15 @@ pub fn reverse_complement(seq: &mut [u8]) {
 mod tests {
     use super::*;
 
+    fn partial(pos: u64, len: usize, tlen: i32) -> PartialRead {
+        PartialRead {
+            seq: vec![b'A'; len],
+            qual: vec![b'!' + 30; len],
+            pos,
+            tlen,
+        }
+    }
+
     #[test]
     fn test_reverse_complement() {
         let mut seq = b"ACGTNN".to_vec();
@@ -551,5 +629,45 @@ mod tests {
         assert!(is_cram("sample.cram"));
         assert!(!is_cram("sample.bam"));
         assert!(!is_cram("sample.cram.bai"));
+    }
+
+    #[test]
+    fn test_compute_ref_end_uses_positive_tlen() {
+        let r1 = partial(100, 150, 400);
+        let r2 = partial(320, 150, -400);
+        let ref_end = compute_ref_end(&r1, &r2, 100);
+        assert_eq!(ref_end, 500);
+    }
+
+    #[test]
+    fn test_compute_ref_end_uses_negative_tlen_abs() {
+        let r1 = partial(300, 150, -420);
+        let r2 = partial(100, 150, 420);
+        let ref_end = compute_ref_end(&r1, &r2, 100);
+        assert_eq!(ref_end, 520);
+    }
+
+    #[test]
+    fn test_compute_ref_end_falls_back_when_tlen_zero() {
+        let r1 = partial(100, 150, 0);
+        let r2 = partial(260, 150, 0);
+        let ref_end = compute_ref_end(&r1, &r2, 100);
+        assert_eq!(ref_end, 410); // max(100+150, 260+150)
+    }
+
+    #[test]
+    fn test_build_pair_from_partials_sets_expected_fields() {
+        let r1 = partial(300, 150, -420);
+        let mut r2 = partial(100, 150, 420);
+        r2.seq.fill(b'T');
+        let pair = build_pair_from_partials("read1".to_string(), r1, r2, "chr1");
+
+        assert_eq!(pair.name, "read1");
+        assert_eq!(pair.chrom, "chr1");
+        assert_eq!(pair.ref_start, 100);
+        assert_eq!(pair.ref_end, 520);
+        assert_eq!(pair.insert_size, 420);
+        assert_eq!(pair.seq1.len(), 150);
+        assert_eq!(pair.seq2.len(), 150);
     }
 }

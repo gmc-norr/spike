@@ -14,7 +14,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
                   v
     +-----------------------------+
     |  1. Extract read pairs      |  Real reads from the event region
-    |  2. Learn quality           |  Per-cycle Q score distributions from real data
+    |  2. Learn quality           |  Markov chain Q score model from real data
     |  3. Build haplotype         |  Linear variant sequence from ordered segments
     |  4. Suppress reads          |  Remove reads at VAF rate within SV boundaries
     |  5. Tile synthetic          |  New reads across haplotype with learned Q profile
@@ -27,7 +27,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Variant haplotype model**: The variant allele is represented as an ordered list of segments, each from a reference region (possibly reverse-complemented) or novel sequence. Reads tiled uniformly across this linear sequence are automatically chimeric when they span segment boundaries — no per-SV-type breakpoint logic needed.
 
-**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns per-cycle, base-conditioned quality score distributions from the donor reads and generates independent synthetic reads with correlated sequencing errors.
+**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
 
 **LOH and allelic imbalance**: For heterozygous deletions, het SNPs within the deleted region become homozygous (only the surviving haplotype allele remains). For duplications, het SNPs shift from ~50/50 to ~33/67 allele balance. Het SNP positions are found via pileup (default) or from a pre-called gVCF.
 
@@ -160,7 +160,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 ### SNPs and small indels
 
-Small variants use the `snp:` prefix (applies to SNPs, MNVs, small deletions, and small insertions). Positions are 1-based:
+Small variants use the `snp:` prefix (applies to SNPs, MNVs, small deletions, and small insertions). Positions are 1-based in the CLI/API syntax (converted to 0-based internally):
 
 ```bash
 # Single nucleotide variant
@@ -203,6 +203,8 @@ AF specifiers:
 - `af=het` — sample from Beta(40,40), centered at ~0.5 (simulates germline heterozygous)
 - `af=hom` — fixed at 1.0 (homozygous)
 - *(omitted)* — uses the global `--allele-fraction` (default: 0.5)
+
+By default, overlapping events on the same chromosome are rejected to keep effects independent. Use `--allow-overlap` to override (overlaps are then simulated independently and merged, which is approximate in overlap zones).
 
 ### VCF input
 
@@ -371,6 +373,8 @@ Options:
       --align                      Run alignment after FASTQ generation
       --indel-error-rate <RATE>    Indel error fraction [default: 0.0]
       --gvcf <VCF>                 gVCF/VCF with het SNP calls for LOH simulation
+      --allow-overlap              Allow overlapping events (default: reject overlaps)
+      --dup-model <MODEL>          Duplication model: "full" (default) or "junction"
 ```
 
 ## Architecture
@@ -418,9 +422,16 @@ For heterozygous duplications, the extra copy's reads carry one haplotype's alle
 
 ### Quality profile
 
-The quality model is learned per-cycle and per-base from the donor reads. Two levels of conditioning:
-1. **Base-conditioned**: `(read_number, cycle, sequenced_base)` — captures base-specific effects like the Illumina GG quality dip
-2. **Cycle-only fallback**: `(read_number, cycle)` — used when a base-conditioned bin has too few observations
+The quality model uses a first-order Markov chain learned from the donor reads: each position's quality score depends on the previous position's quality, capturing the autocorrelation seen in real Illumina data (runs of low quality tend to cluster together).
+
+Quality scores are sampled using a 4-level fallback hierarchy, from most specific to least:
+
+1. **Markov + base**: `P(Q_i | cycle, base, prev_q_bin)` — full model with base-specific effects (e.g., Illumina GG quality dip) and inter-position correlation
+2. **Markov + cycle**: `P(Q_i | cycle, prev_q_bin)` — drops base conditioning when base-specific bins are sparse
+3. **Base-only**: `P(Q_i | cycle, base)` — no Markov (used at cycle 0, or when Markov bins have too few observations)
+4. **Cycle-only**: `P(Q_i | cycle)` — final fallback
+
+The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Each level requires at least 30 observations before it is used; otherwise sampling falls through to the next level.
 
 Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`.
 

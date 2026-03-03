@@ -9,7 +9,7 @@ pub enum SimEvent {
         del_start: u64, // 0-based, inclusive
         del_end: u64,   // 0-based, exclusive (half-open)
         gene: String,
-        exons: Vec<String>, // affected exon names for annotation
+        exons: Vec<String>,           // affected exon names for annotation
         allele_fraction: Option<f64>, // per-event AF override (None = use global)
     },
     /// Gene fusion: two breakpoints on potentially different chromosomes joined.
@@ -21,7 +21,7 @@ pub enum SimEvent {
         bp_b: u64, // 0-based breakpoint in gene B (first base included on right side)
         gene_b: String,
         allele_fraction: Option<f64>, // per-event AF override (None = use global)
-        inverted: bool, // true for reverse-complement join at gene B
+        inverted: bool,               // true for reverse-complement join at gene B
     },
     /// Tandem duplication: region is duplicated in place.
     Duplication {
@@ -42,18 +42,18 @@ pub enum SimEvent {
     /// Insertion: novel sequence inserted at a position.
     Insertion {
         chrom: String,
-        pos: u64,                  // 0-based insertion point
-        ins_seq: Option<Vec<u8>>,  // explicit inserted sequence (None = generate random)
-        ins_len: u64,              // length of insertion
+        pos: u64,                 // 0-based insertion point
+        ins_seq: Option<Vec<u8>>, // explicit inserted sequence (None = generate random)
+        ins_len: u64,             // length of insertion
         gene: String,
         allele_fraction: Option<f64>,
     },
     /// Small variant: SNP, MNV, or small indel represented by explicit REF/ALT alleles.
     SmallVariant {
         chrom: String,
-        pos: u64,              // 0-based start position
-        ref_allele: Vec<u8>,   // reference allele bases (uppercase)
-        alt_allele: Vec<u8>,   // alternate allele bases (uppercase)
+        pos: u64,            // 0-based start position
+        ref_allele: Vec<u8>, // reference allele bases (uppercase)
+        alt_allele: Vec<u8>, // alternate allele bases (uppercase)
         gene: String,
         allele_fraction: Option<f64>,
     },
@@ -63,12 +63,24 @@ impl SimEvent {
     /// Get the per-event allele fraction override, if any.
     pub fn allele_fraction(&self) -> Option<f64> {
         match self {
-            SimEvent::Deletion { allele_fraction, .. }
-            | SimEvent::Fusion { allele_fraction, .. }
-            | SimEvent::Duplication { allele_fraction, .. }
-            | SimEvent::Inversion { allele_fraction, .. }
-            | SimEvent::Insertion { allele_fraction, .. }
-            | SimEvent::SmallVariant { allele_fraction, .. } => *allele_fraction,
+            SimEvent::Deletion {
+                allele_fraction, ..
+            }
+            | SimEvent::Fusion {
+                allele_fraction, ..
+            }
+            | SimEvent::Duplication {
+                allele_fraction, ..
+            }
+            | SimEvent::Inversion {
+                allele_fraction, ..
+            }
+            | SimEvent::Insertion {
+                allele_fraction, ..
+            }
+            | SimEvent::SmallVariant {
+                allele_fraction, ..
+            } => *allele_fraction,
         }
     }
 
@@ -108,12 +120,24 @@ impl SimEvent {
     /// Set the per-event allele fraction.
     pub fn set_allele_fraction(&mut self, af: Option<f64>) {
         match self {
-            SimEvent::Deletion { allele_fraction, .. }
-            | SimEvent::Fusion { allele_fraction, .. }
-            | SimEvent::Duplication { allele_fraction, .. }
-            | SimEvent::Inversion { allele_fraction, .. }
-            | SimEvent::Insertion { allele_fraction, .. }
-            | SimEvent::SmallVariant { allele_fraction, .. } => *allele_fraction = af,
+            SimEvent::Deletion {
+                allele_fraction, ..
+            }
+            | SimEvent::Fusion {
+                allele_fraction, ..
+            }
+            | SimEvent::Duplication {
+                allele_fraction, ..
+            }
+            | SimEvent::Inversion {
+                allele_fraction, ..
+            }
+            | SimEvent::Insertion {
+                allele_fraction, ..
+            }
+            | SimEvent::SmallVariant {
+                allele_fraction, ..
+            } => *allele_fraction = af,
         }
     }
 }
@@ -132,6 +156,8 @@ pub struct SimConfig {
     /// Indel error rate: fraction of sequencing errors that are indels (vs substitutions).
     /// 0.0 = substitution-only errors (default), ~0.05 = typical Illumina.
     pub indel_error_rate: f64,
+    /// Duplication model: "full" (full tandem haplotype) or "junction" (legacy junction-only).
+    pub dup_model: String,
 }
 
 /// A read pair extracted from BAM, stored in FASTQ-ready form.

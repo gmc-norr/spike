@@ -66,13 +66,27 @@ fn identify_haplotype_reads(
         let snps = load_het_snps_from_gvcf(gvcf, chrom, region_start, region_end)?;
         if snps.is_empty() {
             log::info!("{}: no het SNPs from gVCF, trying pileup fallback", label);
-            pileup_and_collect(alignment_path, chrom, region_start, region_end, min_mapq, ref_path)?
+            pileup_and_collect(
+                alignment_path,
+                chrom,
+                region_start,
+                region_end,
+                min_mapq,
+                ref_path,
+            )?
         } else {
             // gVCF gave us het SNPs; we still need one BAM/CRAM pass to classify reads.
             (snps, None)
         }
     } else {
-        pileup_and_collect(alignment_path, chrom, region_start, region_end, min_mapq, ref_path)?
+        pileup_and_collect(
+            alignment_path,
+            chrom,
+            region_start,
+            region_end,
+            min_mapq,
+            ref_path,
+        )?
     };
 
     if het_snps.is_empty() {
@@ -147,7 +161,15 @@ pub fn identify_deleted_haplotype_reads(
     rng: &mut StdRng,
 ) -> Result<(HashSet<String>, HashSet<String>)> {
     let (target_set, classified_set, _variants) = identify_haplotype_reads(
-        alignment_path, chrom, del_start, del_end, min_mapq, gvcf_path, ref_path, "LOH-DEL", rng,
+        alignment_path,
+        chrom,
+        del_start,
+        del_end,
+        min_mapq,
+        gvcf_path,
+        ref_path,
+        "LOH-DEL",
+        rng,
     )?;
     Ok((target_set, classified_set))
 }
@@ -174,7 +196,15 @@ pub fn identify_duplicated_haplotype_reads(
     rng: &mut StdRng,
 ) -> Result<HaplotypeResult> {
     identify_haplotype_reads(
-        alignment_path, chrom, dup_start, dup_end, min_mapq, gvcf_path, ref_path, "AI-DUP", rng,
+        alignment_path,
+        chrom,
+        dup_start,
+        dup_end,
+        min_mapq,
+        gvcf_path,
+        ref_path,
+        "AI-DUP",
+        rng,
     )
 }
 
@@ -285,10 +315,16 @@ fn pileup_and_collect(
     ref_path: Option<&str>,
 ) -> Result<PileupResult> {
     if crate::extract::is_cram(alignment_path) {
-        let rp = ref_path.ok_or_else(|| {
-            anyhow::anyhow!("CRAM input requires a reference FASTA")
-        })?;
-        pileup_and_collect_cram(alignment_path, chrom, region_start, region_end, min_mapq, rp)
+        let rp =
+            ref_path.ok_or_else(|| anyhow::anyhow!("CRAM input requires a reference FASTA"))?;
+        pileup_and_collect_cram(
+            alignment_path,
+            chrom,
+            region_start,
+            region_end,
+            min_mapq,
+            rp,
+        )
     } else {
         pileup_and_collect_bam(alignment_path, chrom, region_start, region_end, min_mapq)
     }
@@ -447,7 +483,9 @@ fn pileup_and_collect_cram(
 #[allow(clippy::too_many_arguments)]
 fn walk_cigar_pileup(
     seq: &[u8],
-    cigar_ops: Box<dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_>,
+    cigar_ops: Box<
+        dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_,
+    >,
     align_start: u64,
     region_start: u64,
     region_end: u64,
@@ -590,7 +628,8 @@ fn classify_from_collected(
         }
     }
 
-    let other = classified_set.len()
+    let other = classified_set
+        .len()
         .saturating_sub(target_set.len())
         .saturating_sub(n_ambiguous as usize);
     log::info!(
@@ -626,15 +665,27 @@ fn classify_reads_by_haplotype(
     label: &str,
 ) -> Result<(HashSet<String>, HashSet<String>)> {
     if crate::extract::is_cram(alignment_path) {
-        let rp = ref_path.ok_or_else(|| {
-            anyhow::anyhow!("CRAM input requires a reference FASTA")
-        })?;
+        let rp =
+            ref_path.ok_or_else(|| anyhow::anyhow!("CRAM input requires a reference FASTA"))?;
         classify_reads_by_haplotype_cram(
-            alignment_path, chrom, region_start, region_end, min_mapq, target_allele, rp, label,
+            alignment_path,
+            chrom,
+            region_start,
+            region_end,
+            min_mapq,
+            target_allele,
+            rp,
+            label,
         )
     } else {
         classify_reads_by_haplotype_bam(
-            alignment_path, chrom, region_start, region_end, min_mapq, target_allele, label,
+            alignment_path,
+            chrom,
+            region_start,
+            region_end,
+            min_mapq,
+            target_allele,
+            label,
         )
     }
 }
@@ -654,7 +705,12 @@ fn classify_reads_by_haplotype_bam(
 
     let mut reader = noodles::bam::io::indexed_reader::Builder::default()
         .build_from_path(bam_path)
-        .with_context(|| format!("failed to open BAM for haplotype classification: {}", bam_path))?;
+        .with_context(|| {
+            format!(
+                "failed to open BAM for haplotype classification: {}",
+                bam_path
+            )
+        })?;
     let header = reader.read_header()?;
 
     let start_pos = crate::extract::safe_noodles_position(region_start + 1);
@@ -697,7 +753,13 @@ fn classify_reads_by_haplotype_bam(
         let cigar = record.cigar();
 
         let scores = read_scores.entry(name).or_insert((0, 0));
-        walk_cigar_classify(&seq, Box::new(cigar.iter()), align_start, target_allele, scores);
+        walk_cigar_classify(
+            &seq,
+            Box::new(cigar.iter()),
+            align_start,
+            target_allele,
+            scores,
+        );
     }
 
     Ok(build_classification_sets(read_scores, label))
@@ -722,7 +784,12 @@ fn classify_reads_by_haplotype_cram(
     let mut reader = noodles::cram::io::indexed_reader::Builder::default()
         .set_reference_sequence_repository(repository)
         .build_from_path(cram_path)
-        .with_context(|| format!("failed to open CRAM for haplotype classification: {}", cram_path))?;
+        .with_context(|| {
+            format!(
+                "failed to open CRAM for haplotype classification: {}",
+                cram_path
+            )
+        })?;
     let header = reader.read_header()?;
 
     let start_pos = crate::extract::safe_noodles_position(region_start + 1);
@@ -769,7 +836,13 @@ fn classify_reads_by_haplotype_cram(
         let cigar = buf.cigar();
 
         let scores = read_scores.entry(name).or_insert((0, 0));
-        walk_cigar_classify(&seq, CigarTrait::iter(&cigar), align_start, target_allele, scores);
+        walk_cigar_classify(
+            &seq,
+            CigarTrait::iter(&cigar),
+            align_start,
+            target_allele,
+            scores,
+        );
     }
 
     Ok(build_classification_sets(read_scores, label))
@@ -779,7 +852,9 @@ fn classify_reads_by_haplotype_cram(
 /// Shared between BAM and CRAM classification paths.
 fn walk_cigar_classify(
     seq: &[u8],
-    cigar_ops: Box<dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_>,
+    cigar_ops: Box<
+        dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_,
+    >,
     align_start: u64,
     target_allele: &HashMap<u64, u8>,
     scores: &mut (u32, u32),
@@ -846,7 +921,8 @@ fn build_classification_sets(
         }
     }
 
-    let other = classified_set.len()
+    let other = classified_set
+        .len()
         .saturating_sub(target_set.len())
         .saturating_sub(n_ambiguous as usize);
     log::info!(

@@ -30,10 +30,7 @@ pub fn write_truth_vcf(
     writeln!(f, "##ALT=<ID=DUP,Description=\"Tandem duplication\">")?;
     writeln!(f, "##ALT=<ID=INV,Description=\"Inversion\">")?;
     writeln!(f, "##ALT=<ID=INS,Description=\"Insertion\">")?;
-    writeln!(
-        f,
-        "##ALT=<ID=BND,Description=\"Translocation breakend\">"
-    )?;
+    writeln!(f, "##ALT=<ID=BND,Description=\"Translocation breakend\">")?;
     writeln!(
         f,
         "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">"
@@ -62,10 +59,7 @@ pub fn write_truth_vcf(
         f,
         "##INFO=<ID=MATEID,Number=1,Type=String,Description=\"ID of mate breakend\">"
     )?;
-    writeln!(
-        f,
-        "##FILTER=<ID=PASS,Description=\"All filters passed\">"
-    )?;
+    writeln!(f, "##FILTER=<ID=PASS,Description=\"All filters passed\">")?;
     writeln!(
         f,
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
@@ -221,7 +215,11 @@ pub fn write_truth_vcf(
         }
     }
 
-    log::info!("Wrote truth VCF with {} events to {}", events.len(), output_path);
+    log::info!(
+        "Wrote truth VCF with {} events to {}",
+        events.len(),
+        output_path
+    );
     Ok(())
 }
 
@@ -259,7 +257,16 @@ fn chrono_date() -> String {
     let month_days: [i64; 12] = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month = 0usize;
     for (i, &md) in month_days.iter().enumerate() {

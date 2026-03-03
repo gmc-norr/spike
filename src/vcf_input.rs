@@ -14,8 +14,8 @@ use crate::types::SimEvent;
 /// Supports both plain `.vcf` and bgzip-compressed `.vcf.gz` files.
 /// BND records are paired by MATEID to produce single Fusion events.
 pub fn load_events_from_vcf(path: &str) -> Result<Vec<SimEvent>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open VCF: {}", path))?;
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to open VCF: {}", path))?;
 
     let records = if path.ends_with(".gz") {
         let decoder = noodles::bgzf::Reader::new(file);
@@ -36,7 +36,7 @@ pub fn load_events_from_vcf(path: &str) -> Result<Vec<SimEvent>> {
 #[derive(Debug)]
 struct SvRecord {
     chrom: String,
-    pos: u64,    // 0-based SV start (DEL/DUP/INV/INS) or 0-based breakpoint (BND)
+    pos: u64, // 0-based SV start (DEL/DUP/INV/INS) or 0-based breakpoint (BND)
     id: String,
     ref_allele: String,
     alt: String,
@@ -102,7 +102,7 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
         let pos = match sv_type {
             SvTypeTag::Bnd => raw_pos - 1, // BND: 1-based breakpoint → 0-based
             SvTypeTag::SmallVar => raw_pos - 1, // Small variant: 1-based → 0-based
-            _ => raw_pos,                   // Others: 1-based preceding base == 0-based start
+            _ => raw_pos,                  // Others: 1-based preceding base == 0-based start
         };
 
         records.push(SvRecord {
@@ -129,8 +129,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
             SvTypeTag::Del => {
                 let end = parse_info_u64(&record.info, "END")
                     .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN")
-                            .map(|v| record.pos + v.unsigned_abs())
+                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
                     })
                     .unwrap_or(record.pos + 1);
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -150,8 +149,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
             SvTypeTag::Dup => {
                 let end = parse_info_u64(&record.info, "END")
                     .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN")
-                            .map(|v| record.pos + v.unsigned_abs())
+                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
                     })
                     .unwrap_or(record.pos + 1);
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -170,8 +168,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
             SvTypeTag::Inv => {
                 let end = parse_info_u64(&record.info, "END")
                     .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN")
-                            .map(|v| record.pos + v.unsigned_abs())
+                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
                     })
                     .unwrap_or(record.pos + 1);
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -309,10 +306,12 @@ fn parse_bnd_alt(alt: &str) -> Result<(String, u64, bool)> {
 
     let inner = &alt[open_idx + 1..close_idx];
 
-    let (chrom, pos_str) = inner.split_once(':')
+    let (chrom, pos_str) = inner
+        .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("no chr:pos found in BND ALT '{}'", alt))?;
 
-    let pos: u64 = pos_str.parse()
+    let pos: u64 = pos_str
+        .parse()
         .with_context(|| format!("invalid position in BND ALT '{}': '{}'", alt, pos_str))?;
 
     // Detect orientation from bracket characters:
@@ -343,7 +342,10 @@ fn extract_af(info: &str) -> Option<f64> {
 /// Extract a key=value from a VCF INFO field.
 fn parse_info_field<'a>(info: &'a str, key: &str) -> Option<&'a str> {
     for field in info.split(';') {
-        if let Some(value) = field.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+        if let Some(value) = field
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
             return Some(value);
         }
     }
@@ -408,7 +410,10 @@ mod tests {
 
     #[test]
     fn test_extract_af_sim_vaf() {
-        assert_eq!(extract_af("SVTYPE=BND;SIM_VAF=0.050;GENE_A=BCR"), Some(0.05));
+        assert_eq!(
+            extract_af("SVTYPE=BND;SIM_VAF=0.050;GENE_A=BCR"),
+            Some(0.05)
+        );
     }
 
     #[test]
@@ -423,8 +428,14 @@ mod tests {
 
     #[test]
     fn test_parse_info_field() {
-        assert_eq!(parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "END"), Some("100"));
-        assert_eq!(parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "SVLEN"), Some("-500"));
+        assert_eq!(
+            parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "END"),
+            Some("100")
+        );
+        assert_eq!(
+            parse_info_field("SVTYPE=DEL;END=100;SVLEN=-500", "SVLEN"),
+            Some("-500")
+        );
         assert_eq!(parse_info_field("SVTYPE=DEL;END=100", "GENE"), None);
     }
 
@@ -436,7 +447,13 @@ mod tests {
         let events = records_to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            SimEvent::SmallVariant { chrom, pos, ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                chrom,
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
                 assert_eq!(chrom, "chr1");
                 assert_eq!(*pos, 99);
                 assert_eq!(ref_allele, b"A");
@@ -454,7 +471,12 @@ mod tests {
         let events = records_to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            SimEvent::SmallVariant { pos, ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
                 assert_eq!(*pos, 99);
                 assert_eq!(ref_allele, b"ACG");
                 assert_eq!(alt_allele, b"A");
@@ -471,7 +493,12 @@ mod tests {
         let events = records_to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            SimEvent::SmallVariant { pos, ref_allele, alt_allele, .. } => {
+            SimEvent::SmallVariant {
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
                 assert_eq!(*pos, 99);
                 assert_eq!(ref_allele, b"A");
                 assert_eq!(alt_allele, b"ACGT");
@@ -486,7 +513,9 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         match &events[0] {
-            SimEvent::SmallVariant { allele_fraction, .. } => {
+            SimEvent::SmallVariant {
+                allele_fraction, ..
+            } => {
                 assert_eq!(*allele_fraction, Some(0.25));
             }
             _ => panic!("expected SmallVariant"),
@@ -521,7 +550,9 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         match &events[0] {
-            SimEvent::Deletion { del_start, del_end, .. } => {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
                 assert_eq!(*del_start, 100);
                 assert_eq!(*del_end, 200);
             }
@@ -533,7 +564,9 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         match &events[0] {
-            SimEvent::Duplication { dup_start, dup_end, .. } => {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => {
                 assert_eq!(*dup_start, 500);
                 assert_eq!(*dup_end, 1000);
             }
@@ -545,9 +578,14 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         match &events[0] {
-            SimEvent::Fusion { bp_a, bp_b, inverted, .. } => {
-                assert_eq!(*bp_a, 99);   // POS 100 → 0-based 99
-                assert_eq!(*bp_b, 199);  // ALT pos 200 → 0-based 199
+            SimEvent::Fusion {
+                bp_a,
+                bp_b,
+                inverted,
+                ..
+            } => {
+                assert_eq!(*bp_a, 99); // POS 100 → 0-based 99
+                assert_eq!(*bp_b, 199); // ALT pos 200 → 0-based 199
                 assert!(!inverted, "N[chr:pos[ should be forward");
             }
             _ => panic!("expected Fusion"),

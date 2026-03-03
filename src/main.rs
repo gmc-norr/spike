@@ -57,10 +57,10 @@ struct Args {
     ///   --event "inv:chr20:30000000-30005000"
     ///   --event "ins:chr20:30000000:500"                (random insertion sequence)
     ///   --event "ins:chr20:30000000:ACGTACGT"           (explicit insertion sequence)
-    ///   --event "snp:chr20:30000000:A:T"                (SNP/small variant)
-    ///   --event "snp:chr20:30000000:A>T"                (alternate syntax)
-    ///   --event "snp:chr20:30000000:ACG:A"              (small deletion)
-    ///   --event "snp:chr20:30000000:A:ACGT"             (small insertion)
+    ///   --event "snp:chr20:30000000:A:T"                (SNP/small variant, POS is 1-based)
+    ///   --event "snp:chr20:30000000:A>T"                (alternate syntax, POS is 1-based)
+    ///   --event "snp:chr20:30000000:ACG:A"              (small deletion, POS is 1-based)
+    ///   --event "snp:chr20:30000000:A:ACGT"             (small insertion, POS is 1-based)
     /// Per-event AF (appended with ;):
     ///   --event "del:GENE:exon4-exon8;af=0.15"
     ///   --event "fusion:GENEA:exon14:GENEB:exon2;af=het"
@@ -135,6 +135,20 @@ struct Args {
     /// (requires bcftools in PATH for .vcf.gz).
     #[arg(long)]
     gvcf: Option<String>,
+
+    /// Allow overlapping events on the same chromosome.
+    ///
+    /// By default, overlapping events are rejected to keep event effects
+    /// independent and truth interpretation unambiguous.
+    #[arg(long)]
+    allow_overlap: bool,
+
+    /// Duplication model: "full" (default) builds a full tandem haplotype
+    /// with duplicated region appearing twice, producing both junction reads
+    /// and correct depth increase from a single tiling pass. "junction" uses
+    /// the legacy junction-only haplotype with separate depth copies.
+    #[arg(long, default_value = "full")]
+    dup_model: String,
 }
 
 /// Parsed extraction region from --region flag.
@@ -253,8 +267,17 @@ fn main() -> Result<()> {
         vcf_events.len(),
     );
 
+    // Validate --dup-model.
+    if args.dup_model != "full" && args.dup_model != "junction" {
+        bail!(
+            "invalid --dup-model '{}', expected 'full' or 'junction'",
+            args.dup_model,
+        );
+    }
+
     // Compute BAM stats for read length.
-    let bam_stats = crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
+    let bam_stats =
+        crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
     let read_length = bam_stats.read_length.round() as usize;
 
     let config = SimConfig {
@@ -266,6 +289,7 @@ fn main() -> Result<()> {
         min_mapq: args.min_mapq,
         gvcf_path: args.gvcf.clone(),
         indel_error_rate: args.indel_error_rate,
+        dup_model: args.dup_model.clone(),
     };
 
     // Parse --region if provided.
@@ -273,7 +297,9 @@ fn main() -> Result<()> {
         let r = parse_region(region_str)?;
         log::info!(
             "Extraction region: {}:{}-{} (0-based half-open)",
-            r.chrom, r.start, r.end,
+            r.chrom,
+            r.start,
+            r.end,
         );
         Some(r)
     } else {
@@ -322,11 +348,11 @@ fn main() -> Result<()> {
         .into_iter()
         .collect();
     let chrom_refs: Vec<&str> = chroms_needed.iter().map(|s| s.as_str()).collect();
-    let shared_ref =
-        crate::reference::SharedReference::load(&config.ref_path, &chrom_refs)?;
+    let shared_ref = crate::reference::SharedReference::load(&config.ref_path, &chrom_refs)?;
 
     // Validate event coordinates against reference chromosome lengths.
     validate_event_coordinates(&events, &shared_ref)?;
+    validate_event_overlaps(&events, args.allow_overlap)?;
 
     let mut all_output_pairs: Vec<ReadPair> = Vec::new();
 
@@ -341,23 +367,25 @@ fn main() -> Result<()> {
         log::info!("  Using VAF={:.3} for this event", vaf);
 
         // Extract reads and build pool.
-        let (pool, _extraction_chrom) = extract_pool_for_event(
-            event,
-            &config,
-            &extraction_region,
-        )?;
+        let (pool, _extraction_chrom) = extract_pool_for_event(event, &config, &extraction_region)?;
 
         // Build quality profile and synth generator.
         let quality_profile =
             synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
-        let mut synth_gen =
-            synth::SynthReadGenerator::new(quality_profile, &shared_ref, config.read_length, config.indel_error_rate);
+        let mut synth_gen = synth::SynthReadGenerator::new(
+            quality_profile,
+            &shared_ref,
+            config.read_length,
+            config.indel_error_rate,
+        );
 
         // Build variant haplotype.
-        let mut haplotype = build_haplotype(event, &shared_ref, hap_flank, &mut rng)?;
+        let mut haplotype =
+            build_haplotype(event, &shared_ref, hap_flank, &config.dup_model, &mut rng)?;
 
         // Simulate: suppress reads + tile synthetic reads across haplotype.
         let output = simulate::simulate_event(
+            i + 1,
             event,
             &pool,
             &mut haplotype,
@@ -403,7 +431,13 @@ fn main() -> Result<()> {
     )?;
 
     // Write alignment convenience script.
-    write_align_script(&args.output, &args.reference, args.threads, &args.aligner, &args.samtools)?;
+    write_align_script(
+        &args.output,
+        &args.reference,
+        args.threads,
+        &args.aligner,
+        &args.samtools,
+    )?;
 
     // Summary.
     log::info!("=== spike complete ===");
@@ -416,19 +450,152 @@ fn main() -> Result<()> {
     if args.align {
         run_alignment(&args.output, &args.reference, args.threads)?;
     } else {
-        log::info!(
-            "To align: bash {}/align.sh",
-            args.output,
-        );
+        log::info!("To align: bash {}/align.sh", args.output,);
     }
 
     Ok(())
 }
 
-/// Deduplicate read pairs by name, keeping the first occurrence.
+/// Deduplicate read pairs by name, keeping the last occurrence.
+///
+/// Keeping the last occurrence makes event-order behavior explicit when
+/// multiple simulated events touch the same original read name.
 fn dedup_by_name(pairs: &mut Vec<ReadPair>) {
-    let mut seen = std::collections::HashSet::new();
-    pairs.retain(|p| seen.insert(p.name.clone()));
+    let mut last_idx: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::with_capacity(pairs.len());
+    for (i, p) in pairs.iter().enumerate() {
+        last_idx.insert(p.name.clone(), i);
+    }
+    let mut out = Vec::with_capacity(last_idx.len());
+    for (i, p) in pairs.drain(..).enumerate() {
+        if last_idx.get(&p.name).copied() == Some(i) {
+            out.push(p);
+        }
+    }
+    *pairs = out;
+}
+
+/// Validate overlap relationships between single-region events.
+///
+/// Overlaps are rejected by default to keep multi-event simulations independent.
+/// When `allow_overlap` is true, overlaps are allowed but logged as warnings.
+fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<()> {
+    let mut overlaps: Vec<(usize, usize, String, u64, u64, u64, u64)> = Vec::new();
+
+    for i in 0..events.len() {
+        let regions_i = event_regions_for_overlap(&events[i]);
+        for j in (i + 1)..events.len() {
+            let regions_j = event_regions_for_overlap(&events[j]);
+            for (chrom_i, start_i, end_i) in &regions_i {
+                for (chrom_j, start_j, end_j) in &regions_j {
+                    if chrom_i != chrom_j {
+                        continue;
+                    }
+                    let has_overlap = start_i < end_j && start_j < end_i;
+                    if has_overlap {
+                        overlaps.push((
+                            i + 1,
+                            j + 1,
+                            chrom_i.to_string(),
+                            *start_i,
+                            *end_i,
+                            *start_j,
+                            *end_j,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if overlaps.is_empty() {
+        return Ok(());
+    }
+
+    if allow_overlap {
+        for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps {
+            log::warn!(
+                "Events {} and {} overlap on {} ({}-{} vs {}-{}). \
+                 Overlap composition is approximate.",
+                i,
+                j,
+                chrom,
+                start_i,
+                end_i,
+                start_j,
+                end_j,
+            );
+        }
+        return Ok(());
+    }
+
+    let mut msg = String::from(
+        "overlapping events detected (default is to reject overlaps).\n\
+         Use --allow-overlap to override.\n",
+    );
+    for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps.iter().take(10) {
+        msg.push_str(&format!(
+            "  - events {} and {} overlap on {} ({}-{} vs {}-{})\n",
+            i, j, chrom, start_i, end_i, start_j, end_j
+        ));
+    }
+    if overlaps.len() > 10 {
+        msg.push_str(&format!(
+            "  ... and {} more overlap(s)\n",
+            overlaps.len() - 10
+        ));
+    }
+
+    bail!("{}", msg.trim_end());
+}
+
+/// Return one or more non-empty regions used for overlap checks.
+///
+/// Coordinates are 0-based half-open. Point events use a 1bp window.
+fn event_regions_for_overlap(event: &SimEvent) -> Vec<(String, u64, u64)> {
+    match event {
+        SimEvent::Deletion {
+            chrom,
+            del_start,
+            del_end,
+            ..
+        } => vec![(chrom.clone(), *del_start, *del_end)],
+        SimEvent::Duplication {
+            chrom,
+            dup_start,
+            dup_end,
+            ..
+        } => vec![(chrom.clone(), *dup_start, *dup_end)],
+        SimEvent::Inversion {
+            chrom,
+            inv_start,
+            inv_end,
+            ..
+        } => vec![(chrom.clone(), *inv_start, *inv_end)],
+        SimEvent::Insertion { chrom, pos, .. } => {
+            vec![(chrom.clone(), *pos, pos.saturating_add(1))]
+        }
+        SimEvent::SmallVariant {
+            chrom,
+            pos,
+            ref_allele,
+            ..
+        } => vec![(
+            chrom.clone(),
+            *pos,
+            pos.saturating_add(ref_allele.len() as u64),
+        )],
+        SimEvent::Fusion {
+            chrom_a,
+            bp_a,
+            chrom_b,
+            bp_b,
+            ..
+        } => vec![
+            (chrom_a.clone(), *bp_a, bp_a.saturating_add(1)),
+            (chrom_b.clone(), *bp_b, bp_b.saturating_add(1)),
+        ],
+    }
 }
 
 /// Write a convenience shell script for alignment.
@@ -513,23 +680,49 @@ fn validate_event_coordinates(
 ) -> Result<()> {
     for event in events {
         match event {
-            SimEvent::Deletion { chrom, del_start, del_end, .. } => {
+            SimEvent::Deletion {
+                chrom,
+                del_start,
+                del_end,
+                ..
+            } => {
                 validate_range(reference, chrom, *del_start, *del_end, "DEL")?;
             }
-            SimEvent::Duplication { chrom, dup_start, dup_end, .. } => {
+            SimEvent::Duplication {
+                chrom,
+                dup_start,
+                dup_end,
+                ..
+            } => {
                 validate_range(reference, chrom, *dup_start, *dup_end, "DUP")?;
             }
-            SimEvent::Inversion { chrom, inv_start, inv_end, .. } => {
+            SimEvent::Inversion {
+                chrom,
+                inv_start,
+                inv_end,
+                ..
+            } => {
                 validate_range(reference, chrom, *inv_start, *inv_end, "INV")?;
             }
             SimEvent::Insertion { chrom, pos, .. } => {
                 validate_range(reference, chrom, *pos, *pos, "INS")?;
             }
-            SimEvent::SmallVariant { chrom, pos, ref_allele, .. } => {
+            SimEvent::SmallVariant {
+                chrom,
+                pos,
+                ref_allele,
+                ..
+            } => {
                 let end = *pos + ref_allele.len() as u64;
                 validate_range(reference, chrom, *pos, end, "SNP/indel")?;
             }
-            SimEvent::Fusion { chrom_a, bp_a, chrom_b, bp_b, .. } => {
+            SimEvent::Fusion {
+                chrom_a,
+                bp_a,
+                chrom_b,
+                bp_b,
+                ..
+            } => {
                 validate_range(reference, chrom_a, *bp_a, *bp_a, "Fusion-A")?;
                 validate_range(reference, chrom_b, *bp_b, *bp_b, "Fusion-B")?;
             }
@@ -549,13 +742,19 @@ fn validate_range(
         if start > chrom_len {
             bail!(
                 "{} event start on {} exceeds chromosome length ({} > {})",
-                label, chrom, start, chrom_len,
+                label,
+                chrom,
+                start,
+                chrom_len,
             );
         }
         if end > chrom_len {
             bail!(
                 "{} event on {} extends beyond chromosome length ({} > {})",
-                label, chrom, end, chrom_len,
+                label,
+                chrom,
+                end,
+                chrom_len,
             );
         }
     }
@@ -630,6 +829,7 @@ fn build_haplotype(
     event: &SimEvent,
     reference: &crate::reference::SharedReference,
     flank: u64,
+    dup_model: &str,
     rng: &mut StdRng,
 ) -> Result<VariantHaplotype> {
     match event {
@@ -644,7 +844,15 @@ fn build_haplotype(
             dup_start,
             dup_end,
             ..
-        } => VariantHaplotype::from_duplication(reference, chrom, *dup_start, *dup_end, flank),
+        } => {
+            if dup_model == "junction" {
+                VariantHaplotype::from_duplication(reference, chrom, *dup_start, *dup_end, flank)
+            } else {
+                VariantHaplotype::from_tandem_duplication(
+                    reference, chrom, *dup_start, *dup_end, flank,
+                )
+            }
+        }
         SimEvent::Inversion {
             chrom,
             inv_start,
@@ -663,9 +871,7 @@ fn build_haplotype(
                 s.clone()
             } else {
                 let bases = [b'A', b'C', b'G', b'T'];
-                (0..*ins_len)
-                    .map(|_| bases[rng.gen_range(0..4)])
-                    .collect()
+                (0..*ins_len).map(|_| bases[rng.gen_range(0..4)]).collect()
             };
             VariantHaplotype::from_insertion(reference, chrom, *pos, &seq, flank)
         }
@@ -676,13 +882,111 @@ fn build_haplotype(
             bp_b,
             inverted,
             ..
-        } => VariantHaplotype::from_fusion(reference, chrom_a, *bp_a, chrom_b, *bp_b, flank, *inverted),
+        } => VariantHaplotype::from_fusion(
+            reference, chrom_a, *bp_a, chrom_b, *bp_b, flank, *inverted,
+        ),
         SimEvent::SmallVariant {
             chrom,
             pos,
             ref_allele,
             alt_allele,
             ..
-        } => VariantHaplotype::from_small_variant(reference, chrom, *pos, ref_allele, alt_allele, flank),
+        } => VariantHaplotype::from_small_variant(
+            reference, chrom, *pos, ref_allele, alt_allele, flank,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn del(chrom: &str, start: u64, end: u64) -> SimEvent {
+        SimEvent::Deletion {
+            chrom: chrom.to_string(),
+            del_start: start,
+            del_end: end,
+            gene: "G".to_string(),
+            exons: Vec::new(),
+            allele_fraction: None,
+        }
+    }
+
+    fn ins(chrom: &str, pos: u64) -> SimEvent {
+        SimEvent::Insertion {
+            chrom: chrom.to_string(),
+            pos,
+            ins_seq: Some(vec![b'A']),
+            ins_len: 1,
+            gene: "G".to_string(),
+            allele_fraction: None,
+        }
+    }
+
+    fn fusion(chrom_a: &str, bp_a: u64, chrom_b: &str, bp_b: u64) -> SimEvent {
+        SimEvent::Fusion {
+            chrom_a: chrom_a.to_string(),
+            bp_a,
+            gene_a: "A".to_string(),
+            chrom_b: chrom_b.to_string(),
+            bp_b,
+            gene_b: "B".to_string(),
+            allele_fraction: None,
+            inverted: false,
+        }
+    }
+
+    fn pair(name: &str, ref_start: u64) -> ReadPair {
+        ReadPair {
+            name: name.to_string(),
+            seq1: vec![b'A'; 10],
+            qual1: vec![b'!' + 30; 10],
+            seq2: vec![b'T'; 10],
+            qual2: vec![b'!' + 30; 10],
+            ref_start,
+            ref_end: ref_start + 20,
+            insert_size: 20,
+            chrom: "chr1".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_overlap_policy_rejects_range_overlap() {
+        let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
+        assert!(validate_event_overlaps(&events, false).is_err());
+    }
+
+    #[test]
+    fn test_overlap_policy_allows_touching_boundaries() {
+        let events = vec![del("chr1", 100, 200), del("chr1", 200, 300)];
+        assert!(validate_event_overlaps(&events, false).is_ok());
+    }
+
+    #[test]
+    fn test_overlap_policy_rejects_point_event_overlaps() {
+        // Insertion point overlaps deletion interval.
+        let events = vec![del("chr1", 100, 200), ins("chr1", 150)];
+        assert!(validate_event_overlaps(&events, false).is_err());
+
+        // Fusion breakpoint overlaps deletion interval on chr1.
+        let events = vec![del("chr1", 140, 160), fusion("chr1", 150, "chr2", 500)];
+        assert!(validate_event_overlaps(&events, false).is_err());
+    }
+
+    #[test]
+    fn test_overlap_policy_allow_flag() {
+        let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
+        assert!(validate_event_overlaps(&events, true).is_ok());
+    }
+
+    #[test]
+    fn test_dedup_by_name_keeps_last_occurrence() {
+        let mut pairs = vec![pair("dup", 10), pair("keep", 50), pair("dup", 90)];
+        dedup_by_name(&mut pairs);
+
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].name, "keep");
+        assert_eq!(pairs[1].name, "dup");
+        assert_eq!(pairs[1].ref_start, 90);
     }
 }

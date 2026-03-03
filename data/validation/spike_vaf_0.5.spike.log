@@ -1,0 +1,342 @@
+[2026-03-02T13:05:54Z INFO  spike::vcf_input] Loaded 26 events from VCF: /home/parlar_ai/dev/spike/data/validation/truth/chr20_dels_in_benchmark.vcf.gz
+[2026-03-02T13:05:54Z INFO  spike] Parsed 0 --event spec(s) + 26 VCF event(s)
+[2026-03-02T13:05:54Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-03-02T13:05:55Z INFO  spike::bam_stats] Stats: insert_mean=450.0, insert_stddev=113.6, read_len=150, est_coverage=0.0x (108448 records sampled)
+[2026-03-02T13:05:55Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-03-02T13:05:55Z INFO  spike] Processing event 1/26: Deletion { chrom: "chr20", del_start: 1572827, del_end: 1605855, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:1562827-1615855 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 1864 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 1863 complete read pairs from chr20:1562827-1615855
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=455.2, stddev=106.9, n=1863
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 1863 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 1863 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.5 end=29.5, R2: start=29.8 end=29.3. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:1572827-1605855, falling back to random
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 196 synthetic reads across 4000bp haplotype (cov=44.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 1466 kept, 397 suppressed, 196 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 1: 1466 kept + 196 chimeric, 397 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 2/26: Deletion { chrom: "chr20", del_start: 1580345, del_end: 1613395, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:1570345-1623395 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 1934 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 1933 complete read pairs from chr20:1570345-1623395
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=458.3, stddev=106.3, n=1933
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 1933 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 1933 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.6 end=29.5, R2: start=29.9 end=29.4. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:1580345-1613395, falling back to random
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 100 synthetic reads across 4000bp haplotype (cov=22.8, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 1724 kept, 209 suppressed, 100 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 2: 1724 kept + 100 chimeric, 209 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 3/26: Deletion { chrom: "chr20", del_start: 2014855, del_end: 2016886, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:2004855-2026886 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2385 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2385 complete read pairs from chr20:2004855-2026886
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=451.6, stddev=107.0, n=2385
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2385 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2385 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.6 end=29.2, R2: start=29.9 end=29.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 6 het SNPs in chr20:2014855-2016886
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 160 fragments (82 target hap, 58 other, 20 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 229 synthetic reads across 4000bp haplotype (cov=51.7, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2058 kept, 327 suppressed, 229 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 3: 2058 kept + 229 chimeric, 327 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 4/26: Deletion { chrom: "chr20", del_start: 6045049, del_end: 6046966, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:6035049-6056966 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2388 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2387 complete read pairs from chr20:6035049-6056966
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=458.1, stddev=109.2, n=2387
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2387 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2387 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.6 end=29.2, R2: start=29.8 end=29.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:6045049-6046966
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 90 fragments (44 target hap, 45 other, 1 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 212 synthetic reads across 4000bp haplotype (cov=48.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2076 kept, 311 suppressed, 212 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 4: 2076 kept + 212 chimeric, 311 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 5/26: Deletion { chrom: "chr20", del_start: 7718403, del_end: 7722233, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:7708403-7732233 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2482 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2481 complete read pairs from chr20:7708403-7732233
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=448.9, stddev=104.4, n=2481
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2481 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2481 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.5 end=29.1, R2: start=29.8 end=29.3. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 9 het SNPs in chr20:7718403-7722233
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 157 fragments (80 target hap, 72 other, 5 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 190 synthetic reads across 4000bp haplotype (cov=42.7, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2069 kept, 412 suppressed, 190 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 5: 2069 kept + 190 chimeric, 412 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 6/26: Deletion { chrom: "chr20", del_start: 16098404, del_end: 16104724, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:16088404-16114724 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2653 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2653 complete read pairs from chr20:16088404-16114724
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=456.1, stddev=107.5, n=2653
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2653 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2653 pairs, 150 cycles. R1 mean Q: start=29.9 mid=29.6 end=29.4, R2: start=29.8 end=29.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 7 het SNPs in chr20:16098404-16104724
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 151 fragments (80 target hap, 62 other, 9 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 189 synthetic reads across 4000bp haplotype (cov=43.1, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2147 kept, 506 suppressed, 189 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 6: 2147 kept + 189 chimeric, 506 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 7/26: Deletion { chrom: "chr20", del_start: 32723063, del_end: 32724971, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:32713063-32734971 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2226 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2223 complete read pairs from chr20:32713063-32734971
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=448.8, stddev=109.4, n=2223
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2223 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2223 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.0 end=28.5, R2: start=29.8 end=28.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:32723063-32724971
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 12 fragments (10 target hap, 2 other, 0 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 114 synthetic reads across 4000bp haplotype (cov=25.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2017 kept, 206 suppressed, 114 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 7: 2017 kept + 114 chimeric, 206 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 8/26: Deletion { chrom: "chr20", del_start: 32739555, del_end: 32740227, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:32729555-32750227 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2264 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2260 complete read pairs from chr20:32729555-32750227
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=453.3, stddev=105.3, n=2260
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2260 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2260 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.1 end=28.5, R2: start=29.8 end=28.3. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:32739555-32740227, falling back to random
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 187 synthetic reads across 4000bp haplotype (cov=42.4, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2013 kept, 247 suppressed, 187 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 8: 2013 kept + 187 chimeric, 247 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 9/26: Deletion { chrom: "chr20", del_start: 32937680, del_end: 32941583, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:32927680-32951583 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2543 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2539 complete read pairs from chr20:32927680-32951583
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=452.4, stddev=108.4, n=2539
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2539 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2539 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.3 end=28.9, R2: start=29.8 end=28.9. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 6 het SNPs in chr20:32937680-32941583
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 122 fragments (55 target hap, 41 other, 26 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 202 synthetic reads across 4000bp haplotype (cov=45.8, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2148 kept, 391 suppressed, 202 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 9: 2148 kept + 202 chimeric, 391 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 10/26: Deletion { chrom: "chr20", del_start: 35128254, del_end: 35129001, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:35118254-35139001 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2288 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2288 complete read pairs from chr20:35118254-35139001
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=456.6, stddev=104.3, n=2288
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2288 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2288 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.5 end=29.2, R2: start=29.8 end=29.1. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:35128254-35129001
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 67 fragments (34 target hap, 33 other, 0 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 203 synthetic reads across 4000bp haplotype (cov=46.4, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2027 kept, 261 suppressed, 203 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 10: 2027 kept + 203 chimeric, 261 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 11/26: Deletion { chrom: "chr20", del_start: 41277677, del_end: 41278858, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:41267677-41288858 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2216 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2216 complete read pairs from chr20:41267677-41288858
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=451.6, stddev=105.5, n=2216
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2216 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2216 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.5 end=29.2, R2: start=29.8 end=29.1. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:41277677-41278858
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 23 fragments (6 target hap, 13 other, 4 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 134 synthetic reads across 4000bp haplotype (cov=30.3, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2020 kept, 196 suppressed, 134 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 11: 2020 kept + 134 chimeric, 196 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 12/26: Deletion { chrom: "chr20", del_start: 45575422, del_end: 45578660, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:45565422-45588660 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 2568 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 2568 complete read pairs from chr20:45565422-45588660
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=453.3, stddev=110.0, n=2568
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 2568 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 2568 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.5 end=29.2, R2: start=29.8 end=29.1. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 10 het SNPs in chr20:45575422-45578660
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 221 fragments (104 target hap, 108 other, 9 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 240 synthetic reads across 4000bp haplotype (cov=54.4, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 2155 kept, 413 suppressed, 240 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 12: 2155 kept + 240 chimeric, 413 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 13/26: Deletion { chrom: "chr20", del_start: 48505243, del_end: 48505830, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:48495243-48515830 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 1236 read1 records
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracted 1225 complete read pairs from chr20:48495243-48515830
+[2026-03-02T13:05:55Z INFO  spike::stats] Fragment distribution: mean=439.4, stddev=135.9, n=1225
+[2026-03-02T13:05:55Z INFO  spike::extract] Built read pool: 1225 pairs
+[2026-03-02T13:05:55Z INFO  spike::synth] Quality profile: 1225 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.8 end=27.8, R2: start=29.8 end=27.3. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: found 10 het SNPs in chr20:48505243-48505830
+[2026-03-02T13:05:55Z INFO  spike::loh] LOH-DEL: classified 33 fragments (18 target hap, 15 other, 0 ambiguous ties)
+[2026-03-02T13:05:55Z INFO  spike::simulate] Tiling 37 synthetic reads across 4000bp haplotype (cov=8.1, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:55Z INFO  spike::simulate] simulate_event: 1142 kept, 83 suppressed, 37 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:55Z INFO  spike] Event 13: 1142 kept + 37 chimeric, 83 suppressed
+[2026-03-02T13:05:55Z INFO  spike] Processing event 14/26: Deletion { chrom: "chr20", del_start: 48506452, del_end: 48508514, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:55Z INFO  spike::extract] Extracting read pairs from chr20:48496452-48518514 (MAPQ >= 20)
+[2026-03-02T13:05:55Z INFO  spike::extract] Pass 1: collected 1512 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1489 complete read pairs from chr20:48496452-48518514
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=440.0, stddev=140.0, n=1489
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1489 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1489 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.8 end=27.7, R2: start=29.8 end=27.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 21 het SNPs in chr20:48506452-48508514
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 74 fragments (30 target hap, 33 other, 11 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 46 synthetic reads across 4000bp haplotype (cov=10.1, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1412 kept, 77 suppressed, 46 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 14: 1412 kept + 46 chimeric, 77 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 15/26: Deletion { chrom: "chr20", del_start: 48509709, del_end: 48511570, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:48499709-48521570 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1431 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1408 complete read pairs from chr20:48499709-48521570
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=442.6, stddev=142.1, n=1408
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1408 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1408 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.5 end=27.4, R2: start=29.8 end=27.0. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 14 het SNPs in chr20:48509709-48511570
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 44 fragments (8 target hap, 29 other, 7 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 53 synthetic reads across 4000bp haplotype (cov=11.7, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1363 kept, 45 suppressed, 53 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 15: 1363 kept + 53 chimeric, 45 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 16/26: Deletion { chrom: "chr20", del_start: 48512316, del_end: 48513687, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:48502316-48523687 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1483 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1460 complete read pairs from chr20:48502316-48523687
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=444.2, stddev=138.4, n=1460
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1460 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1460 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.7 end=27.7, R2: start=29.7 end=27.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 8 het SNPs in chr20:48512316-48513687
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 30 fragments (10 target hap, 17 other, 3 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 21 synthetic reads across 4000bp haplotype (cov=4.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1403 kept, 57 suppressed, 21 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 16: 1403 kept + 21 chimeric, 57 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 17/26: Deletion { chrom: "chr20", del_start: 48870950, del_end: 48871560, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:48860950-48881560 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2178 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2177 complete read pairs from chr20:48860950-48881560
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=453.0, stddev=108.3, n=2177
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2177 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2177 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.4 end=29.1, R2: start=29.8 end=29.0. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:48870950-48871560, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 141 synthetic reads across 4000bp haplotype (cov=32.0, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1966 kept, 211 suppressed, 141 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 17: 1966 kept + 141 chimeric, 211 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 18/26: Deletion { chrom: "chr20", del_start: 61943513, del_end: 61945040, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:61933513-61955040 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1946 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1917 complete read pairs from chr20:61933513-61955040
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=454.6, stddev=119.7, n=1917
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1917 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1917 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.4 end=28.9, R2: start=29.8 end=28.2. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:61943513-61945040, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 50 synthetic reads across 4000bp haplotype (cov=11.4, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1798 kept, 119 suppressed, 50 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 18: 1798 kept + 50 chimeric, 119 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 19/26: Deletion { chrom: "chr20", del_start: 61946250, del_end: 61947090, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:61936250-61957090 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1853 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1825 complete read pairs from chr20:61936250-61957090
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=453.0, stddev=118.9, n=1825
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1825 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1825 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.4 end=29.0, R2: start=29.8 end=28.3. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:61946250-61947090, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 40 synthetic reads across 4000bp haplotype (cov=9.2, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1741 kept, 84 suppressed, 40 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 19: 1741 kept + 40 chimeric, 84 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 20/26: Deletion { chrom: "chr20", del_start: 62057603, del_end: 62058413, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:62047603-62068413 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2210 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2187 complete read pairs from chr20:62047603-62068413
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=451.3, stddev=111.4, n=2187
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2187 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2187 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.1 end=28.7, R2: start=29.8 end=28.4. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:62057603-62058413, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 104 synthetic reads across 4000bp haplotype (cov=23.5, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 2006 kept, 181 suppressed, 104 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 20: 2006 kept + 104 chimeric, 181 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 21/26: Deletion { chrom: "chr20", del_start: 63093345, del_end: 63094243, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:63083345-63104243 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2343 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2307 complete read pairs from chr20:63083345-63104243
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=451.6, stddev=109.2, n=2307
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2307 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2307 pairs, 150 cycles. R1 mean Q: start=29.7 mid=29.3 end=29.0, R2: start=29.8 end=28.7. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:63093345-63094243, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 100 synthetic reads across 4000bp haplotype (cov=22.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 2098 kept, 209 suppressed, 100 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 21: 2098 kept + 100 chimeric, 209 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 22/26: Deletion { chrom: "chr20", del_start: 63134604, del_end: 63135240, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:63124604-63145240 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2273 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2257 complete read pairs from chr20:63124604-63145240
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=458.6, stddev=111.0, n=2257
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2257 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2257 pairs, 150 cycles. R1 mean Q: start=29.8 mid=29.3 end=29.0, R2: start=29.8 end=28.7. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 21 het SNPs in chr20:63134604-63135240
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 84 fragments (23 target hap, 39 other, 22 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 184 synthetic reads across 4000bp haplotype (cov=42.1, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1997 kept, 260 suppressed, 184 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 22: 1997 kept + 184 chimeric, 260 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 23/26: Deletion { chrom: "chr20", del_start: 63636171, del_end: 63636676, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:63626171-63646676 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2131 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2107 complete read pairs from chr20:63626171-63646676
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=451.0, stddev=109.8, n=2107
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2107 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2107 pairs, 150 cycles. R1 mean Q: start=29.6 mid=28.9 end=28.7, R2: start=29.8 end=28.0. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:63636171-63636676, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 212 synthetic reads across 4000bp haplotype (cov=47.8, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1893 kept, 214 suppressed, 212 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 23: 1893 kept + 212 chimeric, 214 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 24/26: Deletion { chrom: "chr20", del_start: 63964828, del_end: 63965924, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:63954828-63975924 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 2363 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 2341 complete read pairs from chr20:63954828-63975924
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=458.6, stddev=110.0, n=2341
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 2341 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 2341 pairs, 150 cycles. R1 mean Q: start=29.5 mid=29.3 end=28.6, R2: start=29.8 end=28.1. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:63964828-63965924
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 29 fragments (15 target hap, 13 other, 1 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 122 synthetic reads across 4000bp haplotype (cov=28.0, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 2113 kept, 228 suppressed, 122 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 24: 2113 kept + 122 chimeric, 228 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 25/26: Deletion { chrom: "chr20", del_start: 64127245, del_end: 64127815, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:64117245-64137815 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1794 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1705 complete read pairs from chr20:64117245-64137815
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=443.9, stddev=131.9, n=1705
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1705 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1705 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.7 end=27.9, R2: start=29.8 end=27.4. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: no het SNPs found in chr20:64127245-64127815, falling back to random
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 106 synthetic reads across 4000bp haplotype (cov=23.6, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1536 kept, 169 suppressed, 106 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 25: 1536 kept + 106 chimeric, 169 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Processing event 26/26: Deletion { chrom: "chr20", del_start: 64127305, del_end: 64127875, gene: "unknown", exons: [], allele_fraction: None }
+[2026-03-02T13:05:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracting read pairs from chr20:64117305-64137875 (MAPQ >= 20)
+[2026-03-02T13:05:56Z INFO  spike::extract] Pass 1: collected 1795 read1 records
+[2026-03-02T13:05:56Z INFO  spike::extract] Extracted 1706 complete read pairs from chr20:64117305-64137875
+[2026-03-02T13:05:56Z INFO  spike::stats] Fragment distribution: mean=444.6, stddev=132.0, n=1706
+[2026-03-02T13:05:56Z INFO  spike::extract] Built read pool: 1706 pairs
+[2026-03-02T13:05:56Z INFO  spike::synth] Quality profile: 1706 pairs, 150 cycles. R1 mean Q: start=29.8 mid=28.7 end=27.9, R2: start=29.8 end=27.4. Base-conditioned bins: 1200/1200 usable
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: found 3 het SNPs in chr20:64127305-64127875
+[2026-03-02T13:05:56Z INFO  spike::loh] LOH-DEL: classified 24 fragments (11 target hap, 12 other, 1 ambiguous ties)
+[2026-03-02T13:05:56Z INFO  spike::simulate] Tiling 105 synthetic reads across 4000bp haplotype (cov=23.4, vaf=0.50, bp_only=false)
+[2026-03-02T13:05:56Z INFO  spike::simulate] simulate_event: 1507 kept, 199 suppressed, 105 chimeric (haplotype-tiled), 0 depth copies
+[2026-03-02T13:05:56Z INFO  spike] Event 26: 1507 kept + 105 chimeric, 199 suppressed
+[2026-03-02T13:05:56Z INFO  spike] Deduplicated: 51412 -> 40998 pairs
+[2026-03-02T13:05:56Z INFO  spike::fastq] Wrote 40998 read pairs to /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/R1.fq.gz and /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/R2.fq.gz
+[2026-03-02T13:05:56Z INFO  spike::truth] Wrote truth VCF with 26 events to /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/truth.vcf
+[2026-03-02T13:05:56Z INFO  spike] === spike complete ===
+[2026-03-02T13:05:56Z INFO  spike] Output directory: /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5
+[2026-03-02T13:05:56Z INFO  spike] FASTQ: /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/R1.fq.gz and /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/R2.fq.gz
+[2026-03-02T13:05:56Z INFO  spike] Truth VCF: /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/truth.vcf
+[2026-03-02T13:05:56Z INFO  spike] Total read pairs: 40998
+[2026-03-02T13:05:56Z INFO  spike] To align: bash /home/parlar_ai/dev/spike/data/validation/spike_vaf_0.5/align.sh

@@ -1,0 +1,1 @@
+Running Delly on HG002 chr20 BAM (2.6 GB)...  call -t DEL -g  -o data/validation/hg002_chr20_delly.bcf  2 echo  echo === All DEL calls ===  view -H data/validation/hg002_chr20_delly.bcf
