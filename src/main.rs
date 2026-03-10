@@ -724,6 +724,7 @@ fn validate_event_coordinates(
             } => {
                 let end = *pos + ref_allele.len() as u64;
                 validate_range(reference, chrom, *pos, end, "SNP/indel")?;
+                validate_ref_allele(reference, chrom, *pos, ref_allele)?;
             }
             SimEvent::Fusion {
                 chrom_a,
@@ -790,6 +791,31 @@ fn validate_point(
                 label, chrom, pos, chrom_len,
             );
         }
+    }
+    Ok(())
+}
+
+/// Validate that the user-specified REF allele matches the actual reference sequence.
+fn validate_ref_allele(
+    reference: &crate::reference::SharedReference,
+    chrom: &str,
+    pos: u64,
+    ref_allele: &[u8],
+) -> Result<()> {
+    let end = pos + ref_allele.len() as u64;
+    let actual = reference.fetch_sequence(chrom, pos, end)?;
+    let actual_upper: Vec<u8> = actual.iter().map(|b| b.to_ascii_uppercase()).collect();
+    let expected_upper: Vec<u8> = ref_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
+    if actual_upper != expected_upper {
+        bail!(
+            "REF allele mismatch at {}:{}-{}: specified '{}' but reference has '{}'. \
+             Check that the position is correct (1-based in event spec) and matches the reference genome.",
+            chrom,
+            pos + 1, // display as 1-based
+            pos + ref_allele.len() as u64,
+            String::from_utf8_lossy(&expected_upper),
+            String::from_utf8_lossy(&actual_upper),
+        );
     }
     Ok(())
 }
