@@ -64,10 +64,12 @@ impl ReferenceReader {
             .with_context(|| format!("chromosome '{}' not found in FASTA index", chrom))?;
 
         // noodles uses 1-based, closed coordinates for the region
-        let noodles_start = noodles::core::Position::try_from((start as usize) + 1)
+        let start_usize = usize::try_from(start).context("start position exceeds platform usize")?;
+        let end_usize = usize::try_from(end).context("end position exceeds platform usize")?;
+        let noodles_start = noodles::core::Position::try_from(start_usize + 1)
             .context("invalid start position")?;
         let noodles_end =
-            noodles::core::Position::try_from(end as usize).context("invalid end position")?;
+            noodles::core::Position::try_from(end_usize).context("invalid end position")?;
 
         let region = noodles::core::Region::new(chrom, noodles_start..=noodles_end);
 
@@ -162,11 +164,15 @@ impl SharedReference {
             .sequences
             .get(chrom)
             .with_context(|| format!("chromosome '{}' not in shared reference", chrom))?;
-        let start = (start as usize).min(seq.len());
-        let end = (end as usize).min(seq.len());
-        if start >= end {
+        let start_usize = usize::try_from(start)
+            .with_context(|| format!("start position {} exceeds platform usize for {}", start, chrom))?;
+        let end_usize = usize::try_from(end)
+            .with_context(|| format!("end position {} exceeds platform usize for {}", end, chrom))?;
+        let start_clamped = start_usize.min(seq.len());
+        let end_clamped = end_usize.min(seq.len());
+        if start_clamped >= end_clamped {
             return Ok(Vec::new());
         }
-        Ok(seq[start..end].to_vec())
+        Ok(seq[start_clamped..end_clamped].to_vec())
     }
 }

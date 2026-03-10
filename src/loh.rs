@@ -218,87 +218,109 @@ fn load_het_snps_from_gvcf(
     region_start: u64,
     region_end: u64,
 ) -> Result<Vec<HetSnp>> {
-    let lines: Vec<String> = if gvcf_path.ends_with(".gz") {
-        // Use bcftools for indexed access to bgzipped VCF.
-        let region = format!("{}:{}-{}", chrom, region_start + 1, region_end);
-        let output = std::process::Command::new("bcftools")
-            .args(["view", "-H", "-r", &region, gvcf_path])
-            .output()
-            .context("failed to run bcftools for gVCF reading (is bcftools in PATH?)")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("bcftools failed: {}", stderr);
-        }
-
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|l| l.to_string())
-            .collect()
-    } else {
-        // Plain text VCF: read and filter.
-        let content = std::fs::read_to_string(gvcf_path)
-            .with_context(|| format!("failed to read gVCF: {}", gvcf_path))?;
-        content.lines().map(|l| l.to_string()).collect()
-    };
-
+    // Determine sample index from header (defaults to first sample, index 9).
+    let sample_col: usize = 9;
     let mut het_snps = Vec::new();
 
-    for line in &lines {
-        if line.starts_with('#') {
-            continue;
+    if gvcf_path.ends_with(".gz") {
+        // Use bcftools for indexed access to bgzipped VCF.
+        // Stream stdout line-by-line via piped child process.
+        let region = format!("{}:{}-{}", chrom, region_start + 1, region_end);
+        let mut child = std::process::Command::new("bcftools")
+            .args(["view", "-H", "-r", &region, gvcf_path])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("failed to run bcftools for gVCF reading (is bcftools in PATH?)")?;
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = std::io::BufReader::new(stdout);
+        use std::io::BufRead;
+        for line_result in reader.lines() {
+            let line = line_result.context("failed to read bcftools output")?;
+            parse_gvcf_line(&line, chrom, region_start, region_end, sample_col, &mut het_snps);
         }
 
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 10 {
-            continue;
+        let status = child.wait().context("failed to wait for bcftools")?;
+        if !status.success() {
+            anyhow::bail!("bcftools exited with status {}", status);
         }
-
-        let line_chrom = fields[0];
-        if line_chrom != chrom {
-            continue;
-        }
-
-        // VCF POS is 1-based.
-        let pos: u64 = match fields[1].parse::<u64>() {
-            Ok(p) => p.saturating_sub(1), // convert to 0-based
-            Err(_) => continue,
-        };
-
-        if pos < region_start || pos >= region_end {
-            continue;
-        }
-
-        let ref_allele = fields[3].as_bytes();
-        let alt_field = fields[4];
-
-        // Handle multi-allelic: take the first ALT allele.
-        let alt_allele = alt_field.split(',').next().unwrap_or(".").as_bytes();
-
-        // Only consider SNPs (single-base REF and ALT).
-        if ref_allele.len() != 1 || alt_allele.len() != 1 {
-            continue;
-        }
-        if alt_allele == b"." || alt_allele == b"*" {
-            continue;
-        }
-
-        // Check genotype for heterozygosity.
-        let gt_field = fields[9].split(':').next().unwrap_or("");
-        let is_het =
-            gt_field == "0/1" || gt_field == "1/0" || gt_field == "0|1" || gt_field == "1|0";
-
-        if is_het {
-            het_snps.push(HetSnp {
-                pos,
-                allele1: ref_allele[0].to_ascii_uppercase(),
-                allele2: alt_allele[0].to_ascii_uppercase(),
-            });
+    } else {
+        // Plain text VCF: stream line-by-line to avoid loading entire file into memory.
+        let file = std::fs::File::open(gvcf_path)
+            .with_context(|| format!("failed to open gVCF: {}", gvcf_path))?;
+        let reader = std::io::BufReader::new(file);
+        use std::io::BufRead;
+        for line_result in reader.lines() {
+            let line = line_result
+                .with_context(|| format!("failed to read gVCF: {}", gvcf_path))?;
+            parse_gvcf_line(&line, chrom, region_start, region_end, sample_col, &mut het_snps);
         }
     }
 
     het_snps.sort_by_key(|s| s.pos);
     Ok(het_snps)
+}
+
+/// Parse a single VCF/gVCF line and push any het SNP into `het_snps`.
+fn parse_gvcf_line(
+    line: &str,
+    chrom: &str,
+    region_start: u64,
+    region_end: u64,
+    sample_col: usize,
+    het_snps: &mut Vec<HetSnp>,
+) {
+    if line.starts_with('#') {
+        return;
+    }
+
+    let fields: Vec<&str> = line.split('\t').collect();
+    if fields.len() <= sample_col {
+        return;
+    }
+
+    let line_chrom = fields[0];
+    if line_chrom != chrom {
+        return;
+    }
+
+    // VCF POS is 1-based.
+    let pos: u64 = match fields[1].parse::<u64>() {
+        Ok(p) => p.saturating_sub(1), // convert to 0-based
+        Err(_) => return,
+    };
+
+    if pos < region_start || pos >= region_end {
+        return;
+    }
+
+    let ref_allele = fields[3].as_bytes();
+    let alt_field = fields[4];
+
+    // Handle multi-allelic: take the first ALT allele.
+    let alt_allele = alt_field.split(',').next().unwrap_or(".").as_bytes();
+
+    // Only consider SNPs (single-base REF and ALT).
+    if ref_allele.len() != 1 || alt_allele.len() != 1 {
+        return;
+    }
+    if alt_allele == b"." || alt_allele == b"*" {
+        return;
+    }
+
+    // Check genotype for heterozygosity.
+    let gt_field = fields[sample_col].split(':').next().unwrap_or("");
+    let is_het =
+        gt_field == "0/1" || gt_field == "1/0" || gt_field == "0|1" || gt_field == "1|0";
+
+    if is_het {
+        het_snps.push(HetSnp {
+            pos,
+            allele1: ref_allele[0].to_ascii_uppercase(),
+            allele2: alt_allele[0].to_ascii_uppercase(),
+        });
+    }
 }
 
 /// Single-pass pileup: find het SNPs AND collect per-read alleles.

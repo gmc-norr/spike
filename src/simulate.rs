@@ -463,29 +463,40 @@ fn tile_haplotype_reads(
 /// Estimate fragment depth at a reference position.
 ///
 /// Counts fragments overlapping positions in a window, returns mean coverage.
-/// Uses 50 evenly-spaced sample points in a 2000bp window for stable estimates.
+/// Uses up to 50 evenly-spaced sample points for stable estimates.
+/// The pool must be sorted by `ref_start` (which `build_read_pool` ensures).
 fn estimate_coverage_at(pool: &ReadPool, pos: u64, window: u64) -> f64 {
     let start = pos.saturating_sub(window / 2);
-    let end = pos + window / 2;
+    let end = pos.saturating_add(window / 2);
 
-    let n_samples = 50;
-    let step = (end - start) / n_samples as u64;
-    if step == 0 {
-        return 0.0;
-    }
+    let n_samples: u64 = 50;
+    let range = end - start;
+    // For very small windows, use fewer sample points (at least 1).
+    let actual_samples = range.min(n_samples).max(1);
+    let step = if actual_samples > 1 {
+        range / actual_samples
+    } else {
+        1
+    };
+
     let mut total = 0usize;
 
-    for i in 0..n_samples {
-        let sample_pos = start + i as u64 * step;
-        let count = pool
+    for i in 0..actual_samples {
+        let sample_pos = start + i * step;
+        // Binary search: skip pairs that start after sample_pos (they can't
+        // overlap it). The pool is sorted by ref_start, so partition_point
+        // gives us the exact cutoff.
+        let upper = pool
             .pairs
+            .partition_point(|p| p.ref_start <= sample_pos);
+        let count = pool.pairs[..upper]
             .iter()
-            .filter(|p| p.ref_start <= sample_pos && p.ref_end > sample_pos)
+            .filter(|p| p.ref_end > sample_pos)
             .count();
         total += count;
     }
 
-    total as f64 / n_samples as f64
+    total as f64 / actual_samples as f64
 }
 
 #[cfg(test)]

@@ -565,7 +565,8 @@ fn passes_filters_buf(min_mapq: u8, buf: &noodles::sam::alignment::RecordBuf) ->
 /// Convert a 0-based half-open end coordinate to a noodles 1-based Position.
 /// Noodles positions must be >= 1, so we clamp.
 pub fn safe_noodles_position(pos: u64) -> noodles::core::Position {
-    noodles::core::Position::try_from((pos as usize).max(1)).expect("position must be >= 1")
+    let pos_usize = usize::try_from(pos).unwrap_or(usize::MAX).max(1);
+    noodles::core::Position::try_from(pos_usize).expect("position must be >= 1")
 }
 
 /// Reverse-complement a DNA sequence in place.

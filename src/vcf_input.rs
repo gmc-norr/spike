@@ -240,7 +240,10 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
             }
             SvTypeTag::Bnd => {
                 // Skip if already processed as part of a MATEID pair.
-                if bnd_processed.contains(&record.id) {
+                // Never skip records with placeholder ID "." — they are not
+                // unique identifiers and collapsing them would drop distinct BNDs.
+                let has_real_id = record.id != ".";
+                if has_real_id && bnd_processed.contains(&record.id) {
                     continue;
                 }
 
@@ -254,9 +257,11 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 let partner_pos = partner_pos_1based.saturating_sub(1); // 1-based → 0-based
 
                 // Mark both this record and its mate as processed.
-                bnd_processed.insert(record.id.clone());
-                if let Some(mate_id) = parse_info_field(&record.info, "MATEID") {
-                    bnd_processed.insert(mate_id.to_string());
+                if has_real_id {
+                    bnd_processed.insert(record.id.clone());
+                    if let Some(mate_id) = parse_info_field(&record.info, "MATEID") {
+                        bnd_processed.insert(mate_id.to_string());
+                    }
                 }
 
                 // Extract gene info.

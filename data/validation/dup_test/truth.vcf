@@ -1,0 +1,24 @@
+##fileformat=VCFv4.3
+##fileDate=20260303
+##source=spike
+##reference=data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta
+##ALT=<ID=DEL,Description="Deletion">
+##ALT=<ID=DUP,Description="Tandem duplication">
+##ALT=<ID=INV,Description="Inversion">
+##ALT=<ID=INS,Description="Insertion">
+##ALT=<ID=BND,Description="Translocation breakend">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variant">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position">
+##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="SV length">
+##INFO=<ID=SIM_VAF,Number=1,Type=Float,Description="Simulated allele fraction">
+##INFO=<ID=SIM_GENE,Number=1,Type=String,Description="Affected gene">
+##INFO=<ID=SIM_EXONS,Number=.,Type=String,Description="Affected exons">
+##INFO=<ID=MATEID,Number=1,Type=String,Description="ID of mate breakend">
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chr3	184754689	sim_dup_1	N	<DUP>	999	PASS	SVTYPE=DUP;END=184756161;SVLEN=1472;SIM_VAF=0.500;SIM_GENE=unknown	GT	0/1
+chr4	26209775	sim_dup_2	N	<DUP>	999	PASS	SVTYPE=DUP;END=26212484;SVLEN=2709;SIM_VAF=0.500;SIM_GENE=unknown	GT	0/1
+chr6	28712877	sim_dup_3	N	<DUP>	999	PASS	SVTYPE=DUP;END=28714753;SVLEN=1876;SIM_VAF=0.500;SIM_GENE=unknown	GT	0/1
+chr8	992901	sim_dup_4	N	<DUP>	999	PASS	SVTYPE=DUP;END=994791;SVLEN=1890;SIM_VAF=0.500;SIM_GENE=unknown	GT	0/1
+chr20	819293	sim_dup_5	N	<DUP>	999	PASS	SVTYPE=DUP;END=822580;SVLEN=3287;SIM_VAF=0.500;SIM_GENE=unknown	GT	0/1

@@ -230,6 +230,21 @@ fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Res
     // Try coordinate-based: second has a dash with numbers on both sides.
     if let Some((start_str, end_str)) = second.split_once('-') {
         if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
+            if start == 0 {
+                bail!("{} coordinate-based spec has start=0; coordinates must be >= 1", sv_type);
+            }
+            if start > end {
+                bail!(
+                    "{} coordinate-based spec has start > end ({} > {}); check your interval",
+                    sv_type, start, end
+                );
+            }
+            if start == end {
+                bail!(
+                    "{} coordinate-based spec has zero-length interval (start == end == {})",
+                    sv_type, start
+                );
+            }
             return make_region_event(
                 sv_type,
                 first.to_string(),

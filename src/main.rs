@@ -202,6 +202,15 @@ fn parse_region(s: &str) -> Result<ExtractionRegion> {
         .replace(',', "")
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid end in region '{}'", s))?;
+    if start == 0 {
+        anyhow::bail!("region start must be >= 1 (1-based), got 0 in '{}'", s);
+    }
+    if start > end {
+        anyhow::bail!(
+            "region start > end ({} > {}) in '{}'; check your interval",
+            start, end, s
+        );
+    }
     // Convert from 1-based inclusive to 0-based half-open.
     Ok(ExtractionRegion {
         chrom: chrom.to_string(),
@@ -705,7 +714,7 @@ fn validate_event_coordinates(
                 validate_range(reference, chrom, *inv_start, *inv_end, "INV")?;
             }
             SimEvent::Insertion { chrom, pos, .. } => {
-                validate_range(reference, chrom, *pos, *pos, "INS")?;
+                validate_point(reference, chrom, *pos, "INS")?;
             }
             SimEvent::SmallVariant {
                 chrom,
@@ -723,8 +732,8 @@ fn validate_event_coordinates(
                 bp_b,
                 ..
             } => {
-                validate_range(reference, chrom_a, *bp_a, *bp_a, "Fusion-A")?;
-                validate_range(reference, chrom_b, *bp_b, *bp_b, "Fusion-B")?;
+                validate_point(reference, chrom_a, *bp_a, "Fusion-A")?;
+                validate_point(reference, chrom_b, *bp_b, "Fusion-B")?;
             }
         }
     }
@@ -738,10 +747,16 @@ fn validate_range(
     end: u64,
     label: &str,
 ) -> Result<()> {
+    if start >= end {
+        bail!(
+            "{} event on {} has invalid interval: start ({}) >= end ({})",
+            label, chrom, start, end,
+        );
+    }
     if let Some(chrom_len) = reference.chromosome_length(chrom) {
-        if start > chrom_len {
+        if start >= chrom_len {
             bail!(
-                "{} event start on {} exceeds chromosome length ({} > {})",
+                "{} event start on {} is at or beyond chromosome length ({} >= {})",
                 label,
                 chrom,
                 start,
@@ -755,6 +770,24 @@ fn validate_range(
                 chrom,
                 end,
                 chrom_len,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate a single point coordinate (for INS and Fusion breakpoints).
+fn validate_point(
+    reference: &crate::reference::SharedReference,
+    chrom: &str,
+    pos: u64,
+    label: &str,
+) -> Result<()> {
+    if let Some(chrom_len) = reference.chromosome_length(chrom) {
+        if pos >= chrom_len {
+            bail!(
+                "{} event position on {} is at or beyond chromosome length ({} >= {})",
+                label, chrom, pos, chrom_len,
             );
         }
     }

@@ -235,7 +235,7 @@ fn genotype_from_vaf(vaf: f64) -> &'static str {
 fn chrono_date() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::ZERO)
         .as_secs();
     let mut days = (now / 86400) as i64;
 
