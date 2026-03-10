@@ -25,9 +25,13 @@ Real BAM/CRAM + Reference FASTA + Variant specs
      Paired FASTQ + Truth VCF + Alignment script
 ```
 
-**Variant haplotype model**: The variant allele is represented as an ordered list of segments, each from a reference region (possibly reverse-complemented) or novel sequence. Reads tiled uniformly across this linear sequence are automatically chimeric when they span segment boundaries — no per-SV-type breakpoint logic needed.
+### Core concepts
 
-**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
+**Variant haplotype model**: Every variant — from a single SNP to a multi-kilobase structural rearrangement — is represented as an ordered list of *segments*, each drawn from a reference region (possibly reverse-complemented) or from novel sequence. These segments are concatenated into a single linear haplotype sequence. Reads tiled uniformly across this linear sequence become automatically chimeric when they span a segment boundary. This single mechanism handles all SV types without any per-type breakpoint logic.
+
+**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are randomly suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top.
+
+**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a first-order Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
 
 **LOH and allelic imbalance**: For heterozygous deletions, het SNPs within the deleted region become homozygous (only the surviving haplotype allele remains). For duplications, het SNPs shift from ~50/50 to ~33/67 allele balance. Het SNP positions are found via pileup (default) or from a pre-called gVCF.
 
@@ -398,29 +402,196 @@ bam_stats.rs     BAM/CRAM insert size and read length statistics
 
 ## Simulation model details
 
-### Read suppression
+All SV types share a common simulation framework: (1) build a linear variant haplotype from segments, (2) suppress original reads in the affected region at the VAF rate, (3) tile synthetic reads across the haplotype to replace the suppressed fraction. The details of what the haplotype looks like, how reads are suppressed, and what observable signals result differ by variant type.
 
-Within the SV boundaries, original reads are suppressed at the target VAF rate. Reads fully inside the SV region are suppressed at `P = VAF`. Reads spanning SV boundaries are suppressed at `P = VAF * overlap_fraction`, preventing boundary depth artifacts. Reads fully outside the SV region are always kept.
+### Deletion (DEL)
 
-For additive events (DUP, Fusion), no reads are suppressed — only depth copies or chimeric reads are added.
+**Haplotype structure** (2 segments):
+```
+[left_flank]            [right_flank]
+ref[start-F .. start]   ref[end .. end+F]
+```
+where `F` = flank size (default 10kb). The deleted region `[start, end)` is absent from the haplotype; the left and right flanking segments are placed adjacent.
 
-### Synthetic read tiling
+**Simulation**: Original reads within the haplotype footprint `[start-F, end+F)` are suppressed at rate `P = VAF` (scaled by overlap fraction for reads straddling the boundary). Synthetic reads are tiled uniformly across the two-segment haplotype. Reads that span the junction between left_flank and right_flank are chimeric — when re-aligned to the reference, they produce split reads and discordant pairs that span the deletion breakpoint.
 
-Synthetic reads are tiled uniformly across the variant haplotype at a rate proportional to `coverage * VAF`. Fragment lengths are sampled from the empirical distribution of the donor reads. For insertions, rejection sampling ensures fragments are not placed entirely within novel sequence.
+**Observable signals in the output BAM**:
+- Reduced depth in `[start, end)` proportional to VAF (e.g., ~0.5x for het)
+- Split reads / soft-clipped reads at both breakpoints
+- Discordant read pairs spanning the deleted region (larger insert size than expected)
+- LOH at het SNP positions within the deletion (see LOH section)
 
-For additive events (DUP, Fusion), reads are placed only near breakpoints to avoid inflating flank coverage.
+**Haplotype-aware suppression (LOH)**: For heterozygous deletions (VAF ~0.5), het SNPs within the deleted region are identified via pileup or gVCF. Reads are classified by haplotype based on which allele they carry at het SNP positions. Reads from the "deleted haplotype" are preferentially suppressed, and synthetic reads carry only the surviving haplotype's alleles. This produces realistic loss-of-heterozygosity: het SNPs become homozygous in the output.
 
-### Depth copies (DUP)
+### Tandem duplication (DUP)
 
-For duplications, reads overlapping the duplicated region by >= 50% of fragment length are copied to simulate the increased coverage of the extra copy. When haplotype information is available, copies are drawn preferentially from the duplicated haplotype for correct allelic imbalance.
+spike supports two models for simulating tandem duplications, selected via `--dup-model`:
 
-### LOH simulation
+#### Full tandem model (default, `--dup-model full`)
 
-For heterozygous deletions, het SNP positions within the deleted region are identified (via pileup or gVCF), and reads from the deleted haplotype are preferentially suppressed. Synthetic reads carry only the surviving haplotype's allele at het SNP positions, producing realistic loss-of-heterozygosity signal.
+**Haplotype structure** (4 segments):
+```
+[left_flank]   [dup_copy_1]       [dup_copy_2]       [right_flank]
+ref[S-F .. S]  ref[S .. E]        ref[S .. E]        ref[E .. E+F]
+```
+where `S` = dup_start, `E` = dup_end, `F` = flank size. The duplicated region appears twice in tandem.
 
-For heterozygous duplications, the extra copy's reads carry one haplotype's alleles, shifting het SNPs from ~50/50 to ~33/67 allele balance.
+**Simulation**: This model uses the same suppress-and-replace approach as deletions. Original reads within `[S-F, E+F)` are suppressed at the VAF rate, and synthetic reads are tiled *uniformly* across the full 4-segment haplotype. Because the haplotype contains two copies of the duplicated region, tiling naturally produces:
+- ~2x as many reads mapping to `[S, E)` per unit length compared to the flanks
+- Chimeric reads at the copy1-to-copy2 junction (the internal breakpoint at position E in haplotype space, which maps to the E→S join)
 
-### Quality profile
+This model is preferred because a single tiling pass produces both the correct depth profile and the junction evidence, without needing separate depth-copy logic.
+
+**Observable signals**:
+- Increased depth in `[S, E)` proportional to `1 + VAF` (e.g., ~1.5x for het)
+- Split reads / soft-clipped reads at the tandem junction
+- Discordant read pairs with reduced insert size spanning the junction
+- Allelic imbalance at het SNPs within the DUP (see below)
+
+#### Junction model (legacy, `--dup-model junction`)
+
+**Haplotype structure** (2 segments):
+```
+[left_of_junction]    [right_of_junction]
+ref[E-F .. E]         ref[S .. S+F]
+```
+This covers only the junction region where the end of the duplicated region meets the start of the duplicate copy (the E→S chimeric breakpoint).
+
+**Simulation**: This model is additive — all original reads are kept. Two separate sets of synthetic reads are generated:
+
+1. **Junction reads**: Tiled across the 2-segment haplotype near the breakpoint. These produce split reads and discordant pairs at the E→S junction.
+2. **Depth copies**: For each real read pair overlapping the DUP region by >= 50% of its fragment length, a synthetic copy is generated (at rate = VAF) with new quality scores and error profile. When haplotype information is available (from het SNPs), copies are preferentially drawn from the duplicated haplotype:
+   - Variant haplotype reads: copied at rate `min(1, 2*VAF)`
+   - Other haplotype reads: copied at rate `max(0, 2*VAF - 1)`
+   - Unclassified reads: copied at rate `VAF`
+
+This model is kept for backward compatibility but produces less naturally integrated results than the full model.
+
+**Allelic imbalance for DUPs**: For heterozygous duplications, one haplotype has 2 copies while the other has 1. Het SNPs shift from ~50/50 allele balance to ~33/67 (2:1 ratio). spike identifies het SNPs via pileup or gVCF, classifies reads by haplotype, and ensures synthetic reads carry the duplicated haplotype's alleles. This is applied in both models — in the full model, het SNP alleles are substituted directly into the haplotype sequence before tiling.
+
+### Inversion (INV)
+
+**Haplotype structure** (3 segments):
+```
+[left_flank]          [inverted_region]            [right_flank]
+ref[S-F .. S]         revcomp(ref[S .. E])         ref[E .. E+F]
+```
+The middle segment is the reverse complement of the original reference sequence.
+
+**Simulation**: Same suppress-and-replace approach as deletions. Reads tiled across the haplotype that span the left_flank→inverted boundary or the inverted→right_flank boundary are chimeric and produce split reads at both inversion breakpoints. Reads landing entirely within the inverted segment align to the reference in the opposite orientation.
+
+**Observable signals**:
+- No depth change (the region is the same length, just reversed)
+- Split reads at both breakpoints (left and right)
+- Read pairs with unexpected orientation near breakpoints (FR→RF or FF/RR)
+- Reads in the inverted region may show soft-clipping at the boundaries
+
+### Insertion (INS)
+
+**Haplotype structure** (3 segments):
+```
+[left_flank]          [novel_sequence]       [right_flank]
+ref[P-F .. P]         <inserted bases>       ref[P .. P+F]
+```
+The inserted sequence is either user-specified or randomly generated. It has no reference origin (novel sequence).
+
+**Simulation**: Suppress-and-replace. Reads spanning left_flank→novel or novel→right_flank produce chimeric reads at the insertion point. Rejection sampling during tiling ensures fragments are not placed entirely within the novel sequence (such reads wouldn't align to the reference at all).
+
+**Observable signals**:
+- No depth change in flanking regions
+- Soft-clipped reads at the insertion point (with clipped bases matching the inserted sequence)
+- Discordant insert sizes for pairs where one read is in the insertion and the other is in flanking reference
+
+### Gene fusion (BND)
+
+**Haplotype structure** (2 segments):
+```
+Normal:   ref_A[bpA-F .. bpA]  |  ref_B[bpB .. bpB+F]
+Inverted: ref_A[bpA-F .. bpA]  |  revcomp(ref_B[bpB .. bpB+F])
+```
+Two breakpoints on potentially different chromosomes are joined. For inverted fusions, the gene B side is reverse-complemented before joining.
+
+**Simulation**: Fusions are additive — all original reads are kept. Synthetic reads are tiled near the breakpoint (breakpoint-only mode) so that they cross the junction. This avoids inflating coverage in the flanking regions where real reads already provide normal depth.
+
+**Observable signals**:
+- Split reads at the fusion junction (one side mapping to gene A, the other to gene B)
+- Discordant read pairs with mates on different chromosomes (or unexpectedly far apart on the same chromosome)
+- No depth change in flanking regions (additive only near the breakpoint)
+
+### SNP / small indel (SmallVariant)
+
+**Haplotype structure** (3 segments):
+```
+[left_flank]          [alt_allele]          [right_flank]
+ref[P-F .. P]         <ALT bases>           ref[P+len(REF) .. P+len(REF)+F]
+```
+Works for all small variant types:
+- **SNP** (A→T): alt segment = `[T]`, skips 1 ref base
+- **MNV** (AC→TG): alt segment = `[TG]`, skips 2 ref bases
+- **Small deletion** (ACG→A): alt segment = `[A]`, skips 3 ref bases
+- **Small insertion** (A→ACGT): alt segment = `[ACGT]`, skips 1 ref base
+
+For equal-length substitutions (SNPs/MNVs), the alt segment retains a reference origin mapping for correct coordinate translation. For indels, the alt segment has no reference origin.
+
+**Simulation**: Suppress-and-replace. Reads crossing the variant position carry the ALT allele; reads landing entirely in the flanks are unmodified reference.
+
+**Observable signals**:
+- ALT allele at the expected frequency in pileup
+- For small indels, soft-clipped reads near the variant position
+
+## Read suppression details
+
+The suppress-and-replace model classifies each original read pair relative to the haplotype's reference footprint:
+
+| Relation | Behavior |
+|---|---|
+| **Outside** (both reads entirely outside footprint) | Always kept |
+| **Inside** (both reads entirely within footprint) | Suppressed at `P = VAF` |
+| **Overlapping** (fragment straddles footprint boundary) | Suppressed at `P = VAF * overlap_fraction` |
+
+The overlap-fraction scaling prevents boundary depth artifacts: a read pair with 20% of its fragment inside the SV region is suppressed at 20% of the VAF rate, not the full rate.
+
+For haplotype-aware events (het DEL/DUP with VAF in [0.3, 0.7]), classified reads use LOH logic instead of random suppression:
+- **LOH-set reads** (deleted/duplicated haplotype): suppressed at `P = min(1, 2*VAF) * overlap_fraction`
+- **Other-haplotype reads**: suppressed at `P = max(0, 2*VAF - 1) * overlap_fraction`
+- **Unclassified reads** (no het SNP overlap): random at `P = VAF * overlap_fraction`
+
+At VAF=0.5, this suppresses all reads from one haplotype (~50% of total) and none from the other — correct LOH behavior.
+
+## Synthetic read tiling
+
+The number of synthetic reads to tile is:
+
+```
+n_reads = round(coverage * VAF * effective_length / mean_fragment_length)
+```
+
+- **Non-additive events**: `effective_length` = reference-mapped length of the haplotype (excludes novel insertion sequence to avoid inflating coverage near insertions)
+- **Additive events** (breakpoint-only tiling): `effective_length` = `2 * mean_fragment_length * n_breakpoints` (reads are placed only in zones around breakpoints)
+
+Fragment lengths are sampled from the empirical distribution of the donor reads. Each fragment is placed at a random position on the haplotype and a read pair (R1 forward from start, R2 reverse from end) is synthesized with quality scores from the learned Markov model.
+
+For additive events, fragment placement is restricted to positions that cross a segment boundary (breakpoint). For non-additive events, placement is uniform across the haplotype, with rejection sampling to avoid placing fragments entirely within novel (non-reference) sequence.
+
+## Het SNP discovery and haplotype classification
+
+spike identifies heterozygous SNP positions within SV regions to enable haplotype-aware read handling. Two strategies are supported:
+
+### Pileup (default)
+
+A single-pass pileup is performed over the SV region. At each position, allele counts (A/C/G/T) are tallied across all reads (MAPQ >= threshold, excluding secondary/supplementary/duplicate/QC-fail). Positions with >= 10 total reads and two alleles each between 20%-80% frequency are called as het SNPs.
+
+During the same pass, per-read allele observations are recorded, so no second BAM pass is needed for classification.
+
+### gVCF (optional, `--gvcf`)
+
+Het SNP positions are loaded from a pre-called VCF (e.g., DeepVariant gVCF). Only biallelic SNPs with heterozygous genotype (0/1 or 1/0) are used. A single BAM pass then classifies reads by which allele they carry at these known positions.
+
+### Read classification
+
+At each het SNP position, one allele is randomly designated as the "target" haplotype. Each read is scored by counting how many het SNP positions match the target vs. the other allele. Reads with more target matches are placed in the target set; reads with more other-allele matches are placed in the other set; ties are marked ambiguous (excluded from both sets). Reads not overlapping any het SNP remain unclassified and fall back to random handling at the VAF rate.
+
+## Quality profile
 
 The quality model uses a first-order Markov chain learned from the donor reads: each position's quality score depends on the previous position's quality, capturing the autocorrelation seen in real Illumina data (runs of low quality tend to cluster together).
 
@@ -433,7 +604,7 @@ Quality scores are sampled using a 4-level fallback hierarchy, from most specifi
 
 The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Each level requires at least 30 observations before it is used; otherwise sampling falls through to the next level.
 
-Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`.
+Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
 
 ### Indel error model
 

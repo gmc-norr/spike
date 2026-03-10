@@ -1,0 +1,20 @@
+[M::bwa_idx_load_from_disk] read 0 ALT contigs
+[M::process] read 34782 sequences (5252082 bp)...
+[M::mem_pestat] # candidate unique pairs for (FF, FR, RF, RR): (0, 14958, 98, 0)
+[M::mem_pestat] skip orientation FF as there are not enough pairs
+[M::mem_pestat] analyzing insert size distribution for orientation FR...
+[M::mem_pestat] (25, 50, 75) percentile: (281, 378, 516)
+[M::mem_pestat] low and high boundaries for computing mean and std.dev: (1, 986)
+[M::mem_pestat] mean and std.dev: (411.47, 170.54)
+[M::mem_pestat] low and high boundaries for proper pairs: (1, 1221)
+[M::mem_pestat] analyzing insert size distribution for orientation RF...
+[M::mem_pestat] (25, 50, 75) percentile: (1237, 1552, 2534)
+[M::mem_pestat] low and high boundaries for computing mean and std.dev: (1, 5128)
+[M::mem_pestat] mean and std.dev: (1895.93, 830.57)
+[M::mem_pestat] low and high boundaries for proper pairs: (1, 6425)
+[M::mem_pestat] skip orientation RR as there are not enough pairs
+[M::mem_pestat] skip orientation RF
+[M::mem_process_seqs] Processed 34782 reads in 9.541 CPU sec, 2.390 real sec
+[main] Version: 0.7.19-r1273
+[main] CMD: /home/parlar_ai/dev/sv_caller/.pixi/envs/default/bin/bwa mem -t 4 /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta /home/parlar_ai/dev/spike/data/validation/dup_test_new/R1.fq.gz /home/parlar_ai/dev/spike/data/validation/dup_test_new/R2.fq.gz
+[main] Real time: 10.353 sec; CPU: 17.488 sec
