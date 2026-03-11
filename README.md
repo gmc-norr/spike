@@ -315,9 +315,9 @@ bash output/align.sh /path/to/ref 8    # Override reference and thread count
 After aligning, `merge.sh` substitutes the spiked reads back into the original BAM. Reads in the event regions (event ± flank) are replaced with the reads from `sim.bam`; all other reads are kept from the original:
 
 ```bash
-bash output/align.sh                    # Step 1: produce sim.bam
-bash output/merge.sh                    # Step 2: produce merged.bam (full genome)
-bash output/merge.sh /other.bam 8      # Override original BAM and thread count
+bash output/align.sh                              # Step 1: produce sim.bam
+bash output/merge.sh                              # Step 2: produce merged.bam (full genome)
+bash output/merge.sh /other.bam ref.fa 8          # Override original BAM, reference, and threads
 ```
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.

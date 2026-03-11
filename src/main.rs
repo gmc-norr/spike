@@ -468,7 +468,7 @@ fn main() -> Result<()> {
     write_event_bed(&args.output, &events, args.flank)?;
 
     // Write merge script.
-    write_merge_script(&args.output, &args.bam, args.threads, &args.samtools)?;
+    write_merge_script(&args.output, &args.bam, &args.reference, args.threads, &args.samtools)?;
 
     // Collect per-event stats as (vaf, kept, chimeric, suppressed) tuples for README.
     let stats_tuples: Vec<(f64, usize, usize, usize)> = event_stats
@@ -1097,6 +1097,7 @@ fn write_event_bed(output_dir: &str, events: &[SimEvent], flank: u64) -> Result<
 fn write_merge_script(
     output_dir: &str,
     original_bam: &str,
+    ref_path: &str,
     threads: usize,
     samtools: &str,
 ) -> Result<()> {
@@ -1110,11 +1111,13 @@ set -euo pipefail
 # Reads in the event regions (events.bed ± flank) are replaced by the spiked
 # reads from sim.bam. All other reads are kept from the original BAM.
 #
-# Usage: bash merge.sh [ORIGINAL_BAM] [THREADS]
+# Usage: bash merge.sh [ORIGINAL_BAM] [REFERENCE_FASTA] [THREADS]
 #
+# REFERENCE_FASTA is required when ORIGINAL_BAM is a CRAM file.
 # Requires: samtools (>= 1.13 for -U flag support)
 ORIGINAL="${{1:-{original_bam}}}"
-THREADS="${{2:-{threads}}}"
+REF="${{2:-{ref_path}}}"
+THREADS="${{3:-{threads}}}"
 SAMTOOLS="{samtools}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -1124,7 +1127,7 @@ if [ ! -f "$DIR/sim.bam" ]; then
 fi
 
 echo "Extracting reads outside event regions from $ORIGINAL..."
-"$SAMTOOLS" view -b -L "$DIR/events.bed" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
+"$SAMTOOLS" view -b -T "$REF" -L "$DIR/events.bed" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
 
 echo "Merging spiked reads with outside-region originals..."
 "$SAMTOOLS" merge -f -@ "$THREADS" "$DIR/merged_tmp.bam" "$DIR/sim.bam" "$DIR/outside.bam"
@@ -1217,7 +1220,7 @@ fn event_label(event: &SimEvent) -> String {
             inverted,
             ..
         } => format!(
-            "FUSION  {}:{}>>{}:{}{} ",
+            "FUSION  {}:{}>>{}:{}{}",
             chrom_a,
             bp_a + 1,
             chrom_b,
@@ -1304,7 +1307,7 @@ fn write_readme(
     writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
     writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
     writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
-    writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only, ~{}bp window) |", flank * 2)?;
+    writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions ± {}bp flank) |", flank)?;
     writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
     writeln!(md)?;
     writeln!(md, "## Workflow")?;
@@ -1313,7 +1316,7 @@ fn write_readme(
     writeln!(md, "# Step 1: align the simulated reads")?;
     writeln!(md, "bash align.sh")?;
     writeln!(md)?;
-    writeln!(md, "# Step 2a: use sim.bam directly (contains only event regions ± {}bp)", flank)?;
+    writeln!(md, "# Step 2a: use sim.bam directly (event regions ± {}bp flank)", flank)?;
     writeln!(md, "#   → useful for targeted analysis of the introduced variants")?;
     writeln!(md)?;
     writeln!(md, "# Step 2b: produce a full modified BAM (original + spiked reads)")?;
