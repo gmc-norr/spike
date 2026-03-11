@@ -365,6 +365,15 @@ fn main() -> Result<()> {
 
     let mut all_output_pairs: Vec<ReadPair> = Vec::new();
 
+    // Per-event stats collected for README/log output.
+    struct EventStat {
+        vaf: f64,
+        kept: usize,
+        chimeric: usize,
+        suppressed: usize,
+    }
+    let mut event_stats: Vec<EventStat> = Vec::new();
+
     // Haplotype flank: must be >= max expected fragment length so reads near
     // haplotype edges form complete pairs. 2000bp is conservative.
     let hap_flank: u64 = 2000;
@@ -412,6 +421,13 @@ fn main() -> Result<()> {
             output.suppressed_count,
         );
 
+        event_stats.push(EventStat {
+            vaf,
+            kept: output.kept_originals.len(),
+            chimeric: output.chimeric_pairs.len(),
+            suppressed: output.suppressed_count,
+        });
+
         all_output_pairs.extend(output.kept_originals);
         all_output_pairs.extend(output.chimeric_pairs);
     }
@@ -448,18 +464,47 @@ fn main() -> Result<()> {
         &args.samtools,
     )?;
 
+    // Write events BED (used by merge.sh).
+    write_event_bed(&args.output, &events, args.flank)?;
+
+    // Write merge script.
+    write_merge_script(&args.output, &args.bam, args.threads, &args.samtools)?;
+
+    // Collect per-event stats as (vaf, kept, chimeric, suppressed) tuples for README.
+    let stats_tuples: Vec<(f64, usize, usize, usize)> = event_stats
+        .iter()
+        .map(|s| (s.vaf, s.kept, s.chimeric, s.suppressed))
+        .collect();
+
+    // Write README.md.
+    let cmdline = std::env::args().collect::<Vec<_>>().join(" ");
+    write_readme(
+        &args.output,
+        &cmdline,
+        &args.bam,
+        &args.reference,
+        &events,
+        &stats_tuples,
+        all_output_pairs.len(),
+        args.flank,
+    )?;
+
     // Summary.
     log::info!("=== spike complete ===");
     log::info!("Output directory: {}", args.output);
     log::info!("FASTQ: {} and {}", r1_path, r2_path);
     log::info!("Truth VCF: {}", truth_path.display());
     log::info!("Total read pairs: {}", all_output_pairs.len());
+    log::info!("README: {}/README.md", args.output);
+    log::info!(
+        "Next steps: bash {}/align.sh  →  bash {}/merge.sh",
+        args.output,
+        args.output
+    );
 
     // Auto-align if requested.
     if args.align {
         run_alignment(&args.output, &args.reference, args.threads)?;
-    } else {
-        log::info!("To align: bash {}/align.sh", args.output,);
     }
 
     Ok(())
@@ -954,6 +999,357 @@ fn build_haplotype(
             reference, chrom, *pos, ref_allele, alt_allele, flank,
         ),
     }
+}
+
+/// Return BED regions (chrom, start, end) covering an event ± flank.
+///
+/// Used for events.bed (merge step) and README. Coordinates are 0-based half-open.
+fn event_extraction_regions(event: &SimEvent, flank: u64) -> Vec<(String, u64, u64)> {
+    match event {
+        SimEvent::Deletion {
+            chrom,
+            del_start,
+            del_end,
+            ..
+        } => vec![(
+            chrom.clone(),
+            del_start.saturating_sub(flank),
+            del_end.saturating_add(flank),
+        )],
+        SimEvent::Duplication {
+            chrom,
+            dup_start,
+            dup_end,
+            ..
+        } => vec![(
+            chrom.clone(),
+            dup_start.saturating_sub(flank),
+            dup_end.saturating_add(flank),
+        )],
+        SimEvent::Inversion {
+            chrom,
+            inv_start,
+            inv_end,
+            ..
+        } => vec![(
+            chrom.clone(),
+            inv_start.saturating_sub(flank),
+            inv_end.saturating_add(flank),
+        )],
+        SimEvent::Insertion { chrom, pos, .. } => vec![(
+            chrom.clone(),
+            pos.saturating_sub(flank),
+            pos.saturating_add(flank),
+        )],
+        SimEvent::SmallVariant {
+            chrom,
+            pos,
+            ref_allele,
+            ..
+        } => {
+            let end = pos.saturating_add(ref_allele.len() as u64);
+            vec![(
+                chrom.clone(),
+                pos.saturating_sub(flank),
+                end.saturating_add(flank),
+            )]
+        }
+        SimEvent::Fusion {
+            chrom_a,
+            bp_a,
+            chrom_b,
+            bp_b,
+            ..
+        } => vec![
+            (
+                chrom_a.clone(),
+                bp_a.saturating_sub(flank),
+                bp_a.saturating_add(flank),
+            ),
+            (
+                chrom_b.clone(),
+                bp_b.saturating_sub(flank),
+                bp_b.saturating_add(flank),
+            ),
+        ],
+    }
+}
+
+/// Write events.bed: one line per extraction region (event ± flank), 0-based half-open.
+///
+/// Used by merge.sh to identify which reads in the original BAM to replace.
+fn write_event_bed(output_dir: &str, events: &[SimEvent], flank: u64) -> Result<()> {
+    use std::io::Write as IoWrite;
+    let bed_path = Path::new(output_dir).join("events.bed");
+    let mut f = std::fs::File::create(&bed_path)?;
+    for event in events {
+        for (chrom, start, end) in event_extraction_regions(event, flank) {
+            writeln!(f, "{}\t{}\t{}", chrom, start, end)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write merge.sh: merges sim.bam with the original BAM, replacing event-region reads.
+///
+/// After running align.sh to produce sim.bam, run merge.sh to produce merged.bam,
+/// which is the original BAM with the spiked reads substituted in the event regions.
+fn write_merge_script(
+    output_dir: &str,
+    original_bam: &str,
+    threads: usize,
+    samtools: &str,
+) -> Result<()> {
+    let script_path = Path::new(output_dir).join("merge.sh");
+
+    let script = format!(
+        r#"#!/bin/bash
+set -euo pipefail
+# Merge sim.bam (spiked reads) into the original BAM.
+#
+# Reads in the event regions (events.bed ± flank) are replaced by the spiked
+# reads from sim.bam. All other reads are kept from the original BAM.
+#
+# Usage: bash merge.sh [ORIGINAL_BAM] [THREADS]
+#
+# Requires: samtools (>= 1.13 for -U flag support)
+ORIGINAL="${{1:-{original_bam}}}"
+THREADS="${{2:-{threads}}}"
+SAMTOOLS="{samtools}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ ! -f "$DIR/sim.bam" ]; then
+    echo "Error: $DIR/sim.bam not found. Run align.sh first." >&2
+    exit 1
+fi
+
+echo "Extracting reads outside event regions from $ORIGINAL..."
+"$SAMTOOLS" view -b -L "$DIR/events.bed" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
+
+echo "Merging spiked reads with outside-region originals..."
+"$SAMTOOLS" merge -f -@ "$THREADS" "$DIR/merged_tmp.bam" "$DIR/sim.bam" "$DIR/outside.bam"
+rm -f "$DIR/outside.bam"
+
+echo "Sorting and indexing..."
+"$SAMTOOLS" sort -@ "$THREADS" -o "$DIR/merged.bam" "$DIR/merged_tmp.bam"
+"$SAMTOOLS" index "$DIR/merged.bam"
+rm -f "$DIR/merged_tmp.bam"
+
+TOTAL=$("$SAMTOOLS" view -c "$DIR/merged.bam" 2>/dev/null || echo "?")
+echo "Done: $DIR/merged.bam ($TOTAL reads)"
+"#
+    );
+
+    std::fs::write(&script_path, script)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
+/// Return a short human-readable description of an event.
+fn event_label(event: &SimEvent) -> String {
+    match event {
+        SimEvent::Deletion {
+            chrom,
+            del_start,
+            del_end,
+            ..
+        } => format!(
+            "DEL  {}:{}-{} ({}bp)",
+            chrom,
+            del_start + 1,
+            del_end,
+            del_end - del_start
+        ),
+        SimEvent::Duplication {
+            chrom,
+            dup_start,
+            dup_end,
+            ..
+        } => format!(
+            "DUP  {}:{}-{} ({}bp)",
+            chrom,
+            dup_start + 1,
+            dup_end,
+            dup_end - dup_start
+        ),
+        SimEvent::Inversion {
+            chrom,
+            inv_start,
+            inv_end,
+            ..
+        } => format!(
+            "INV  {}:{}-{} ({}bp)",
+            chrom,
+            inv_start + 1,
+            inv_end,
+            inv_end - inv_start
+        ),
+        SimEvent::Insertion {
+            chrom,
+            pos,
+            ins_len,
+            ..
+        } => format!("INS  {}:{} ({}bp)", chrom, pos + 1, ins_len),
+        SimEvent::SmallVariant {
+            chrom,
+            pos,
+            ref_allele,
+            alt_allele,
+            ..
+        } => format!(
+            "SNV  {}:{} {}>{}",
+            chrom,
+            pos + 1,
+            String::from_utf8_lossy(ref_allele),
+            String::from_utf8_lossy(alt_allele),
+        ),
+        SimEvent::Fusion {
+            chrom_a,
+            bp_a,
+            chrom_b,
+            bp_b,
+            inverted,
+            ..
+        } => format!(
+            "FUSION  {}:{}>>{}:{}{} ",
+            chrom_a,
+            bp_a + 1,
+            chrom_b,
+            bp_b + 1,
+            if *inverted { " (inv)" } else { "" }
+        ),
+    }
+}
+
+/// Write README.md documenting this spike run.
+fn write_readme(
+    output_dir: &str,
+    cmdline: &str,
+    input_bam: &str,
+    reference: &str,
+    events: &[SimEvent],
+    event_stats: &[(f64, usize, usize, usize)],
+    total_pairs: usize,
+    flank: u64,
+) -> Result<()> {
+    use std::fmt::Write as FmtWrite;
+    use std::io::Write as IoWrite;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Format timestamp as YYYY-MM-DD HH:MM:SS UTC (simple, no external crate).
+    let secs_per_day = 86400u64;
+    let days_since_epoch = now / secs_per_day;
+    let time_of_day = now % secs_per_day;
+    let hh = time_of_day / 3600;
+    let mm = (time_of_day % 3600) / 60;
+    let ss = time_of_day % 60;
+    // Compute calendar date from days_since_epoch (1970-01-01 = day 0).
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+    let timestamp = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", year, month, day, hh, mm, ss);
+
+    let version = env!("CARGO_PKG_VERSION");
+
+    let mut md = String::new();
+    writeln!(md, "# spike run log")?;
+    writeln!(md)?;
+    writeln!(md, "**spike version:** {}  ", version)?;
+    writeln!(md, "**Date:** {}  ", timestamp)?;
+    writeln!(md)?;
+    writeln!(md, "## Command")?;
+    writeln!(md)?;
+    writeln!(md, "```")?;
+    writeln!(md, "{}", cmdline)?;
+    writeln!(md, "```")?;
+    writeln!(md)?;
+    writeln!(md, "## Input")?;
+    writeln!(md)?;
+    writeln!(md, "| Field | Value |")?;
+    writeln!(md, "|-------|-------|")?;
+    writeln!(md, "| BAM | `{}` |", input_bam)?;
+    writeln!(md, "| Reference | `{}` |", reference)?;
+    writeln!(md, "| Flank | {}bp |", flank)?;
+    writeln!(md)?;
+    writeln!(md, "## Events")?;
+    writeln!(md)?;
+    writeln!(md, "| # | Event | VAF | Kept reads | Chimeric reads | Suppressed reads |")?;
+    writeln!(md, "|---|-------|-----|-----------|----------------|-----------------|")?;
+    for (i, event) in events.iter().enumerate() {
+        let label = event_label(event);
+        let (vaf, kept, chimeric, suppressed) = event_stats.get(i).copied().unwrap_or((0.0, 0, 0, 0));
+        writeln!(
+            md,
+            "| {} | {} | {:.3} | {} | {} | {} |",
+            i + 1,
+            label,
+            vaf,
+            kept,
+            chimeric,
+            suppressed,
+        )?;
+    }
+    writeln!(md)?;
+    writeln!(md, "## Output files")?;
+    writeln!(md)?;
+    writeln!(md, "| File | Description |")?;
+    writeln!(md, "|------|-------------|")?;
+    writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
+    writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
+    writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
+    writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only, ~{}bp window) |", flank * 2)?;
+    writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
+    writeln!(md)?;
+    writeln!(md, "## Workflow")?;
+    writeln!(md)?;
+    writeln!(md, "```bash")?;
+    writeln!(md, "# Step 1: align the simulated reads")?;
+    writeln!(md, "bash align.sh")?;
+    writeln!(md)?;
+    writeln!(md, "# Step 2a: use sim.bam directly (contains only event regions ± {}bp)", flank)?;
+    writeln!(md, "#   → useful for targeted analysis of the introduced variants")?;
+    writeln!(md)?;
+    writeln!(md, "# Step 2b: produce a full modified BAM (original + spiked reads)")?;
+    writeln!(md, "bash merge.sh  # produces merged.bam")?;
+    writeln!(md, "```")?;
+
+    let readme_path = Path::new(output_dir).join("README.md");
+    let mut f = std::fs::File::create(&readme_path)?;
+    f.write_all(md.as_bytes())?;
+    Ok(())
+}
+
+/// Convert days since Unix epoch (1970-01-01) to (year, month, day).
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    // Gregorian calendar calculation.
+    let mut year = 1970u64;
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let days_in_year = if leap { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u64;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    (year, month, days + 1)
 }
 
 #[cfg(test)]

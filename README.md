@@ -76,7 +76,8 @@ spike \
   --event "del:chr17:43045000-43055000" \
   -o output/
 
-# Output: output/R1.fq.gz, output/R2.fq.gz, output/truth.vcf, output/align.sh
+# Output: output/R1.fq.gz, output/R2.fq.gz, output/truth.vcf, output/align.sh,
+#         output/events.bed, output/merge.sh, output/README.md
 ```
 
 ## Usage examples
@@ -309,6 +310,49 @@ bash output/align.sh                    # Uses defaults from spike run
 bash output/align.sh /path/to/ref 8    # Override reference and thread count
 ```
 
+### Merging into the original BAM
+
+After aligning, `merge.sh` substitutes the spiked reads back into the original BAM. Reads in the event regions (event ± flank) are replaced with the reads from `sim.bam`; all other reads are kept from the original:
+
+```bash
+bash output/align.sh                    # Step 1: produce sim.bam
+bash output/merge.sh                    # Step 2: produce merged.bam (full genome)
+bash output/merge.sh /other.bam 8      # Override original BAM and thread count
+```
+
+`merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
+
+### Validating the spike-in
+
+Use `spike validate` to automatically verify that the spike-in reads in a simulated BAM look realistic — correct depth, allele fraction, and read-level signals at each event:
+
+```bash
+spike validate \
+  --bam output/sim.bam \
+  --truth output/truth.vcf \
+  --reference GRCh38.fasta
+
+# JSON output for automated pipelines
+spike validate \
+  --bam output/sim.bam \
+  --truth output/truth.vcf \
+  --reference GRCh38.fasta \
+  --json
+```
+
+Options:
+
+```
+spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
+
+  --bam, -b        Simulated BAM/CRAM file (required)
+  --truth, -t      Truth VCF from spike (required)
+  --reference, -r  Reference FASTA with .fai index (required)
+  --min-mapq       Minimum MAPQ for counting reads (default: 20)
+  --flank          Flanking bp for coverage comparison (default: 5000)
+  --json           Output JSON instead of text table
+```
+
 ### Controlling the read extraction region
 
 By default, spike extracts reads from a region around each event (event +/- `--flank`). Override this for full-gene coverage:
@@ -341,8 +385,12 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `R1.fq.gz` | Forward reads (gzipped FASTQ) |
 | `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
-| `align.sh` | Shell script for alignment + samtools sort/index |
-| `sim.bam` | Aligned BAM (only if `--align` used) |
+| `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
+| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
+| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
+| `README.md` | Run log: command, events table, read counts, next-step instructions |
+| `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
+| `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
 
 ### Truth VCF
 
@@ -398,6 +446,7 @@ truth.rs         Truth VCF output
 fastq.rs         Gzipped paired FASTQ writer
 reference.rs     Indexed FASTA reading + in-memory sequence store
 bam_stats.rs     BAM/CRAM insert size and read length statistics
+validate.rs      `spike validate` subcommand: automated spike-in quality checks
 ```
 
 ## Simulation model details
@@ -618,13 +667,25 @@ When `--indel-error-rate` is set above 0, a fraction of sequencing errors are mo
 # 1. Simulate a 10kb het deletion in BRCA1
 spike --bam NA12878.bam --reference GRCh38.fasta \
   --event "del:chr17:43045000-43055000;af=het" \
-  --align \
   -o sim_brca1_del/
 
-# 2. Run your variant caller on sim_brca1_del/sim.bam
+# 2. Align the simulated reads
+bash sim_brca1_del/align.sh
+
+# 3a. Run caller on sim.bam (event regions only — good for targeted callers)
 my_sv_caller --input sim_brca1_del/sim.bam --output calls.vcf
 
-# 3. Compare calls.vcf against sim_brca1_del/truth.vcf
+# 3b. Or merge into original BAM for full-genome callers
+bash sim_brca1_del/merge.sh
+my_sv_caller --input sim_brca1_del/merged.bam --output calls.vcf
+
+# 4. Optionally verify the spike-in looks correct before running the caller
+spike validate --bam sim_brca1_del/sim.bam \
+  --truth sim_brca1_del/truth.vcf \
+  --reference GRCh38.fasta
+
+# 5. Compare calls against truth
+# (compare calls.vcf against sim_brca1_del/truth.vcf)
 ```
 
 ### Validate a fusion caller
@@ -634,8 +695,12 @@ my_sv_caller --input sim_brca1_del/sim.bam --output calls.vcf
 spike --bam tumor.bam --reference GRCh38.fasta \
   --exon-bed gene_exons.bed \
   --event "fusion:BCR:exon14:ABL1:exon2;af=0.05" \
-  --align \
   -o sim_bcr_abl/
+
+bash sim_bcr_abl/align.sh
+spike validate --bam sim_bcr_abl/sim.bam \
+  --truth sim_bcr_abl/truth.vcf \
+  --reference GRCh38.fasta
 ```
 
 ### Sensitivity titration
