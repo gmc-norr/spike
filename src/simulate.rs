@@ -12,7 +12,8 @@ use rand::Rng;
 
 use crate::haplotype::VariantHaplotype;
 use crate::loh;
-use crate::synth::SynthReadGenerator;
+use crate::reference::SharedReference;
+use crate::synth::{copy_rate, SynthReadGenerator};
 use crate::types::{ReadPair, ReadPool, SimConfig, SimEvent, SplicedOutput};
 
 /// Classification of how a read pair relates to SV boundaries.
@@ -30,14 +31,93 @@ enum PairRelation {
 ///
 /// This unified function replaces the separate splice_deletion, splice_duplication,
 /// splice_inversion, splice_insertion, and splice_fusion functions.
+///
+/// The sample's own SNPs around the event are read first (see [`loh`]), so
+/// originals are suppressed by copy and synthetic reads carry the alleles of
+/// the copy they come from.
 pub fn simulate_event(
     event_index: usize,
     event: &SimEvent,
     pool: &ReadPool,
     haplotype: &mut VariantHaplotype,
     config: &SimConfig,
-    synth_gen: &mut SynthReadGenerator,
+    synth_gen: &SynthReadGenerator,
     vaf: f64,
+    rng: &mut StdRng,
+) -> Result<SplicedOutput> {
+    let copies = sample_copies_for_event(event, haplotype, config, synth_gen.reference(), rng);
+    simulate_event_with_copies(
+        event_index, event, pool, haplotype, config, synth_gen, vaf, &copies, rng,
+    )
+}
+
+/// Read the sample's two copies over each reference region the haplotype
+/// draws from: the whole footprint for single-region events, and each side
+/// for a fusion. A region whose SNPs can't be read gets none (with a warning).
+fn sample_copies_for_event(
+    event: &SimEvent,
+    haplotype: &VariantHaplotype,
+    config: &SimConfig,
+    reference: &SharedReference,
+    rng: &mut StdRng,
+) -> Vec<(String, loh::SampleCopies)> {
+    let regions: Vec<(String, u64, u64)> = match event {
+        SimEvent::Fusion { .. } => haplotype
+            .segments
+            .iter()
+            .filter_map(|seg| seg.origin.as_ref())
+            .map(|o| (o.chrom.clone(), o.ref_start, o.ref_end))
+            .collect(),
+        _ => haplotype
+            .ref_range()
+            .map(|(start, end)| vec![(haplotype.primary_chrom().to_string(), start, end)])
+            .unwrap_or_default(),
+    };
+
+    let mut copies = Vec::with_capacity(regions.len());
+    for (chrom, start, end) in regions {
+        let sample = reference
+            .fetch_sequence(&chrom, start, end)
+            .and_then(|ref_seq| {
+                loh::sample_copies(
+                    &config.bam_path,
+                    &chrom,
+                    start,
+                    end,
+                    &ref_seq,
+                    config.min_mapq,
+                    config.gvcf_path.as_deref(),
+                    Some(config.ref_path.as_str()),
+                    rng,
+                )
+            })
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "could not read the sample's SNPs in {}:{}-{}: {}",
+                    chrom,
+                    start,
+                    end,
+                    e
+                );
+                loh::SampleCopies::default()
+            });
+        copies.push((chrom, sample));
+    }
+    copies
+}
+
+/// [`simulate_event`] with the sample's two copies already read, per
+/// reference region (chromosome) of the haplotype.
+#[allow(clippy::too_many_arguments)]
+fn simulate_event_with_copies(
+    event_index: usize,
+    event: &SimEvent,
+    pool: &ReadPool,
+    haplotype: &mut VariantHaplotype,
+    config: &SimConfig,
+    synth_gen: &SynthReadGenerator,
+    vaf: f64,
+    copies: &[(String, loh::SampleCopies)],
     rng: &mut StdRng,
 ) -> Result<SplicedOutput> {
     let name_prefix = format!("ev{:04}", event_index);
@@ -67,94 +147,49 @@ pub fn simulate_event(
         _ => false,
     };
 
-    // LOH / haplotype-aware suppression for het events.
-    let (loh_set, classified_set, hap_variants) = get_haplotype_info(event, config, vaf, rng);
-    let use_loh = !loh_set.is_empty();
+    // Above VAF 0.5 the event is on both copies in some cells, so part of the
+    // synthetic reads come from the other copy. Its share of the added reads
+    // is max(0, 2v - 1) / (2v).
+    let p_other_copy = if vaf > 0.5 { 1.0 - 1.0 / (2.0 * vaf) } else { 0.0 };
+    let mut other_haplotype = (p_other_copy > 0.0).then(|| haplotype.clone());
 
-    // Apply het SNP variants to both the haplotype sequence (for tiled chimeric
-    // reads) and synth_gen (for DUP depth copies). This ensures all synthetic
-    // reads carry the correct alleles instead of reference-only bases.
-    if !hap_variants.is_empty() {
-        haplotype.apply_variants(&hap_variants);
-        synth_gen.set_haplotype_variants(hap_variants);
+    // Each copy's haplotype takes that copy's alleles, except at bases the
+    // event itself changes (a simulated SNV keeps its own allele).
+    let own = own_bases(event);
+    let mut read_copy: HashMap<String, bool> = HashMap::new();
+    for (chrom, sample) in copies {
+        haplotype.apply_variants(chrom, &outside(&sample.event_copy, chrom, own));
+        if let Some(other) = other_haplotype.as_mut() {
+            other.apply_variants(chrom, &outside(&sample.other_copy, chrom, own));
+        }
+        read_copy.extend(sample.read_copy.iter().map(|(n, &e)| (n.clone(), e)));
     }
 
     // Suppress original reads within the haplotype's reference footprint.
     //
-    // For non-additive events (DEL, INV, INS): suppress reads at VAF rate
-    // within the haplotype reference range [hap_ref_start, hap_ref_end).
-    // Tiled haplotype reads replace the variant haplotype's contribution in
-    // this zone. Reads entirely OUTSIDE this range are kept unchanged —
-    // they're in unaffected reference territory.
+    // For non-additive events (DEL, INV, INS, small variants, full DUP): suppress
+    // reads by copy (see `copy_rate`) within [hap_ref_start, hap_ref_end), in the
+    // flanks as well as the event. Tiled haplotype reads replace them. Reads
+    // entirely OUTSIDE this range are kept unchanged.
     //
-    // For additive events (DUP, Fusion): keep all originals. Chimeric reads
-    // near the breakpoint and DUP depth copies are added on top.
+    // For additive events (junction DUP, Fusion): keep all originals. Chimeric
+    // reads near the breakpoint and DUP depth copies are added on top.
     let (hap_ref_start, hap_ref_end) = haplotype.ref_range().unwrap_or((sv_start, sv_end));
 
     let mut kept = Vec::new();
     let mut suppressed: Vec<String> = Vec::new();
 
     for pair in &pool.pairs {
-        if is_additive {
-            kept.push(pair.clone());
-            continue;
-        }
-
         // Only pairs entirely inside the haplotype's reference footprint are
         // replaced. Tiled fragments never extend past the haplotype ends, so
         // suppressing pairs that stick out would leave a depth dip there.
-        let in_haplotype = classify_pair_relation(pair, hap_ref_start, hap_ref_end);
-        if !matches!(in_haplotype, PairRelation::Inside) {
-            kept.push(pair.clone());
-            continue;
-        }
-
-        // Read is within the haplotype range.
-        // For inside/overlapping the SV with LOH info, use haplotype-aware
-        // suppression for classified reads, random fallback for unclassified.
-        // For haplotype-flank reads (or without LOH), use random.
-        let in_sv = classify_pair_relation(pair, sv_start, sv_end);
-        let use_loh_for_this =
-            use_loh && matches!(in_sv, PairRelation::Inside | PairRelation::Overlapping);
-
-        if use_loh_for_this {
-            if classified_set.contains(&pair.name) {
-                // Read was classified via het SNPs — use LOH decision.
-                //
-                // loh_set contains ~50% of classified reads (one haplotype).
-                // To achieve the target VAF we must scale: at VAF=0.5 suppress
-                // all loh_set reads (100% × 50% ≈ 50% total). At VAF=0.3
-                // suppress 60% of loh_set reads (60% × 50% ≈ 30% total).
-                // For VAF>0.5 we also suppress some non-loh classified reads.
-                if loh_set.contains(&pair.name) {
-                    let hap_prob = (2.0 * vaf).min(1.0);
-                    if rng.gen::<f64>() < hap_prob {
-                        suppressed.push(pair.name.clone());
-                    } else {
-                        kept.push(pair.clone());
-                    }
-                } else {
-                    // Non-variant haplotype: only suppress when VAF > 0.5.
-                    let other_prob = (2.0 * vaf - 1.0).max(0.0);
-                    if rng.gen::<f64>() < other_prob {
-                        suppressed.push(pair.name.clone());
-                    } else {
-                        kept.push(pair.clone());
-                    }
-                }
-            } else {
-                // Read couldn't be classified (no het SNP overlap) —
-                // fall back to random suppression at the VAF rate.
-                if rng.gen::<f64>() > vaf {
-                    kept.push(pair.clone());
-                } else {
-                    suppressed.push(pair.name.clone());
-                }
-            }
-        } else if rng.gen::<f64>() > vaf {
-            kept.push(pair.clone());
-        } else {
+        let replaceable = !is_additive
+            && classify_pair_relation(pair, hap_ref_start, hap_ref_end) == PairRelation::Inside;
+        let copy = read_copy.get(&pair.name).copied();
+        if replaceable && rng.gen::<f64>() < copy_rate(copy, vaf) {
             suppressed.push(pair.name.clone());
+        } else {
+            kept.push(pair.clone());
         }
     }
 
@@ -172,6 +207,7 @@ pub fn simulate_event(
     // to avoid inflating flank coverage.
     let chimeric = tile_haplotype_reads(
         haplotype,
+        other_haplotype.as_ref().map(|other| (other, p_other_copy)),
         synth_gen,
         pool,
         cov,
@@ -184,17 +220,24 @@ pub fn simulate_event(
     // For DUPs with legacy junction model, generate depth copies inside the
     // region. With the full tandem model, tiling handles depth automatically.
     let depth_copies = if let SimEvent::Duplication {
-        dup_start, dup_end, ..
+        chrom,
+        dup_start,
+        dup_end,
+        ..
     } = event
     {
         if config.dup_model == "junction" {
+            let none = loh::SampleCopies::default();
+            let sample = copies
+                .iter()
+                .find(|(c, _)| c == chrom)
+                .map_or(&none, |(_, sample)| sample);
             synth_gen.generate_dup_depth_copies(
                 pool,
                 *dup_start,
                 *dup_end,
                 vaf,
-                &loh_set,
-                &classified_set,
+                sample,
                 &name_prefix,
                 rng,
             )
@@ -268,67 +311,33 @@ fn dedup_by_name(pairs: &mut Vec<ReadPair>) {
     *pairs = out;
 }
 
-/// Get LOH haplotype set, classified set, and variant map for the event.
-///
-/// Returns `(target_set, classified_set, haplotype_variants)`:
-/// - `target_set`: reads to suppress (DEL) or copy (DUP).
-/// - `classified_set`: all reads that could be assigned to a haplotype via het SNPs.
-///   Reads NOT in this set should fall back to random suppression/copying at VAF rate.
-/// - `haplotype_variants`: het SNP positions → allele for DUP variant substitution.
-fn get_haplotype_info(
-    event: &SimEvent,
-    config: &SimConfig,
-    vaf: f64,
-    rng: &mut StdRng,
-) -> (HashSet<String>, HashSet<String>, HashMap<u64, u8>) {
-    // Only use haplotype-aware suppression for het events (VAF 0.3-0.7).
-    if !(0.3..=0.7).contains(&vaf) {
-        return (HashSet::new(), HashSet::new(), HashMap::new());
-    }
-
+/// Reference bases the event itself changes (a small variant's REF span):
+/// the sample's alleles must not overwrite them.
+fn own_bases(event: &SimEvent) -> Option<(&str, u64, u64)> {
     match event {
-        SimEvent::Deletion {
+        SimEvent::SmallVariant {
             chrom,
-            del_start,
-            del_end,
+            pos,
+            ref_allele,
             ..
-        } => {
-            let (target_set, classified_set) = loh::identify_deleted_haplotype_reads(
-                &config.bam_path,
-                chrom,
-                *del_start,
-                *del_end,
-                config.min_mapq,
-                config.gvcf_path.as_deref(),
-                Some(config.ref_path.as_str()),
-                rng,
-            )
-            .unwrap_or_else(|e| {
-                log::warn!("LOH classification failed: {}", e);
-                (HashSet::new(), HashSet::new())
-            });
-            (target_set, classified_set, HashMap::new())
-        }
-        SimEvent::Duplication {
-            chrom,
-            dup_start,
-            dup_end,
-            ..
-        } => loh::identify_duplicated_haplotype_reads(
-            &config.bam_path,
-            chrom,
-            *dup_start,
-            *dup_end,
-            config.min_mapq,
-            config.gvcf_path.as_deref(),
-            Some(config.ref_path.as_str()),
-            rng,
-        )
-        .unwrap_or_else(|e| {
-            log::warn!("DUP haplotype classification failed: {}", e);
-            (HashSet::new(), HashSet::new(), HashMap::new())
-        }),
-        _ => (HashSet::new(), HashSet::new(), HashMap::new()),
+        } => Some((chrom.as_str(), *pos, *pos + ref_allele.len() as u64)),
+        _ => None,
+    }
+}
+
+/// `alleles` on `chrom`, without the bases in `own` (see [`own_bases`]).
+fn outside(
+    alleles: &HashMap<u64, u8>,
+    chrom: &str,
+    own: Option<(&str, u64, u64)>,
+) -> HashMap<u64, u8> {
+    match own {
+        Some((c, start, end)) if c == chrom => alleles
+            .iter()
+            .filter(|(pos, _)| !(start..end).contains(*pos))
+            .map(|(&pos, &base)| (pos, base))
+            .collect(),
+        _ => alleles.clone(),
     }
 }
 
@@ -410,8 +419,13 @@ fn compute_tiling_count(
 /// When `breakpoint_only` is true (for DUP/Fusion additive events), reads are
 /// placed only near segment boundaries so they cross a breakpoint. This avoids
 /// inflating coverage in flank regions where original reads are already kept.
+///
+/// `other_copy` is the same haplotype with the other sample copy's alleles,
+/// and the chance a fragment comes from it (above VAF 0.5).
+#[allow(clippy::too_many_arguments)]
 fn tile_haplotype_reads(
     haplotype: &VariantHaplotype,
+    other_copy: Option<(&VariantHaplotype, f64)>,
     synth_gen: &SynthReadGenerator,
     pool: &ReadPool,
     coverage: f64,
@@ -504,8 +518,14 @@ fn tile_haplotype_reads(
         let name = format!("{}_hap_{:06}", name_prefix, idx);
         idx += 1;
 
+        // Both copies share the layout; only their alleles differ.
+        let source = match other_copy {
+            Some((other, p)) if rng.gen::<f64>() < p => other,
+            _ => haplotype,
+        };
+
         if let Some(pair) = synth_gen.generate_haplotype_read_pair(
-            haplotype,
+            source,
             hap_start,
             frag_len,
             &name,
@@ -922,7 +942,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
         assert!(!pairs.is_empty(), "Should produce some read pairs");
 
         // Discordant pairs (R1 in left, R2 in right) should still exist.
@@ -946,7 +966,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
 
         let mut discordant_count = 0;
         for pair in &pairs {
@@ -1011,7 +1031,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
         assert!(!pairs.is_empty());
 
         // Some pairs should span the junction (R1 ref near 6000, R2 ref near 1000)
@@ -1039,10 +1059,10 @@ mod tests {
         let mut rng_b = StdRng::seed_from_u64(43);
 
         let pairs_a = tile_haplotype_reads(
-            &hap, &gen, &pool, 30.0, 0.5, false, "ev0001", &mut rng_a,
+            &hap, None, &gen, &pool, 30.0, 0.5, false, "ev0001", &mut rng_a,
         );
         let pairs_b = tile_haplotype_reads(
-            &hap, &gen, &pool, 30.0, 0.5, false, "ev0002", &mut rng_b,
+            &hap, None, &gen, &pool, 30.0, 0.5, false, "ev0002", &mut rng_b,
         );
 
         assert!(!pairs_a.is_empty());
@@ -1109,7 +1129,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(7);
 
         let pairs = tile_haplotype_reads(
-            &hap, &gen, &pool, 30.0, 0.5, false, "sv", &mut rng,
+            &hap, None, &gen, &pool, 30.0, 0.5, false, "sv", &mut rng,
         );
 
         assert!(
@@ -1186,7 +1206,7 @@ mod tests {
 
         // breakpoint_only=false for full tandem model
         let pairs = tile_haplotype_reads(
-            &hap, &gen, &pool, 30.0, 0.5, false, "dup", &mut rng,
+            &hap, None, &gen, &pool, 30.0, 0.5, false, "dup", &mut rng,
         );
         assert!(!pairs.is_empty(), "Should produce reads from full tandem haplotype");
 
@@ -1273,7 +1293,7 @@ mod tests {
         // Pool: 200 pairs spread across [0, 5000) so reads land before, inside, and after deletion.
         let pool = make_covering_pool(0, 5000, 200);
         let config = make_config();
-        let mut gen = mock_synth_gen(150);
+        let gen = mock_synth_gen(150);
         let mut rng = StdRng::seed_from_u64(42);
 
         let event = SimEvent::Deletion {
@@ -1285,7 +1305,7 @@ mod tests {
             allele_fraction: Some(0.5),
         };
 
-        let out = simulate_event(1, &event, &pool, &mut hap, &config, &mut gen, 0.5, &mut rng)
+        let out = simulate_event(1, &event, &pool, &mut hap, &config, &gen, 0.5, &mut rng)
             .expect("simulate_event should succeed for DEL");
 
         // Reads inside the deletion should be suppressed at ~50%.
@@ -1344,7 +1364,7 @@ mod tests {
         // Pool: 100 pairs near the breakpoint region.
         let pool = make_covering_pool(8000, 11000, 100);
         let config = make_config();
-        let mut gen = mock_synth_gen(150);
+        let gen = mock_synth_gen(150);
         let mut rng = StdRng::seed_from_u64(99);
 
         let event = SimEvent::Fusion {
@@ -1358,7 +1378,7 @@ mod tests {
             allele_fraction: Some(0.05),
         };
 
-        let out = simulate_event(2, &event, &pool, &mut hap, &config, &mut gen, 0.05, &mut rng)
+        let out = simulate_event(2, &event, &pool, &mut hap, &config, &gen, 0.05, &mut rng)
             .expect("simulate_event should succeed for Fusion");
 
         // Fusion is additive: no reads are suppressed.
@@ -1410,7 +1430,7 @@ mod tests {
 
         let out = simulate_event(
             1, &del_event(1000, 3000), &pool, &mut hap, &make_config(),
-            &mut mock_synth_gen(150), 0.2, &mut rng,
+            &mock_synth_gen(150), 0.2, &mut rng,
         )
         .unwrap();
 
@@ -1434,7 +1454,7 @@ mod tests {
 
         let out = simulate_event(
             1, &del_event(1000, 3000), &pool, &mut hap, &make_config(),
-            &mut mock_synth_gen(150), 0.2, &mut rng,
+            &mock_synth_gen(150), 0.2, &mut rng,
         )
         .unwrap();
 
@@ -1457,7 +1477,7 @@ mod tests {
 
         let out = simulate_event(
             1, &del_event(2000, 4000), &pool, &mut hap, &make_config(),
-            &mut mock_synth_gen(150), 0.2, &mut rng,
+            &mock_synth_gen(150), 0.2, &mut rng,
         )
         .unwrap();
 
@@ -1485,7 +1505,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(3);
 
         let out = simulate_event(
-            1, &event, &pool, &mut hap, &make_config(), &mut mock_synth_gen(150), 0.2, &mut rng,
+            1, &event, &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.2, &mut rng,
         )
         .unwrap();
 
@@ -1504,6 +1524,201 @@ mod tests {
             with_insert,
             n
         );
+    }
+
+    // ---------------------------------------------------------------
+    // The sample's two copies
+    // ---------------------------------------------------------------
+
+    /// Copies over chr1 [start, end): the event copy carries `event_base` and
+    /// the other copy `other_base` at every position.
+    fn uniform_copies(
+        start: u64,
+        end: u64,
+        event_base: u8,
+        other_base: u8,
+        read_copy: HashMap<String, bool>,
+    ) -> Vec<(String, loh::SampleCopies)> {
+        vec![(
+            "chr1".to_string(),
+            loh::SampleCopies {
+                event_copy: (start..end).map(|p| (p, event_base)).collect(),
+                other_copy: (start..end).map(|p| (p, other_base)).collect(),
+                read_copy,
+            },
+        )]
+    }
+
+    /// Count pairs whose R1 is mostly G (event copy) and mostly C (other copy).
+    fn count_by_copy(pairs: &[&ReadPair]) -> (usize, usize) {
+        let mostly = |p: &ReadPair, b: u8| p.seq1.iter().filter(|&&x| x == b).count() * 2 > p.seq1.len();
+        (
+            pairs.iter().filter(|p| mostly(p, b'G')).count(),
+            pairs.iter().filter(|p| mostly(p, b'C')).count(),
+        )
+    }
+
+    #[test]
+    fn test_flank_reads_are_removed_by_copy() {
+        // DEL [1000,3000) with 1 kb flanks: footprint [0,4000). All pairs sit
+        // in the left flank, outside the deletion itself. At VAF 0.3 the
+        // event copy's reads go at 0.6, the other copy's stay, and reads of
+        // unknown copy go at 0.3.
+        let mut pairs = Vec::new();
+        let mut read_copy = HashMap::new();
+        for i in 0..600 {
+            let name = match i % 3 {
+                0 => format!("ev_{}", i),
+                1 => format!("ot_{}", i),
+                _ => format!("un_{}", i),
+            };
+            if i % 3 < 2 {
+                read_copy.insert(name.clone(), i % 3 == 0);
+            }
+            pairs.push(make_pair(&name, 100, 500));
+        }
+        let copies = vec![(
+            "chr1".to_string(),
+            loh::SampleCopies { read_copy, ..Default::default() },
+        )];
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let out = simulate_event_with_copies(
+            1, &del_event(1000, 3000), &make_pool(pairs), &mut del_haplotype(1000, 2000),
+            &make_config(), &mock_synth_gen(150), 0.3, &copies, &mut rng,
+        )
+        .unwrap();
+
+        let rate = |prefix: &str| {
+            out.suppressed_names.iter().filter(|n| n.starts_with(prefix)).count() as f64 / 200.0
+        };
+        assert!((rate("ev_") - 0.6).abs() < 0.1, "event copy removed at {:.2}", rate("ev_"));
+        assert_eq!(rate("ot_"), 0.0, "other copy must stay below VAF 0.5");
+        assert!((rate("un_") - 0.3).abs() < 0.1, "unknown copy removed at {:.2}", rate("un_"));
+    }
+
+    #[test]
+    fn test_synthetic_reads_carry_event_copy_alleles() {
+        // Event copy: G everywhere, other copy: C. At VAF 0.5 every
+        // synthetic read comes from the event copy.
+        let copies = uniform_copies(0, 4000, b'G', b'C', HashMap::new());
+        let pool = make_covering_pool(0, 5000, 1000);
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let out = simulate_event_with_copies(
+            1, &del_event(1000, 3000), &pool, &mut del_haplotype(1000, 2000),
+            &make_config(), &mock_synth_gen(150), 0.5, &copies, &mut rng,
+        )
+        .unwrap();
+
+        let (event, other) = count_by_copy(&out.chimeric_pairs.iter().collect::<Vec<_>>());
+        assert_eq!(other, 0);
+        assert_eq!(event, out.chimeric_pairs.len(), "every synthetic read should carry G");
+    }
+
+    #[test]
+    fn test_synthetic_reads_above_half_vaf_come_from_both_copies() {
+        // At VAF 0.8 the other copy carries the event in 2·0.8 − 1 = 60% of
+        // cells, so it gives 0.5·0.6 / 0.8 = 37.5% of the synthetic reads.
+        let copies = uniform_copies(0, 4000, b'G', b'C', HashMap::new());
+        let pool = make_covering_pool(0, 5000, 1000);
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let out = simulate_event_with_copies(
+            1, &del_event(1000, 3000), &pool, &mut del_haplotype(1000, 2000),
+            &make_config(), &mock_synth_gen(150), 0.8, &copies, &mut rng,
+        )
+        .unwrap();
+
+        let (event, other) = count_by_copy(&out.chimeric_pairs.iter().collect::<Vec<_>>());
+        assert_eq!(event + other, out.chimeric_pairs.len());
+        let frac = other as f64 / (event + other) as f64;
+        assert!((frac - 0.375).abs() < 0.1, "other copy share {:.3}", frac);
+    }
+
+    #[test]
+    fn test_small_variant_keeps_its_own_allele() {
+        // SNV A>T at 1000. The sample's copies carry G at every position,
+        // including 1000; the simulated allele must win there.
+        let alt = HaplotypeSegment {
+            sequence: vec![b'T'],
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: 1000,
+                ref_end: 1001,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        };
+        let mut hap = make_haplotype(vec![ref_segment(0, 1000), alt, ref_segment(1001, 1000)]);
+        let event = SimEvent::SmallVariant {
+            chrom: "chr1".to_string(),
+            pos: 1000,
+            ref_allele: b"A".to_vec(),
+            alt_allele: b"T".to_vec(),
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.5),
+        };
+        let copies = uniform_copies(0, 2001, b'G', b'C', HashMap::new());
+        let mut rng = StdRng::seed_from_u64(5);
+
+        simulate_event_with_copies(
+            1, &event, &make_covering_pool(0, 2001, 100), &mut hap, &make_config(),
+            &mock_synth_gen(150), 0.5, &copies, &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(hap.get_sequence(999, 3), b"GTG");
+    }
+
+    #[test]
+    fn test_junction_dup_depth_copies_carry_the_copied_reads_alleles() {
+        // Legacy junction model: each depth copy repeats an original pair of
+        // the DUP [2000,6000) and must carry that pair's copy's alleles.
+        let mut config = make_config();
+        config.dup_model = "junction".to_string();
+        let mut pairs = Vec::new();
+        let mut read_copy = HashMap::new();
+        for i in 0..300u64 {
+            let name = if i % 2 == 0 { format!("ev_{}", i) } else { format!("ot_{}", i) };
+            read_copy.insert(name.clone(), i % 2 == 0);
+            let start = 2100 + i * 10;
+            pairs.push(make_pair(&name, start, start + 400));
+        }
+        let pool = make_pool(pairs);
+        let copies = uniform_copies(0, 10_000, b'G', b'C', read_copy);
+        let event = SimEvent::Duplication {
+            chrom: "chr1".to_string(),
+            dup_start: 2000,
+            dup_end: 6000,
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.75),
+        };
+        // Junction haplotype: ref [4000,6000) then ref [2000,4000).
+        let mut hap = make_haplotype(vec![ref_segment(4000, 2000), ref_segment(2000, 2000)]);
+        let mut rng = StdRng::seed_from_u64(5);
+
+        let out = simulate_event_with_copies(
+            1, &event, &pool, &mut hap, &config, &mock_synth_gen(150), 0.75, &copies,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Depth copy names end in the index of the original pair in the pool.
+        let original = |p: &ReadPair| -> String {
+            let i: usize = p.name.rsplit('_').next().unwrap().parse().unwrap();
+            pool.pairs[i].name.clone()
+        };
+        let depth: Vec<&ReadPair> =
+            out.chimeric_pairs.iter().filter(|p| p.name.contains("_dup_depth_")).collect();
+        let of_event: Vec<&ReadPair> =
+            depth.iter().copied().filter(|p| original(p).starts_with("ev_")).collect();
+        let of_other: Vec<&ReadPair> =
+            depth.iter().copied().filter(|p| original(p).starts_with("ot_")).collect();
+        // VAF 0.75: event copy's pairs copied at 1.0, the other's at 0.5.
+        assert!(of_event.len() > 100 && of_other.len() > 40, "{} / {}", of_event.len(), of_other.len());
+        assert_eq!(count_by_copy(&of_event), (of_event.len(), 0));
+        assert_eq!(count_by_copy(&of_other), (0, of_other.len()));
     }
 
     // ---------------------------------------------------------------
@@ -1564,7 +1779,7 @@ mod tests {
         // After combining, about half of them (VAF 0.5) must still be gone.
         let pool = make_covering_pool(0, 12000, 240); // 400 bp fragments every 50 bp
         let config = make_config();
-        let mut gen = mock_synth_gen(150);
+        let gen = mock_synth_gen(150);
         let mut rng = StdRng::seed_from_u64(7);
 
         let del = |start: u64, end: u64| SimEvent::Deletion {
@@ -1590,11 +1805,11 @@ mod tests {
         let mut hap_b = make_haplotype(vec![flank(6000, 7000), flank(9000, 10000)]);
 
         let out_a = simulate_event(
-            1, &del(1000, 3000), &pool, &mut hap_a, &config, &mut gen, 0.5, &mut rng,
+            1, &del(1000, 3000), &pool, &mut hap_a, &config, &gen, 0.5, &mut rng,
         )
         .unwrap();
         let out_b = simulate_event(
-            2, &del(7000, 9000), &pool, &mut hap_b, &config, &mut gen, 0.5, &mut rng,
+            2, &del(7000, 9000), &pool, &mut hap_b, &config, &gen, 0.5, &mut rng,
         )
         .unwrap();
 

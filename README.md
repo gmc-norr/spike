@@ -16,9 +16,9 @@ Real BAM/CRAM + Reference FASTA + Variant specs
     |  1. Extract read pairs      |  Real reads from the event region
     |  2. Learn quality           |  Markov chain Q score model from real data
     |  3. Build haplotype         |  Linear variant sequence from ordered segments
-    |  4. Suppress reads          |  Remove reads at VAF rate within SV boundaries
-    |  5. Tile synthetic          |  New reads across haplotype with learned Q profile
-    |  6. LOH simulation          |  Het SNPs -> hom for DELs; BAF shift for DUPs
+    |  4. Read sample's SNPs      |  Het + hom-alt SNPs, phased; pick the event copy
+    |  5. Suppress reads          |  Remove reads by copy within the haplotype footprint
+    |  6. Tile synthetic          |  New reads carrying their copy's alleles, learned Q
     +-----------------------------+
                   |
                   v
@@ -29,11 +29,11 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Variant haplotype model**: Every variant — from a single SNP to a multi-kilobase structural rearrangement — is represented as an ordered list of *segments*, each drawn from a reference region (possibly reverse-complemented) or from novel sequence. These segments are concatenated into a single linear haplotype sequence. Reads tiled uniformly across this linear sequence become automatically chimeric when they span a segment boundary. This single mechanism handles all SV types without any per-type breakpoint logic.
 
-**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are randomly suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top.
+**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top.
 
 **Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a first-order Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
 
-**LOH and allelic imbalance**: For heterozygous deletions, het SNPs within the deleted region become homozygous (only the surviving haplotype allele remains). For duplications, het SNPs shift from ~50/50 to ~33/67 allele balance. Het SNP positions are found via pileup (default) or from a pre-called gVCF.
+**The sample's two copies**: The event goes on one of the sample's two copies of the region. spike reads the sample's own SNPs around every event (het and hom-alt, via pileup or a pre-called gVCF), phases the het SNPs, and picks the event copy's haplotype. Original reads are removed by copy, and synthetic reads carry the alleles of the copy they come from. So SNPs in the flanks keep their allele balance and hom-alt SNPs stay hom-alt; a het deletion turns het SNPs inside it homozygous (LOH), and a het duplication shifts them to ~33/67. See [The sample's SNPs](#the-samples-snps).
 
 ## Supported variant types
 
@@ -249,9 +249,9 @@ spike --bam sample.cram --reference GRCh38.fasta \
 
 The `--reference` FASTA is required for CRAM decoding (it is also required for haplotype construction, so there is no extra burden). Both `.crai` and `.cram.crai` index conventions are supported.
 
-### LOH simulation with a gVCF
+### The sample's SNPs from a gVCF
 
-For more accurate haplotype-aware read suppression, provide a pre-called VCF (e.g., from DeepVariant) with het SNP genotypes:
+For more accurate haplotype-aware simulation, provide a pre-called VCF (e.g., from DeepVariant) with SNP genotypes:
 
 ```bash
 spike --bam sample.bam --reference GRCh38.fasta \
@@ -260,7 +260,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
   -o output/
 ```
 
-Without `--gvcf`, spike uses an automatic pileup approach to discover het SNPs. The gVCF approach is more accurate when calls are available.
+Without `--gvcf`, spike uses an automatic pileup approach to discover het and hom-alt SNPs. The gVCF approach is more accurate when calls are available, and a phased VCF also links SNPs that no read spans.
 
 ### Configurable aligner
 
@@ -425,7 +425,7 @@ Options:
       --samtools <PATH>            Path to samtools binary [default: samtools]
       --align                      Run alignment after FASTQ generation
       --indel-error-rate <RATE>    Indel error fraction [default: 0.0]
-      --gvcf <VCF>                 gVCF/VCF with het SNP calls for LOH simulation
+      --gvcf <VCF>                 gVCF/VCF with the sample's SNP calls (het, hom-alt, phase)
       --allow-overlap              Allow overlapping events (default: reject overlaps)
       --dup-model <MODEL>          Duplication model: "full" (default) or "junction"
 ```
@@ -440,7 +440,7 @@ simulate.rs      Read suppression + synthetic read tiling
 synth.rs         Quality-profiled synthetic read generation
 extract.rs       BAM/CRAM read pair extraction
 stats.rs         Fragment length distribution
-loh.rs           Loss of heterozygosity / allelic imbalance
+loh.rs           The sample's SNPs: two copies, phasing, read assignment
 exon.rs          Exon BED and event spec parsing
 vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND/SNP/indel)
 truth.rs         Truth VCF output
@@ -471,7 +471,7 @@ where `F` = flank size (default 10kb). The deleted region `[start, end)` is abse
 - Discordant read pairs spanning the deleted region (larger insert size than expected)
 - LOH at het SNP positions within the deletion (see LOH section)
 
-**Haplotype-aware suppression (LOH)**: For heterozygous deletions (VAF ~0.5), het SNPs within the deleted region are identified via pileup or gVCF. Reads are classified by haplotype based on which allele they carry at het SNP positions. Reads from the "deleted haplotype" are preferentially suppressed, and synthetic reads carry only the surviving haplotype's alleles. This produces realistic loss-of-heterozygosity: het SNPs become homozygous in the output.
+**Haplotype-aware suppression (LOH)**: Reads of the event copy are suppressed first (see [Read suppression details](#read-suppression-details)), so at VAF 0.5 every read of the deleted copy is gone inside the deletion: het SNPs there become homozygous in the output. In the flanks, the synthetic reads that replace the event copy's reads carry its alleles, so flank SNPs keep their balance.
 
 ### Tandem duplication (DUP)
 
@@ -510,14 +510,16 @@ This covers only the junction region where the end of the duplicated region meet
 **Simulation**: This model is additive — all original reads are kept. Two separate sets of synthetic reads are generated:
 
 1. **Junction reads**: Tiled across the 2-segment haplotype near the breakpoint. These produce split reads and discordant pairs at the E→S junction.
-2. **Depth copies**: For each real read pair overlapping the DUP region by >= 50% of its fragment length, a synthetic copy is generated (at rate = VAF) with new quality scores and error profile. When haplotype information is available (from het SNPs), copies are preferentially drawn from the duplicated haplotype:
-   - Variant haplotype reads: copied at rate `min(1, 2*VAF)`
-   - Other haplotype reads: copied at rate `max(0, 2*VAF - 1)`
-   - Unclassified reads: copied at rate `VAF`
+2. **Depth copies**: For each real read pair overlapping the DUP region by >= 50% of its fragment length, a synthetic copy is generated with new quality scores and error profile, at a rate set by the pair's copy:
+   - Event copy reads: copied at rate `min(1, 2*VAF)`
+   - Other copy reads: copied at rate `max(0, 2*VAF - 1)`
+   - Reads of unknown copy: copied at rate `VAF`
+
+   Each depth copy carries the alleles of the copy it repeats.
 
 This model is kept for backward compatibility but produces less naturally integrated results than the full model.
 
-**Allelic imbalance for DUPs**: For heterozygous duplications, one haplotype has 2 copies while the other has 1. Het SNPs shift from ~50/50 allele balance to ~33/67 (2:1 ratio). spike identifies het SNPs via pileup or gVCF, classifies reads by haplotype, and ensures synthetic reads carry the duplicated haplotype's alleles. This is applied in both models — in the full model, het SNP alleles are substituted directly into the haplotype sequence before tiling.
+**Allelic imbalance for DUPs**: For heterozygous duplications, one haplotype has 2 copies while the other has 1. Het SNPs shift from ~50/50 allele balance to ~33/67 (2:1 ratio), because the synthetic reads carry the duplicated copy's alleles. In the full model the alleles are written into the haplotype sequence before tiling; in the junction model, into each depth copy.
 
 ### Inversion (INV)
 
@@ -584,7 +586,7 @@ Works for all small variant types:
 
 For equal-length substitutions (SNPs/MNVs), the alt segment retains a reference origin mapping for correct coordinate translation. For indels, the alt segment has no reference origin.
 
-**Simulation**: Suppress-and-replace. Reads crossing the variant position carry the ALT allele; reads landing entirely in the flanks are unmodified reference.
+**Simulation**: Suppress-and-replace. Reads crossing the variant position carry the ALT allele; elsewhere they carry the sample's own alleles. The sample's alleles never overwrite the variant's own bases.
 
 **Observable signals**:
 - ALT allele at the expected frequency in pileup
@@ -597,19 +599,19 @@ The suppress-and-replace model classifies each original read pair relative to th
 | Relation | Behavior |
 |---|---|
 | **Outside** (both reads entirely outside footprint) | Always kept |
-| **Inside** (both reads entirely within footprint) | Suppressed at `P = VAF` |
+| **Inside** (both reads entirely within footprint) | Suppressed by copy (below) |
 | **Overlapping** (fragment straddles footprint boundary) | Always kept |
 
 Only pairs entirely inside the footprint are replaced, because synthetic fragments never extend past the haplotype ends either. Near an edge, both the suppressed and the synthetic depth taper off the same way, so total depth stays flat.
 
 Every event reports the names it suppressed, and a read suppressed by any event stays out of the output, even if a nearby event's pool also contains it.
 
-For haplotype-aware events (het DEL/DUP with VAF in [0.3, 0.7]), classified reads use LOH logic instead of random suppression:
-- **LOH-set reads** (deleted/duplicated haplotype): suppressed at `P = min(1, 2*VAF)`
-- **Other-haplotype reads**: suppressed at `P = max(0, 2*VAF - 1)`
-- **Unclassified reads** (no het SNP overlap): random at `P = VAF`
+Inside pairs are suppressed by the copy they come from (see [Read classification](#read-classification)), for every event type and VAF, in the flanks as well as the event:
+- **Event copy reads**: suppressed at `P = min(1, 2*VAF)`
+- **Other copy reads**: suppressed at `P = max(0, 2*VAF - 1)`
+- **Reads of unknown copy** (no het SNP, or a tie): suppressed at `P = VAF`
 
-At VAF=0.5, this suppresses all reads from one haplotype (~50% of total) and none from the other — correct LOH behavior.
+Averaged over both copies this is `VAF`. At VAF 0.5 it removes every read of the event copy and none of the other — correct LOH. Above 0.5 the event is on both copies in some cells.
 
 ## Synthetic read tiling
 
@@ -622,21 +624,25 @@ The number of synthetic reads to tile is:
 
 Fragment lengths are sampled from the empirical distribution of the donor reads. Each fragment is placed at a random position on the haplotype and a read pair (R1 forward from start, R2 reverse from end) is synthesized with quality scores from the learned Markov model.
 
+Each fragment comes from one of the sample's copies and carries its alleles. Up to VAF 0.5 all fragments come from the event copy. Above 0.5 the other copy gives `max(0, 2*VAF - 1) / (2*VAF)` of them, matching what was suppressed from it.
+
 For additive events, fragment placement is restricted to positions that cross a segment boundary (breakpoint). For non-additive events, placement is uniform across the haplotype, with rejection sampling to avoid placing fragments entirely within novel (non-reference) sequence.
 
-## Het SNP discovery and haplotype classification
+## The sample's SNPs
 
-spike identifies heterozygous SNP positions within SV regions to enable haplotype-aware read handling. Two strategies are supported:
+For every event, spike reads the sample's SNPs over the haplotype's whole reference footprint (event ± 2 kb; each side of a fusion separately), at every VAF. Het SNPs are phased and assign reads to copies; het and hom-alt alleles go into the synthetic reads. Two strategies are supported:
 
 ### Pileup (default)
 
-A single-pass pileup is performed over the SV region. At each position, allele counts (A/C/G/T) are tallied across all reads (MAPQ >= threshold, excluding secondary/supplementary/duplicate/QC-fail). Positions with >= 10 total reads and two alleles each between 20%-80% frequency are called as het SNPs.
+A pileup counts the bases (A/C/G/T) at each position (MAPQ >= threshold, excluding secondary/supplementary/duplicate/QC-fail). Positions with >= 10 reads are called:
+- **het**: two alleles each at 20%-80%,
+- **hom-alt**: one allele at >= 90% that differs from the reference.
 
-During the same pass, per-read allele observations are recorded, so no second BAM pass is needed for classification.
+A second pass records each fragment's bases at the het SNPs only, so memory grows with the number of het SNPs, not with the region's size.
 
 ### gVCF (optional, `--gvcf`)
 
-Het SNP positions are loaded from a pre-called VCF (e.g., DeepVariant gVCF). Only biallelic SNPs with heterozygous genotype (0/1 or 1/0) are used. A single BAM pass then records which allele each read carries at these known positions. Phased genotypes (`0|1`, `1|0`, with an optional `PS` phase set) are used for phasing (below); a phased VCF such as a GIAB/T2T benchmark gives the most realistic LOH.
+SNPs are loaded from a pre-called VCF (e.g., DeepVariant gVCF): het (`0/1`, `1/0`) and hom-alt (`1/1`) biallelic SNPs. A het SNP whose base a deletion on the other haplotype removes (a carried deletion allele, or ALT `*`) has no copy carrying REF, so it counts as hom-alt. A BAM pass then records which allele each read carries at the het SNPs. Phased genotypes (`0|1`, `1|0`, with an optional `PS` phase set) are used for phasing (below); a phased VCF such as a GIAB/T2T benchmark gives the most realistic result. If the gVCF has no het SNPs in the region, spike falls back to pileup.
 
 ### Phasing
 
@@ -645,11 +651,11 @@ A deletion or duplication affects one whole haplotype, so every het SNP in it mu
 - SNPs in the same phase set of a phased gVCF are linked outright.
 - Otherwise, SNPs are linked by fragments (mates pooled) that cover two or more of them; links are joined strongest first, and a link that contradicts stronger ones is ignored.
 
-One coin flip per block picks the "target" haplotype. SNPs that no read or phase set links (usually more than a fragment length apart) form separate blocks and get their own coin flip; with short reads alone their relative phase is unknown.
+One coin flip per block picks the event copy's haplotype. SNPs that no read or phase set links (usually more than a fragment length apart) form separate blocks and get their own coin flip; with short reads alone their relative phase is unknown.
 
 ### Read classification
 
-Each fragment is scored by how many het SNPs show the target vs. the other haplotype's allele. More target matches → target set; more other matches → other set. Ties, and fragments covering no het SNP, stay unclassified and fall back to random handling at the VAF rate.
+Each fragment is scored by how many het SNPs show the event copy's vs. the other copy's allele. More event-copy matches → event copy; more other matches → other copy. Ties, and fragments covering no het SNP, stay unclassified and fall back to random handling at the VAF rate.
 
 ## Quality profile
 

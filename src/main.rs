@@ -406,7 +406,7 @@ fn main() -> Result<()> {
         // Build quality profile and synth generator.
         let quality_profile =
             synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
-        let mut synth_gen = synth::SynthReadGenerator::new(
+        let synth_gen = synth::SynthReadGenerator::new(
             quality_profile,
             &shared_ref,
             config.read_length,
@@ -424,7 +424,7 @@ fn main() -> Result<()> {
             &pool,
             &mut haplotype,
             &config,
-            &mut synth_gen,
+            &synth_gen,
             vaf,
             &mut rng,
         )?;

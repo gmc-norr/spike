@@ -16,6 +16,7 @@ use rand::Rng;
 
 use crate::extract::reverse_complement;
 use crate::haplotype::VariantHaplotype;
+use crate::loh::SampleCopies;
 use crate::reference::SharedReference;
 use crate::stats::FragmentDist;
 use crate::types::{ReadPair, ReadPool};
@@ -318,16 +319,10 @@ impl QualityProfile {
 }
 
 /// Generates synthetic reads from reference sequence + learned quality profile.
-///
-/// When `haplotype_variants` is populated, synthetic reads carry the duplicated
-/// haplotype's alleles at het SNP positions, producing correct BAF (2:1 ratio).
 pub struct SynthReadGenerator<'a> {
     profile: QualityProfile,
     reference: &'a SharedReference,
     read_length: usize,
-    /// Het SNP positions → allele on the duplicated haplotype.
-    /// Synthetic reads substitute these bases instead of reference.
-    haplotype_variants: HashMap<u64, u8>,
     /// Fraction of sequencing errors that are indels (vs substitutions).
     /// 0.0 = substitution-only (default), ~0.05 = typical Illumina.
     indel_error_rate: f64,
@@ -344,7 +339,6 @@ impl<'a> SynthReadGenerator<'a> {
             profile,
             reference,
             read_length,
-            haplotype_variants: HashMap::new(),
             indel_error_rate,
         }
     }
@@ -354,18 +348,15 @@ impl<'a> SynthReadGenerator<'a> {
         self.read_length
     }
 
-    /// Set the haplotype variant map for correct BAF in duplications.
-    pub fn set_haplotype_variants(&mut self, variants: HashMap<u64, u8>) {
-        if !variants.is_empty() {
-            log::info!(
-                "SynthReadGenerator: {} het SNP positions will carry haplotype alleles",
-                variants.len(),
-            );
-        }
-        self.haplotype_variants = variants;
+    /// The reference this generator reads from.
+    pub fn reference(&self) -> &'a SharedReference {
+        self.reference
     }
 
     /// Generate a single synthetic read at a reference position.
+    ///
+    /// `alleles` maps reference position → the base of the sample copy the
+    /// read comes from; other positions take the reference base.
     ///
     /// Returns `(sequence, quality)` in forward-strand orientation relative to
     /// the reference. For read2 (reverse strand in BAM), the caller must
@@ -379,6 +370,7 @@ impl<'a> SynthReadGenerator<'a> {
         &self,
         chrom: &str,
         ref_start: u64,
+        alleles: &HashMap<u64, u8>,
         read_num: u8,
         reverse_cycles: bool,
         rng: &mut StdRng,
@@ -404,11 +396,7 @@ impl<'a> SynthReadGenerator<'a> {
             let ref_base = ref_seq[ref_idx].to_ascii_uppercase();
 
             let genomic_pos = ref_start + ref_idx as u64;
-            let true_base = self
-                .haplotype_variants
-                .get(&genomic_pos)
-                .copied()
-                .unwrap_or(ref_base);
+            let true_base = alleles.get(&genomic_pos).copied().unwrap_or(ref_base);
 
             let qual_cycle = if reverse_cycles { rl - 1 - c } else { c };
             let profile_base = if reverse_cycles {
@@ -478,12 +466,13 @@ impl<'a> SynthReadGenerator<'a> {
     ///
     /// R1 is forward-strand at `frag_start`. R2 is reverse-strand at
     /// `frag_start + frag_len - read_length`, stored in FASTQ orientation
-    /// (reverse-complemented).
+    /// (reverse-complemented). Both reads carry `alleles` (see `generate_read`).
     pub fn generate_read_pair(
         &self,
         chrom: &str,
         frag_start: u64,
         frag_len: u64,
+        alleles: &HashMap<u64, u8>,
         name: &str,
         rng: &mut StdRng,
     ) -> Option<ReadPair> {
@@ -495,11 +484,11 @@ impl<'a> SynthReadGenerator<'a> {
         let r2_start = frag_start + frag_len - rl;
 
         // Generate R1 (forward strand).
-        let (seq1, qual1) = self.generate_read(chrom, frag_start, 1, false, rng);
+        let (seq1, qual1) = self.generate_read(chrom, frag_start, alleles, 1, false, rng);
 
         // Generate R2 (reverse strand) — generate forward then revcomp for FASTQ.
         // reverse_cycles=true so quality profile cycles align after qual2.reverse().
-        let (mut seq2, mut qual2) = self.generate_read(chrom, r2_start, 2, true, rng);
+        let (mut seq2, mut qual2) = self.generate_read(chrom, r2_start, alleles, 2, true, rng);
         reverse_complement(&mut seq2);
         qual2.reverse();
 
@@ -524,6 +513,7 @@ impl<'a> SynthReadGenerator<'a> {
         &self,
         chrom: &str,
         original: &ReadPair,
+        alleles: &HashMap<u64, u8>,
         name: &str,
         frag_dist: &FragmentDist,
         rng: &mut StdRng,
@@ -537,20 +527,21 @@ impl<'a> SynthReadGenerator<'a> {
         let jitter = rng.gen_range(-20i64..=20);
         let new_start = (original.ref_start as i64 + jitter).max(0) as u64;
 
-        self.generate_read_pair(chrom, new_start, new_frag, name, rng)
+        self.generate_read_pair(chrom, new_start, new_frag, alleles, name, rng)
     }
 
     /// Generate synthetic depth-copy pairs for a duplication region.
     ///
     /// For each original pair that overlaps [dup_start, dup_end) by at least 50%
-    /// of its fragment length, either uses haplotype information (if available)
-    /// or random selection at VAF rate to decide which pairs get a synthetic
-    /// depth copy.
+    /// of its fragment length, decides by the pair's copy whether it gets a
+    /// synthetic depth copy:
+    /// - event copy → at rate min(1, 2·vaf),
+    /// - other copy → at rate max(0, 2·vaf − 1),
+    /// - unknown copy → at rate vaf.
     ///
-    /// When haplotype info is available:
-    /// - Classified reads in `hap_set` → always copy (target haplotype).
-    /// - Classified reads NOT in `hap_set` → never copy (other haplotype).
-    /// - Unclassified reads (not in `classified_set`) → randomly copy at VAF rate.
+    /// A depth copy carries the alleles of the copy it repeats. One of unknown
+    /// copy comes from the event copy with the event copy's share of the
+    /// added reads, min(1, 2·vaf) / (2·vaf).
     #[allow(clippy::too_many_arguments)]
     pub fn generate_dup_depth_copies(
         &self,
@@ -558,12 +549,11 @@ impl<'a> SynthReadGenerator<'a> {
         dup_start: u64,
         dup_end: u64,
         vaf: f64,
-        hap_set: &std::collections::HashSet<String>,
-        classified_set: &std::collections::HashSet<String>,
+        sample: &SampleCopies,
         name_prefix: &str,
         rng: &mut StdRng,
     ) -> Vec<ReadPair> {
-        let use_hap = !hap_set.is_empty();
+        let p_event_copy = if vaf > 0.5 { 1.0 / (2.0 * vaf) } else { 1.0 };
         let mut copies = Vec::new();
 
         for (i, pair) in pool.pairs.iter().enumerate() {
@@ -581,28 +571,17 @@ impl<'a> SynthReadGenerator<'a> {
                 continue; // less than 50% inside the DUP region
             }
 
-            let should_copy = if use_hap {
-                if classified_set.contains(&pair.name) {
-                    if hap_set.contains(&pair.name) {
-                        // Variant haplotype: copy at rate min(1, 2*vaf).
-                        // At VAF=0.5 this copies all hap reads (50% of total).
-                        // At VAF=0.3 this copies 60% of hap reads (30% of total).
-                        rng.gen::<f64>() < (2.0 * vaf).min(1.0)
-                    } else {
-                        // Other haplotype: only copy when VAF > 0.5.
-                        rng.gen::<f64>() < (2.0 * vaf - 1.0).max(0.0)
-                    }
-                } else {
-                    rng.gen::<f64>() < vaf
-                }
-            } else {
-                rng.gen::<f64>() < vaf
-            };
-
-            if should_copy {
+            let copy = sample.read_copy.get(&pair.name).copied();
+            if rng.gen::<f64>() < copy_rate(copy, vaf) {
+                // At VAF <= 0.5 all added reads are the event copy's: skip
+                // the draw so the random stream matches the simple case.
+                let on_event_copy =
+                    copy.unwrap_or_else(|| p_event_copy >= 1.0 || rng.gen::<f64>() < p_event_copy);
+                let alleles = if on_event_copy { &sample.event_copy } else { &sample.other_copy };
                 if let Some(synth) = self.generate_depth_pair(
                     &pair.chrom,
                     pair,
+                    alleles,
                     &format!("{}_dup_depth_{:06}", name_prefix, i),
                     &pool.frag_dist,
                     rng,
@@ -763,6 +742,17 @@ impl<'a> SynthReadGenerator<'a> {
             insert_size: frag_len as i64,
             chrom,
         })
+    }
+}
+
+/// Rate at which an original pair is replaced (or, for depth copies, repeated)
+/// given its copy: event copy min(1, 2·vaf), other copy max(0, 2·vaf − 1),
+/// unknown copy vaf. Averaged over both copies this is vaf.
+pub fn copy_rate(copy: Option<bool>, vaf: f64) -> f64 {
+    match copy {
+        Some(true) => (2.0 * vaf).min(1.0),
+        Some(false) => (2.0 * vaf - 1.0).max(0.0),
+        None => vaf,
     }
 }
 

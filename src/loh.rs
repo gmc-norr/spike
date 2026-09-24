@@ -1,16 +1,21 @@
-//! Haplotype-aware simulation for heterozygous SVs.
+//! Haplotype-aware simulation: the sample has two copies of every region, and
+//! an event goes on one of them.
 //!
-//! **Deletions (LOH)**: one haplotype is removed. Het SNPs within the deletion
-//! become homozygous (only the surviving allele remains). Reads from the deleted
-//! haplotype are suppressed.
+//! [`sample_copies`] finds the sample's SNPs around an event, phases the het
+//! SNPs into blocks and picks, per block, the haplotype of the copy that gets
+//! the event. The caller then:
+//! - removes original reads by copy: the event copy's reads first, and the
+//!   other copy's only above VAF 0.5, and
+//! - gives synthetic reads the alleles of the copy they come from. Hom-alt
+//!   SNPs are on both copies.
 //!
-//! **Duplications (allelic imbalance)**: one haplotype is duplicated. Het SNPs
-//! shift from 50/50 to ~33/67 (2:1 ratio). Depth copies are drawn preferentially
-//! from the duplicated haplotype.
+//! So a het deletion turns het SNPs inside it homozygous (LOH), a het
+//! duplication shifts them to 2:1, and SNPs in the flanks keep their balance.
 //!
-//! Two strategies for finding het SNP positions:
-//! 1. **Pileup** (default): manual pileup to find positions with ~50/50 allele split
-//! 2. **gVCF** (optional): extract het SNPs from a pre-called VCF (e.g., DeepVariant)
+//! Two ways to find SNPs:
+//! 1. **Pileup** (default): count the bases reads show at each position.
+//! 2. **gVCF** (optional): het and hom-alt SNPs from a pre-called VCF
+//!    (e.g., DeepVariant). Phased genotypes also link SNPs into blocks.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -21,11 +26,119 @@ use noodles::sam::alignment::record::Cigar as CigarTrait;
 use rand::rngs::StdRng;
 use rand::Rng;
 
-/// Return type for haplotype identification: (target_set, classified_set, haplotype_variants).
-type HaplotypeResult = (HashSet<String>, HashSet<String>, HashMap<u64, u8>);
+/// The sample's two copies of a region: the alleles each carries, and which
+/// copy each original fragment came from.
+#[derive(Debug, Default)]
+pub struct SampleCopies {
+    /// Alleles on the copy that gets the event: one haplotype per phase
+    /// block at het SNPs, plus the hom-alt SNPs.
+    pub event_copy: HashMap<u64, u8>,
+    /// Alleles on the other copy: the other het alleles, plus the hom-alt SNPs.
+    pub other_copy: HashMap<u64, u8>,
+    /// Fragments assigned to a copy: name → true when on the event copy.
+    /// Fragments that cover no het SNP, or tie, are left out.
+    pub read_copy: HashMap<String, bool>,
+}
 
-/// Return type for pileup: (het_snps, optional per-read alleles).
-type PileupResult = (Vec<HetSnp>, Option<HashMap<String, Vec<(u64, u8)>>>);
+/// SNPs found in a region.
+#[derive(Debug, Default)]
+struct RegionSnps {
+    het: Vec<HetSnp>,
+    /// Hom-alt SNPs: position → alt allele.
+    hom_alt: HashMap<u64, u8>,
+    /// Positions deleted on some haplotype: by a deletion allele it carries,
+    /// or marked `*`.
+    spanned: HashSet<u64>,
+}
+
+impl RegionSnps {
+    /// A het SNP whose base another haplotype deletes has no copy carrying
+    /// REF: both copies get ALT (a copy can't hold a deletion), so make it
+    /// hom-alt.
+    fn fold_spanning_deletions(&mut self) {
+        let spanned = std::mem::take(&mut self.spanned);
+        let (over_deletion, het): (Vec<HetSnp>, Vec<HetSnp>) = std::mem::take(&mut self.het)
+            .into_iter()
+            .partition(|s| spanned.contains(&s.pos));
+        self.het = het;
+        for s in over_deletion {
+            self.hom_alt.insert(s.pos, s.allele2);
+        }
+    }
+}
+
+/// Call SNPs from pileup allele counts (A, C, G, T per position).
+///
+/// Het: the top two alleles each make up 20–80% of the reads. Hom-alt: one
+/// allele makes up at least 90% and differs from the reference.
+/// `ref_seq` holds the reference from `region_start`. Positions need 10 reads.
+fn call_snps(counts: &HashMap<u64, [u32; 4]>, region_start: u64, ref_seq: &[u8]) -> RegionSnps {
+    const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+    let mut snps = RegionSnps::default();
+
+    for (&pos, c) in counts {
+        let total: u32 = c.iter().sum();
+        if total < 10 {
+            continue;
+        }
+        let mut sorted: Vec<(u8, u32)> = BASES.iter().copied().zip(c.iter().copied()).collect();
+        sorted.sort_by_key(|&(_, n)| Reverse(n));
+        let f1 = sorted[0].1 as f64 / total as f64;
+        let f2 = sorted[1].1 as f64 / total as f64;
+
+        if (0.2..=0.8).contains(&f1) && (0.2..=0.8).contains(&f2) {
+            snps.het.push(HetSnp {
+                pos,
+                allele1: sorted[0].0,
+                allele2: sorted[1].0,
+                phase: None,
+            });
+        } else if f1 >= 0.9 {
+            let ref_base = pos
+                .checked_sub(region_start)
+                .and_then(|i| ref_seq.get(i as usize))
+                .map(|b| b.to_ascii_uppercase());
+            if matches!(ref_base, Some(r) if BASES.contains(&r) && r != sorted[0].0) {
+                snps.hom_alt.insert(pos, sorted[0].0);
+            }
+        }
+    }
+
+    snps.het.sort_by_key(|s| s.pos);
+    snps
+}
+
+/// Pick the event copy's haplotype (one coin per phase block), give the other
+/// copy the other het alleles, add hom-alts to both, and assign fragments.
+fn copies_from_snps(
+    het_snps: &[HetSnp],
+    hom_alt: &HashMap<u64, u8>,
+    read_alleles: &HashMap<String, Vec<(u64, u8)>>,
+    rng: &mut StdRng,
+) -> SampleCopies {
+    let mut event_copy = if het_snps.is_empty() {
+        HashMap::new()
+    } else {
+        pick_target_alleles(het_snps, read_alleles, rng)
+    };
+    let read_copy = classify_from_collected(&event_copy, read_alleles);
+    let mut other_copy: HashMap<u64, u8> = het_snps
+        .iter()
+        .map(|s| {
+            let other = if event_copy[&s.pos] == s.allele1 { s.allele2 } else { s.allele1 };
+            (s.pos, other)
+        })
+        .collect();
+    for (&pos, &alt) in hom_alt {
+        event_copy.insert(pos, alt);
+        other_copy.insert(pos, alt);
+    }
+    SampleCopies {
+        event_copy,
+        other_copy,
+        read_copy,
+    }
+}
 
 /// A heterozygous SNP position with its two alleles.
 #[derive(Debug)]
@@ -39,178 +152,91 @@ struct HetSnp {
     phase: Option<(String, bool)>,
 }
 
-/// Identify reads from one haplotype in a genomic region.
+/// Find the sample's SNPs in [region_start, region_end), pick the event
+/// copy's haplotype (one coin per phase block) and assign fragments to copies.
 ///
-/// Finds het SNPs in [region_start, region_end), phases them from reads that
-/// cover two or more, picks one haplotype per phase block as the "target",
-/// then classifies reads by which haplotype they carry.
-///
-/// Returns `(target_set, classified_set, haplotype_variants)`:
-/// - `target_set`: reads predominantly carrying the target allele.
-/// - `classified_set`: all reads that overlapped at least one het SNP.
-/// - `haplotype_variants`: position → target allele for variant substitution.
-///
-/// If no het SNPs are found, all sets are empty and the caller should fall
-/// back to random suppression.
+/// `ref_seq` is the reference over the region; pileup needs it to tell
+/// hom-alt from hom-ref. SNPs come from the gVCF when it has het SNPs here,
+/// otherwise from pileup. With no het SNPs, no fragment is assigned and the
+/// caller falls back to random suppression.
 #[allow(clippy::too_many_arguments)]
-fn identify_haplotype_reads(
+pub fn sample_copies(
     alignment_path: &str,
     chrom: &str,
     region_start: u64,
     region_end: u64,
+    ref_seq: &[u8],
     min_mapq: u8,
     gvcf_path: Option<&str>,
     ref_path: Option<&str>,
-    label: &str,
     rng: &mut StdRng,
-) -> Result<HaplotypeResult> {
-    // Strategy 1: gVCF provides het SNP positions → classify reads from BAM (1 BAM pass).
-    // Strategy 2: pileup finds het SNPs AND records per-read alleles (1 BAM pass).
-    let (het_snps, read_alleles) = if let Some(gvcf) = gvcf_path {
-        let snps = load_het_snps_from_gvcf(gvcf, chrom, region_start, region_end)?;
-        if snps.is_empty() {
-            log::info!("{}: no het SNPs from gVCF, trying pileup fallback", label);
-            pileup_and_collect(
+) -> Result<SampleCopies> {
+    let from_gvcf = match gvcf_path {
+        Some(gvcf) => {
+            let snps = load_snps_from_gvcf(gvcf, chrom, region_start, region_end)?;
+            if snps.het.is_empty() {
+                log::info!("no het SNPs from gVCF, trying pileup fallback");
+                None
+            } else {
+                Some(snps)
+            }
+        }
+        None => None,
+    };
+    let snps = match from_gvcf {
+        Some(snps) => snps,
+        None => {
+            let counts = count_alleles(
                 alignment_path,
                 chrom,
                 region_start,
                 region_end,
                 min_mapq,
-                ref_path,
-            )?
-        } else {
-            // gVCF gave us het SNPs; one BAM/CRAM pass collects read alleles.
-            let positions: HashSet<u64> = snps.iter().map(|s| s.pos).collect();
-            let alleles = collect_snp_alleles(
-                alignment_path,
-                chrom,
-                region_start,
-                region_end,
-                min_mapq,
-                &positions,
                 ref_path,
             )?;
-            (snps, Some(alleles))
+            call_snps(&counts, region_start, ref_seq)
         }
+    };
+    log::info!(
+        "{}:{}-{}: {} het SNPs, {} hom-alt SNPs",
+        chrom,
+        region_start,
+        region_end,
+        snps.het.len(),
+        snps.hom_alt.len(),
+    );
+
+    // A second pass reads each fragment's bases at the het SNPs only.
+    let read_alleles = if snps.het.is_empty() {
+        HashMap::new()
     } else {
-        pileup_and_collect(
+        let positions: HashSet<u64> = snps.het.iter().map(|s| s.pos).collect();
+        collect_snp_alleles(
             alignment_path,
             chrom,
             region_start,
             region_end,
             min_mapq,
+            &positions,
             ref_path,
         )?
     };
-
-    if het_snps.is_empty() {
-        log::info!(
-            "{}: no het SNPs found in {}:{}-{}, falling back to random",
-            label,
-            chrom,
-            region_start,
-            region_end,
-        );
-        return Ok((HashSet::new(), HashSet::new(), HashMap::new()));
-    }
-
-    log::info!(
-        "{}: found {} het SNPs in {}:{}-{}",
-        label,
-        het_snps.len(),
-        chrom,
-        region_start,
-        region_end,
-    );
-
-    let read_alleles = read_alleles.unwrap_or_default();
-    let target_allele = pick_target_alleles(&het_snps, &read_alleles, rng);
-    let (target_set, classified_set) =
-        classify_from_collected(&target_allele, &read_alleles, label);
-    Ok((target_set, classified_set, target_allele))
+    Ok(copies_from_snps(&snps.het, &snps.hom_alt, &read_alleles, rng))
 }
 
-/// Identify reads from the "deleted haplotype" in a deletion region.
-///
-/// Returns `(target_set, classified_set)`:
-/// - `target_set`: read names that should be suppressed to simulate LOH.
-/// - `classified_set`: all reads that overlapped at least one het SNP.
-///   Reads NOT in `classified_set` couldn't be assigned and should fall back
-///   to random suppression at the VAF rate.
-///
-/// If no het SNPs are found, both sets are empty.
-#[allow(clippy::too_many_arguments)]
-pub fn identify_deleted_haplotype_reads(
-    alignment_path: &str,
-    chrom: &str,
-    del_start: u64,
-    del_end: u64,
-    min_mapq: u8,
-    gvcf_path: Option<&str>,
-    ref_path: Option<&str>,
-    rng: &mut StdRng,
-) -> Result<(HashSet<String>, HashSet<String>)> {
-    let (target_set, classified_set, _variants) = identify_haplotype_reads(
-        alignment_path,
-        chrom,
-        del_start,
-        del_end,
-        min_mapq,
-        gvcf_path,
-        ref_path,
-        "LOH-DEL",
-        rng,
-    )?;
-    Ok((target_set, classified_set))
-}
-
-/// Identify reads from the "duplicated haplotype" in a duplication region.
-///
-/// Returns `(target_set, classified_set, haplotype_variants)`:
-/// - `target_set`: reads from the haplotype that should be preferentially
-///   copied during depth increase, to create realistic allelic imbalance.
-/// - `classified_set`: all reads that overlapped at least one het SNP.
-///   Reads NOT in `classified_set` should fall back to random copying at VAF rate.
-/// - `haplotype_variants`: position → allele for het SNPs on the duplicated
-///   haplotype. Synthetic depth-copy reads should carry these alleles to
-///   produce correct BAF (2:1 ratio at het sites).
-#[allow(clippy::too_many_arguments)]
-pub fn identify_duplicated_haplotype_reads(
-    alignment_path: &str,
-    chrom: &str,
-    dup_start: u64,
-    dup_end: u64,
-    min_mapq: u8,
-    gvcf_path: Option<&str>,
-    ref_path: Option<&str>,
-    rng: &mut StdRng,
-) -> Result<HaplotypeResult> {
-    identify_haplotype_reads(
-        alignment_path,
-        chrom,
-        dup_start,
-        dup_end,
-        min_mapq,
-        gvcf_path,
-        ref_path,
-        "AI-DUP",
-        rng,
-    )
-}
-
-/// Load het SNP positions from a VCF/gVCF file.
+/// Load het and hom-alt SNPs from a VCF/gVCF file.
 ///
 /// For `.vcf.gz` files, uses `bcftools view -H -r region` for efficient
 /// indexed access. For plain `.vcf` files, reads and filters line by line.
-fn load_het_snps_from_gvcf(
+fn load_snps_from_gvcf(
     gvcf_path: &str,
     chrom: &str,
     region_start: u64,
     region_end: u64,
-) -> Result<Vec<HetSnp>> {
+) -> Result<RegionSnps> {
     // Determine sample index from header (defaults to first sample, index 9).
     let sample_col: usize = 9;
-    let mut het_snps = Vec::new();
+    let mut snps = RegionSnps::default();
     let mut first_other_chrom: Option<String> = None;
 
     if gvcf_path.ends_with(".gz") {
@@ -235,7 +261,7 @@ fn load_het_snps_from_gvcf(
                 region_start,
                 region_end,
                 sample_col,
-                &mut het_snps,
+                &mut snps,
                 &mut first_other_chrom,
             );
         }
@@ -259,13 +285,13 @@ fn load_het_snps_from_gvcf(
                 region_start,
                 region_end,
                 sample_col,
-                &mut het_snps,
+                &mut snps,
                 &mut first_other_chrom,
             );
         }
     }
 
-    if het_snps.is_empty() {
+    if snps.het.is_empty() && snps.hom_alt.is_empty() {
         if let Some(other) = &first_other_chrom {
             log::warn!(
                 "gVCF '{}': no records found for chromosome '{}', \
@@ -279,8 +305,9 @@ fn load_het_snps_from_gvcf(
         }
     }
 
-    het_snps.sort_by_key(|s| s.pos);
-    Ok(het_snps)
+    snps.fold_spanning_deletions();
+    snps.het.sort_by_key(|s| s.pos);
+    Ok(snps)
 }
 
 /// Parse a single VCF/gVCF line and push any het SNP into `het_snps`.
@@ -290,7 +317,7 @@ fn parse_gvcf_line(
     region_start: u64,
     region_end: u64,
     sample_col: usize,
-    het_snps: &mut Vec<HetSnp>,
+    snps: &mut RegionSnps,
     first_other_chrom: &mut Option<String>,
 ) {
     if line.starts_with('#') {
@@ -323,6 +350,18 @@ fn parse_gvcf_line(
 
     let ref_allele = fields[3].as_bytes();
     let alt_field = fields[4];
+    let sample: Vec<&str> = fields[sample_col].split(':').collect();
+    let gt_field = sample.first().copied().unwrap_or("");
+
+    // Bases deleted on a haplotype: by a deletion allele it carries, or
+    // marked `*` (deleted by an upstream deletion).
+    for (i, alt) in alt_field.split(',').enumerate() {
+        let carried = gt_field.split(['/', '|']).any(|a| a == (i + 1).to_string());
+        let kept = if alt == "*" { 0 } else { alt.len() };
+        if carried && kept < ref_allele.len() {
+            snps.spanned.extend(pos + kept as u64..pos + ref_allele.len() as u64);
+        }
+    }
 
     // Handle multi-allelic: take the first ALT allele.
     let alt_allele = alt_field.split(',').next().unwrap_or(".").as_bytes();
@@ -336,8 +375,6 @@ fn parse_gvcf_line(
     }
 
     // Check genotype for heterozygosity.
-    let sample: Vec<&str> = fields[sample_col].split(':').collect();
-    let gt_field = sample.first().copied().unwrap_or("");
     let is_het =
         gt_field == "0/1" || gt_field == "1/0" || gt_field == "0|1" || gt_field == "1|0";
 
@@ -359,8 +396,12 @@ fn parse_gvcf_line(
         (ps, first_is_alt)
     });
 
+    if gt_field == "1/1" || gt_field == "1|1" {
+        snps.hom_alt.insert(pos, alt_allele[0].to_ascii_uppercase());
+    }
+
     if is_het {
-        het_snps.push(HetSnp {
+        snps.het.push(HetSnp {
             pos,
             allele1: ref_allele[0].to_ascii_uppercase(),
             allele2: alt_allele[0].to_ascii_uppercase(),
@@ -369,45 +410,34 @@ fn parse_gvcf_line(
     }
 }
 
-/// Single-pass pileup: find het SNPs AND collect per-read alleles.
-///
-/// Returns (het_snps, per_read_alleles). The per-read alleles map each read name
-/// to its observed bases at every position in the region, which is later filtered
-/// to het SNP positions during classification.
-fn pileup_and_collect(
+/// Count the bases (A, C, G, T) reads show at each position of
+/// [region_start, region_end).
+fn count_alleles(
     alignment_path: &str,
     chrom: &str,
     region_start: u64,
     region_end: u64,
     min_mapq: u8,
     ref_path: Option<&str>,
-) -> Result<PileupResult> {
+) -> Result<HashMap<u64, [u32; 4]>> {
     if crate::extract::is_cram(alignment_path) {
         let rp =
             ref_path.ok_or_else(|| anyhow::anyhow!("CRAM input requires a reference FASTA"))?;
-        pileup_and_collect_cram(
-            alignment_path,
-            chrom,
-            region_start,
-            region_end,
-            min_mapq,
-            rp,
-        )
+        count_alleles_cram(alignment_path, chrom, region_start, region_end, min_mapq, rp)
     } else {
-        pileup_and_collect_bam(alignment_path, chrom, region_start, region_end, min_mapq)
+        count_alleles_bam(alignment_path, chrom, region_start, region_end, min_mapq)
     }
 }
 
-/// BAM-specific pileup and allele collection.
-fn pileup_and_collect_bam(
+/// BAM pass of [`count_alleles`].
+fn count_alleles_bam(
     bam_path: &str,
     chrom: &str,
     region_start: u64,
     region_end: u64,
     min_mapq: u8,
-) -> Result<PileupResult> {
+) -> Result<HashMap<u64, [u32; 4]>> {
     let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
-    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
 
     let mut reader = noodles::bam::io::indexed_reader::Builder::default()
         .build_from_path(bam_path)
@@ -440,11 +470,6 @@ fn pileup_and_collect_bam(
             continue;
         }
 
-        let name = match record.name() {
-            Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
-            None => continue,
-        };
-
         let align_start = match record.alignment_start() {
             Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
             _ => continue,
@@ -453,32 +478,29 @@ fn pileup_and_collect_bam(
         let seq: Vec<u8> = record.sequence().iter().collect();
         let cigar = record.cigar();
 
-        walk_cigar_pileup(
+        walk_cigar_count(
             &seq,
             Box::new(cigar.iter()),
             align_start,
             region_start,
             region_end,
-            &name,
             &mut allele_counts,
-            &mut read_alleles,
         );
     }
 
-    Ok(find_het_snps(allele_counts, Some(read_alleles)))
+    Ok(allele_counts)
 }
 
-/// CRAM-specific pileup and allele collection.
-fn pileup_and_collect_cram(
+/// CRAM pass of [`count_alleles`].
+fn count_alleles_cram(
     cram_path: &str,
     chrom: &str,
     region_start: u64,
     region_end: u64,
     min_mapq: u8,
     ref_path: &str,
-) -> Result<PileupResult> {
+) -> Result<HashMap<u64, [u32; 4]>> {
     let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
-    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
 
     let repository = crate::extract::build_fasta_repository(ref_path)?;
 
@@ -518,11 +540,6 @@ fn pileup_and_collect_cram(
             continue;
         }
 
-        let name = match buf.name() {
-            Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
-            None => continue,
-        };
-
         let align_start = match buf.alignment_start() {
             Some(p) => usize::from(p).saturating_sub(1) as u64,
             None => continue,
@@ -531,25 +548,22 @@ fn pileup_and_collect_cram(
         let seq: Vec<u8> = buf.sequence().as_ref().to_vec();
         let cigar = buf.cigar();
 
-        walk_cigar_pileup(
+        walk_cigar_count(
             &seq,
             CigarTrait::iter(&cigar),
             align_start,
             region_start,
             region_end,
-            &name,
             &mut allele_counts,
-            &mut read_alleles,
         );
     }
 
-    Ok(find_het_snps(allele_counts, Some(read_alleles)))
+    Ok(allele_counts)
 }
 
-/// Walk CIGAR operations and collect allele counts + per-read alleles.
-/// Shared between BAM and CRAM pileup paths.
-#[allow(clippy::too_many_arguments)]
-fn walk_cigar_pileup(
+/// Walk CIGAR operations and count the bases in the region.
+/// Shared between BAM and CRAM passes.
+fn walk_cigar_count(
     seq: &[u8],
     cigar_ops: Box<
         dyn Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> + '_,
@@ -557,9 +571,7 @@ fn walk_cigar_pileup(
     align_start: u64,
     region_start: u64,
     region_end: u64,
-    name: &str,
     allele_counts: &mut HashMap<u64, [u32; 4]>,
-    read_alleles: &mut HashMap<String, Vec<(u64, u8)>>,
 ) {
     let mut ref_pos = align_start;
     let mut seq_pos = 0usize;
@@ -576,23 +588,14 @@ fn walk_cigar_pileup(
                 for i in 0..len {
                     let rp = ref_pos + i as u64;
                     if rp >= region_start && rp < region_end {
-                        if let Some(&base) = seq.get(seq_pos + i) {
-                            let base = base.to_ascii_uppercase();
-                            let idx = match base {
-                                b'A' => Some(0),
-                                b'C' => Some(1),
-                                b'G' => Some(2),
-                                b'T' => Some(3),
-                                _ => None,
-                            };
-                            if let Some(idx) = idx {
-                                allele_counts.entry(rp).or_insert([0; 4])[idx] += 1;
-                                read_alleles
-                                    .entry(name.to_string())
-                                    .or_default()
-                                    .push((rp, base));
-                            }
-                        }
+                        let idx = match seq.get(seq_pos + i).map(|b| b.to_ascii_uppercase()) {
+                            Some(b'A') => 0,
+                            Some(b'C') => 1,
+                            Some(b'G') => 2,
+                            Some(b'T') => 3,
+                            _ => continue,
+                        };
+                        allele_counts.entry(rp).or_insert([0; 4])[idx] += 1;
                     }
                 }
                 ref_pos += len as u64;
@@ -607,52 +610,6 @@ fn walk_cigar_pileup(
             Kind::HardClip | Kind::Pad => {}
         }
     }
-}
-
-/// Find het SNP positions from allele counts.
-/// Returns (het_snps, read_alleles).
-fn find_het_snps(
-    allele_counts: HashMap<u64, [u32; 4]>,
-    read_alleles: Option<HashMap<String, Vec<(u64, u8)>>>,
-) -> PileupResult {
-    let mut het_snps = Vec::new();
-
-    for (&pos, counts) in &allele_counts {
-        let total: u32 = counts.iter().sum();
-        if total < 10 {
-            continue;
-        }
-
-        let mut sorted: Vec<(u8, u32)> = [
-            (b'A', counts[0]),
-            (b'C', counts[1]),
-            (b'G', counts[2]),
-            (b'T', counts[3]),
-        ]
-        .iter()
-        .filter(|(_, c)| *c > 0)
-        .copied()
-        .collect();
-
-        sorted.sort_by_key(|&(_, c)| Reverse(c));
-
-        if sorted.len() >= 2 {
-            let f1 = sorted[0].1 as f64 / total as f64;
-            let f2 = sorted[1].1 as f64 / total as f64;
-
-            if (0.2..=0.8).contains(&f1) && (0.2..=0.8).contains(&f2) {
-                het_snps.push(HetSnp {
-                    pos,
-                    allele1: sorted[0].0,
-                    allele2: sorted[1].0,
-                    phase: None,
-                });
-            }
-        }
-    }
-
-    het_snps.sort_by_key(|s| s.pos);
-    (het_snps, read_alleles)
 }
 
 /// Phase het SNPs into blocks from fragments that cover two or more of them.
@@ -779,20 +736,16 @@ fn pick_target_alleles(
     targets
 }
 
-/// Classify reads using pre-collected per-read alleles (no extra BAM pass).
+/// Assign fragments to a copy by the het alleles they carry.
 ///
-/// Returns `(target_set, classified_set)`:
-/// - `target_set`: reads that predominantly carry the target allele (to suppress/copy).
-/// - `classified_set`: all reads that overlapped at least one het SNP (classifiable).
-///   Reads NOT in `classified_set` couldn't be assigned to either haplotype and
-///   should fall back to random suppression/copying at the VAF rate.
+/// Returns fragment name → true when it carries more target (event copy)
+/// alleles than other alleles. Fragments that cover no het SNP, or tie, are
+/// left out: they fall back to random suppression/copying at the VAF rate.
 fn classify_from_collected(
     target_allele: &HashMap<u64, u8>,
     read_alleles: &HashMap<String, Vec<(u64, u8)>>,
-    label: &str,
-) -> (HashSet<String>, HashSet<String>) {
-    let mut target_set = HashSet::new();
-    let mut classified_set = HashSet::new();
+) -> HashMap<String, bool> {
+    let mut read_copy = HashMap::new();
     let mut n_ambiguous = 0u32;
 
     for (name, alleles) in read_alleles {
@@ -817,22 +770,19 @@ fn classify_from_collected(
             n_ambiguous += 1;
             continue;
         }
-        classified_set.insert(name.clone());
-        if target_count > other_count {
-            target_set.insert(name.clone());
-        }
+        read_copy.insert(name.clone(), target_count > other_count);
     }
 
+    let n_target = read_copy.values().filter(|&&e| e).count();
     log::info!(
-        "{}: classified {} fragments ({} target hap, {} other); {} ambiguous ties left unclassified",
-        label,
-        classified_set.len(),
-        target_set.len(),
-        classified_set.len() - target_set.len(),
+        "classified {} fragments ({} event copy, {} other); {} ambiguous ties left unclassified",
+        read_copy.len(),
+        n_target,
+        read_copy.len() - n_target,
         n_ambiguous,
     );
 
-    (target_set, classified_set)
+    read_copy
 }
 
 /// Collect, per fragment (mates pooled by name), the base each read shows
@@ -1085,20 +1035,68 @@ mod tests {
         HetSnp { phase: Some((set.to_string(), first_is_allele2)), ..snp(pos) }
     }
 
-    fn gvcf_snp(line: &str) -> Vec<HetSnp> {
-        let mut snps = Vec::new();
+    fn gvcf_snps(line: &str) -> RegionSnps {
+        let mut snps = RegionSnps::default();
         parse_gvcf_line(line, "chr1", 0, 1_000_000, 9, &mut snps, &mut None);
         snps
     }
 
     #[test]
     fn test_gvcf_phase_is_read_from_genotype_and_ps() {
-        let with_ps = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT:GQ:PS\t1|0:50:77");
-        assert_eq!(with_ps[0].phase, Some(("77".to_string(), true)));
-        let no_ps = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1");
-        assert_eq!(no_ps[0].phase, Some((String::new(), false)));
-        let unphased = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0/1");
-        assert_eq!(unphased[0].phase, None);
+        let with_ps = gvcf_snps("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT:GQ:PS\t1|0:50:77");
+        assert_eq!(with_ps.het[0].phase, Some(("77".to_string(), true)));
+        let no_ps = gvcf_snps("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1");
+        assert_eq!(no_ps.het[0].phase, Some((String::new(), false)));
+        let unphased = gvcf_snps("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0/1");
+        assert_eq!(unphased.het[0].phase, None);
+    }
+
+    #[test]
+    fn test_gvcf_hom_alt_snps_are_kept() {
+        let unphased = gvcf_snps("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t1/1");
+        assert!(unphased.het.is_empty());
+        assert_eq!(unphased.hom_alt, [(100, b'G')].into());
+        let phased = gvcf_snps("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t1|1");
+        assert_eq!(phased.hom_alt, [(100, b'G')].into());
+    }
+
+    #[test]
+    fn test_gvcf_het_snp_over_a_spanning_deletion_counts_as_hom_alt() {
+        // One haplotype has the ALT base, the other has that base deleted.
+        // No copy carries REF, so reads must not get it: the SNP is treated
+        // as hom-alt. The deletion shows as ALT * (101) or as the deletion
+        // record itself (300-301).
+        let mut snps = RegionSnps::default();
+        for line in [
+            "chr1\t101\t.\tG\t*\t.\tPASS\t.\tGT\t1|0",
+            "chr1\t101\t.\tG\tC\t.\tPASS\t.\tGT\t0|1",
+            "chr1\t201\t.\tA\tT\t.\tPASS\t.\tGT\t0|1",
+            "chr1\t300\t.\tCG\tC\t.\tPASS\t.\tGT\t1|0",
+            "chr1\t301\t.\tG\tT\t.\tPASS\t.\tGT\t0|1",
+        ] {
+            parse_gvcf_line(line, "chr1", 0, 1_000_000, 9, &mut snps, &mut None);
+        }
+        snps.fold_spanning_deletions();
+        assert_eq!(snps.het.iter().map(|s| s.pos).collect::<Vec<_>>(), vec![200]);
+        assert_eq!(snps.hom_alt, [(100, b'C'), (300, b'T')].into());
+    }
+
+    #[test]
+    fn test_pileup_calls_het_and_hom_alt_snps() {
+        // Region starts at 1000; the reference there is all A.
+        let ref_seq = vec![b'A'; 10];
+        let counts: HashMap<u64, [u32; 4]> = [
+            (1001, [10, 0, 10, 0]), // het A/G
+            (1002, [0, 0, 0, 20]),  // hom-alt T
+            (1003, [1, 0, 19, 0]),  // hom-alt G, one error read
+            (1004, [20, 0, 0, 0]),  // hom-ref
+            (1005, [0, 0, 0, 5]),   // too shallow to call
+            (1006, [3, 0, 17, 0]),  // 85% G: neither het nor surely hom-alt
+        ]
+        .into();
+        let snps = call_snps(&counts, 1000, &ref_seq);
+        assert_eq!(snps.het.iter().map(|s| s.pos).collect::<Vec<_>>(), vec![1001]);
+        assert_eq!(snps.hom_alt, [(1002, b'T'), (1003, b'G')].into());
     }
 
     #[test]
@@ -1178,8 +1176,37 @@ mod tests {
         let target: HashMap<u64, u8> = [(100, b'A'), (200, b'G')].into();
         let reads: HashMap<String, Vec<(u64, u8)>> =
             [("tie".to_string(), frag(&[(100, b'A'), (200, b'A')]))].into();
-        let (target_set, classified) = classify_from_collected(&target, &reads, "test");
-        assert!(!target_set.contains("tie"));
-        assert!(!classified.contains("tie"));
+        let read_copy = classify_from_collected(&target, &reads);
+        assert!(!read_copy.contains_key("tie"));
+    }
+
+    #[test]
+    fn test_copies_carry_one_haplotype_each_plus_hom_alt() {
+        let snps = vec![snp(100), snp(200), snp(300)];
+        let hom_alt: HashMap<u64, u8> = [(250, b'T')].into();
+        let reads = linked_reads();
+        let h1 = (b'A', b'G', b'G');
+        let h2 = (b'G', b'A', b'A');
+        let mut seen_h1 = false;
+        for seed in 0..20 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let c = copies_from_snps(&snps, &hom_alt, &reads, &mut rng);
+            let event = (c.event_copy[&100], c.event_copy[&200], c.event_copy[&300]);
+            let other = (c.other_copy[&100], c.other_copy[&200], c.other_copy[&300]);
+            assert!(
+                (event, other) == (h1, h2) || (event, other) == (h2, h1),
+                "seed {}: event {:?}, other {:?}",
+                seed,
+                event,
+                other
+            );
+            seen_h1 |= event == h1;
+            // Both copies carry the hom-alt allele.
+            assert_eq!((c.event_copy[&250], c.other_copy[&250]), (b'T', b'T'));
+            // A fragment is on the event copy when it carries its haplotype.
+            assert_eq!(c.read_copy["h1a_0"], event == h1);
+            assert_eq!(c.read_copy["h2b_3"], event == h2);
+        }
+        assert!(seen_h1, "the event copy should sometimes be haplotype 1");
     }
 }

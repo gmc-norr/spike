@@ -33,7 +33,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | H5 | High | **Fixed.** Fusion / junction-DUP get 2× junction reads | `simulate.rs:337-341` |
 | H6 | High | **Fixed.** LOH allele chosen at random per SNP | `loh.rs:112-121` |
 | H7 | High | **Fixed.** Insertions ≥ ~500 bp yield almost no insert-carrying reads | `synth.rs:745-746` |
-| H8 | High | Synthetic reads lack the sample's own SNPs | `simulate.rs:77-80` |
+| H8 | High | **Fixed.** Synthetic reads lack the sample's own SNPs | `simulate.rs:77-80` |
 | M1 | Medium | **Fixed.** Allele fraction drifts at haplotype edges | `simulate.rs:123-130, 352, 437` |
 | M2 | Medium | **Fixed.** Short-insert libraries under-tiled | `simulate.rs:379` |
 | M3 | Medium | **Fixed** (rejected). `--flank` < 2000 leaves extra reads | `main.rs:379` |
@@ -49,7 +49,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M13 | Medium | All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
 | M14 | Medium | Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
 | M15 | Medium | CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
-| M16 | Medium | LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
+| M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
 
@@ -149,6 +149,8 @@ Hom-alt SNPs will look het. INV, INS and SNP events share the same code path.
 
 **Fix:** apply the sample's alleles (from pileup, on the correct haplotype) across the whole haplotype footprint. Or replace only reads that actually need to change.
 
+**Fixed:** every event reads the sample's het and hom-alt SNPs over its footprint, removes reads by copy, and gives synthetic reads their copy's alleles. Same runs (seed 1): 38411227 → 23/17, 38411969 → 12/15, 38427232 → 18/27. Hom-alt SNPs in INV, INS, DEL (VAF 0.8) and fusion footprints get 0 REF reads (before: e.g. 12/32, 18/18, 43/7).
+
 ## Medium severity
 
 ### M1 · Allele fraction drifts at haplotype edges
@@ -235,6 +237,7 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 `loh.rs:580-583` stores one `(u64, u8)` per aligned base per read.
 - 3 Mb DEL: 4.58 GB peak RSS with LOH vs 1.37 GB without. Arm-level events will run out of memory.
 - **Fix:** call het sites from counts first, then record read alleles only at those sites.
+- **Fixed** that way: 3 Mb DEL at 1.27 GB peak RSS, with SNPs read over the whole footprint.
 
 ### M17 · `scripts/validate_pipeline.sh` no longer runs
 - Step 3 aborts: the filtered truth has overlapping DELs, and the script doesn't pass `--allow-overlap` or filter them.

@@ -22,7 +22,7 @@ pub struct SegmentOrigin {
 }
 
 /// A segment of the variant haplotype.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HaplotypeSegment {
     /// Uppercase DNA sequence for this segment.
     pub sequence: Vec<u8>,
@@ -38,6 +38,7 @@ pub struct HaplotypeSegment {
 /// so that reads tiled near the edges form complete pairs. Reads landing fully
 /// within a single segment are normal reference reads; reads crossing segment
 /// boundaries are chimeric.
+#[derive(Clone)]
 pub struct VariantHaplotype {
     pub segments: Vec<HaplotypeSegment>,
     /// Total length of the linear haplotype (sum of all segment lengths).
@@ -573,22 +574,22 @@ impl VariantHaplotype {
         }
     }
 
-    /// Apply het SNP variants to the haplotype sequence.
+    /// Apply the sample's SNP alleles on `chrom` to the haplotype sequence.
     ///
-    /// `variants` maps reference position → alternate allele base (uppercase).
-    /// For each reference-origin segment, every base whose reference position
-    /// appears in the map is replaced with the alt allele. This ensures that
-    /// reads tiled across the haplotype carry the correct het SNP alleles
-    /// instead of reference-only bases.
-    pub fn apply_variants(&mut self, variants: &std::collections::HashMap<u64, u8>) {
+    /// `variants` maps reference position → allele base (uppercase). For each
+    /// segment from `chrom`, every base whose reference position appears in the
+    /// map is replaced with the allele (complemented in reversed segments). This
+    /// makes reads tiled across the haplotype carry the sample's alleles instead
+    /// of reference-only bases.
+    pub fn apply_variants(&mut self, chrom: &str, variants: &std::collections::HashMap<u64, u8>) {
         if variants.is_empty() {
             return;
         }
         let mut applied = 0usize;
         for seg in &mut self.segments {
             let origin = match &seg.origin {
-                Some(o) => o,
-                None => continue, // novel insertion — no reference positions
+                Some(o) if o.chrom == chrom => o,
+                _ => continue, // novel insertion, or another chromosome
             };
             let seg_len = seg.sequence.len() as u64;
             for offset in 0..seg_len {
@@ -1254,6 +1255,24 @@ mod tests {
 
     fn ref_pos(hap: &VariantHaplotype, hap_pos: u64) -> (String, u64) {
         hap.hap_to_ref(hap_pos).unwrap()
+    }
+
+    #[test]
+    fn test_apply_variants_changes_only_the_named_chromosome() {
+        // Two segments at the same positions on different chromosomes.
+        let seg = |chrom: &str| HaplotypeSegment {
+            sequence: b"AAAA".to_vec(),
+            origin: Some(SegmentOrigin {
+                chrom: chrom.to_string(),
+                ref_start: 100,
+                ref_end: 104,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        };
+        let mut hap = VariantHaplotype::from_segments(vec![seg("chrA"), seg("chrB")]);
+        hap.apply_variants("chrB", &[(101, b'G')].into());
+        assert_eq!(hap.get_sequence(0, 8), b"AAAAAGAA");
     }
 
     #[test]
