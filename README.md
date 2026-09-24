@@ -76,7 +76,8 @@ spike \
   -o output/
 
 # Output: output/R1.fq.gz, output/R2.fq.gz, output/truth.vcf, output/align.sh,
-#         output/events.bed, output/merge.sh, output/README.md
+#         output/events.bed, output/replaced_reads.txt, output/merge.sh,
+#         output/README.md
 ```
 
 ## Usage examples
@@ -313,13 +314,22 @@ bash output/align.sh /path/to/ref 8    # Override reference and thread count
 
 ### Merging into the original BAM
 
-After aligning, `merge.sh` substitutes the spiked reads back into the original BAM. Reads in the event regions (event ± flank) are replaced with the reads from `sim.bam`; all other reads are kept from the original:
+After aligning, `merge.sh` substitutes the spiked reads back into the original BAM:
 
 ```bash
 bash output/align.sh                              # Step 1: produce sim.bam
 bash output/merge.sh                              # Step 2: produce merged.bam (full genome)
 bash output/merge.sh /other.bam ref.fa 8          # Override original BAM, reference, and threads
 ```
+
+The originals to replace are named, not located. spike writes every read name it extracted to `replaced_reads.txt`, and `merge.sh` drops exactly those records (`samtools view -N`, so samtools >= 1.13 is required) before merging `sim.bam` in. Removing by name rather than by event region matters in both directions:
+
+- Records inside the event regions that spike never extracted — PCR duplicates, non-proper pairs, reads below `--min-mapq`, reads whose mate was filtered — are **kept**. Removing by region deleted them without putting anything back, which cost real depth.
+- Mates that lie outside the event regions but whose pair spike did extract are **removed**, because `sim.bam` carries their replacement. Removing by region left them in, so they appeared twice.
+
+Records spike extracted and then suppressed (the deleted copy of a heterozygous deletion, for instance) stay gone: that absence *is* the simulated variant.
+
+`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. Characters outside `[A-Za-z0-9._+@:-]` are replaced with `_` so the name is safe inside the generated `@RG` line.
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
 
@@ -387,6 +397,7 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
 | `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
+| `replaced_reads.txt` | Names of the originals spike extracted; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
 | `README.md` | Run log: command, events table, read counts, next-step instructions |

@@ -200,9 +200,105 @@ fn finalize_stats(
     Ok(stats)
 }
 
+/// Choose the sample name for the simulated read group from the `@RG` `SM`
+/// values of the original BAM, in header order.
+///
+/// Rule: the first read group that carries an `SM` wins. A BAM whose read
+/// groups disagree is already multi-sample; picking one keeps the merged BAM
+/// from gaining yet another sample, and the mismatch is logged. Characters
+/// that are not safe in a `@RG` line or in the generated shell scripts are
+/// replaced by `_`.
+fn pick_sample_name(rg_samples: &[String]) -> Option<String> {
+    let first = rg_samples.iter().find(|sm| !sm.is_empty())?;
+    if rg_samples.iter().any(|sm| !sm.is_empty() && sm != first) {
+        log::warn!(
+            "BAM read groups carry more than one SM; tagging simulated reads with the first ({})",
+            first,
+        );
+    }
+    let safe: String = first
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._+@:-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe != *first {
+        log::warn!("sample name {} rewritten to {} for the @RG line", first, safe);
+    }
+    Some(safe)
+}
+
+/// Read the sample name (`@RG` `SM`) of an alignment file, for reuse as the
+/// sample of the simulated read group.
+pub fn sample_name(alignment_path: &str, ref_path: Option<&str>) -> Result<Option<String>> {
+    use noodles::sam::header::record::value::map::read_group::tag;
+
+    let header = if crate::extract::is_cram(alignment_path) {
+        let rp = ref_path.ok_or_else(|| {
+            anyhow::anyhow!("CRAM input requires a reference FASTA (--reference)")
+        })?;
+        let repository = crate::extract::build_fasta_repository(rp)?;
+        noodles::cram::io::reader::Builder::default()
+            .set_reference_sequence_repository(repository)
+            .build_from_path(alignment_path)
+            .with_context(|| format!("Failed to open CRAM file: {}", alignment_path))?
+            .read_header()?
+    } else {
+        noodles::bam::io::reader::Builder
+            .build_from_path(alignment_path)
+            .with_context(|| format!("Failed to open BAM file: {}", alignment_path))?
+            .read_header()?
+    };
+
+    let rg_samples: Vec<String> = header
+        .read_groups()
+        .values()
+        .map(|rg| {
+            rg.other_fields()
+                .get(&tag::SAMPLE)
+                .map(|sm| String::from_utf8_lossy(sm).into_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    Ok(pick_sample_name(&rg_samples))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pick_sample_name_takes_the_first_read_group() {
+        assert_eq!(pick_sample_name(&[]), None);
+        assert_eq!(
+            pick_sample_name(&["HG002".to_string()]),
+            Some("HG002".to_string())
+        );
+        // Multi-sample BAM: the first @RG wins, deterministically.
+        assert_eq!(
+            pick_sample_name(&["NA18488".to_string(), "HG002".to_string()]),
+            Some("NA18488".to_string())
+        );
+        // An empty SM is not a sample name.
+        assert_eq!(
+            pick_sample_name(&[String::new(), "HG002".to_string()]),
+            Some("HG002".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_sample_name_strips_characters_unsafe_in_the_generated_scripts() {
+        // The name is interpolated into align.sh's -R '@RG\t...' argument.
+        assert_eq!(
+            pick_sample_name(&["HG'002 x".to_string()]),
+            Some("HG_002_x".to_string())
+        );
+    }
 
     #[test]
     fn test_stats_defaults() {

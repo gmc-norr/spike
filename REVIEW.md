@@ -38,7 +38,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M2 | Medium | **Fixed.** Short-insert libraries under-tiled | `simulate.rs:379` |
 | M3 | Medium | **Fixed** (rejected). `--flank` < 2000 leaves extra reads | `main.rs:379` |
 | M4 | Medium | Chromosome-end segments overcount length | `haplotype.rs:81-104` |
-| M5 | Medium | `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
+| M5 | Medium | **Fixed.** `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
 | M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
 | M8 | Medium | `--region` merged with distant events | `main.rs:172-180` |
@@ -179,6 +179,8 @@ Tiling starts uniformly on `[0, H − f]` (`simulate.rs:437`), suppression uses 
 - 10 kb DEL + flank: 1,309 of 9,555 primary records (13.7%) are lost and never replaced: 1,181 duplicates, 64 non-proper pairs, 64 pairs with a low-MAPQ or orphaned mate. 40 out-of-BED mates appear twice.
 - `align.sh` tags reads `SM:SIM` (`main.rs:667-671`). The merged BAM had 12 read groups with `SM:NA18488` and 1 with `SM:SIM`. Multi-sample callers will likely split the region into a separate sample (*plausible*).
 - **Fix:** pass filtered pairs through unchanged and remove originals by read name (`samtools view -N`). Reuse the original SM in `-R`.
+
+**Fixed:** spike writes `replaced_reads.txt` (the names it extracted) and `merge.sh` removes exactly those with `samtools view -N`; `align.sh` reuses the BAM's first `@RG SM`. HG002 chr20:37.5–41.5 Mb slice, `del:chr20:38412500-38422500`, seed 1, flank 10 kb: in-BED primary records lost and never replaced 1,436/10,501 (13.7%) → 0/10,501 (0.0%); originals present twice 53 → 0; merged-BAM `@RG` samples `SM:HG002` + `SM:SIM` → `SM:HG002` only. The 989 suppressed pairs (the deleted copy) stay gone in both.
 
 ### M6 · Truth VCF unsorted, no `##contig`, `REF=N`
 `truth.rs:24-72, 94`; events written in input order (`main.rs:451`).

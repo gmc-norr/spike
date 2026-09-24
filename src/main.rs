@@ -24,6 +24,7 @@ use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_distr::{Beta, Distribution};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use exon::AfSpec;
@@ -308,6 +309,15 @@ fn main() -> Result<()> {
         crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
     let read_length = bam_stats.read_length.round() as usize;
 
+    // The simulated read group reuses the original sample, so merged.bam stays
+    // single-sample. Read here, not in align.sh: align.sh never sees the BAM.
+    let sample = crate::bam_stats::sample_name(&args.bam, Some(args.reference.as_str()))?
+        .unwrap_or_else(|| {
+            log::warn!("no @RG SM in {}; tagging simulated reads SM:SIM", args.bam);
+            "SIM".to_string()
+        });
+    log::info!("Simulated read group: @RG ID:sim SM:{}", sample);
+
     let config = SimConfig {
         bam_path: args.bam.clone(),
         ref_path: args.reference.clone(),
@@ -447,6 +457,9 @@ fn main() -> Result<()> {
         event_outputs.push(output);
     }
 
+    // Names of the originals spike took; merge.sh removes exactly these.
+    let replaced_names = simulate::consumed_original_names(&event_outputs);
+
     let all_output_pairs = simulate::combine_event_outputs(event_outputs);
 
     // Write FASTQ.
@@ -470,10 +483,18 @@ fn main() -> Result<()> {
         args.threads,
         &args.aligner,
         &args.samtools,
+        &sample,
     )?;
 
-    // Write events BED (used by merge.sh).
+    // Write events BED (extraction regions, for inspection).
     write_event_bed(&args.output, &events, args.flank)?;
+
+    // Write the read names merge.sh removes from the original BAM.
+    write_replaced_reads(&args.output, &replaced_names)?;
+    log::info!(
+        "Originals replaced: {} read pairs (replaced_reads.txt)",
+        replaced_names.len()
+    );
 
     // Write merge script.
     write_merge_script(&args.output, &args.bam, &args.reference, args.threads, &args.samtools)?;
@@ -650,13 +671,14 @@ fn write_align_script(
     threads: usize,
     aligner: &str,
     samtools: &str,
+    sample: &str,
 ) -> Result<()> {
     let script_path = Path::new(output_dir).join("align.sh");
 
     let align_cmd = match aligner {
-        "bwa-mem2" => "bwa-mem2 mem -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:SIM\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"".to_string(),
-        "minimap2" => "minimap2 -a -x sr -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:SIM\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"".to_string(),
-        "bowtie2" => "bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg SM:SIM --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\"".to_string(),
+        "bwa-mem2" => format!("bwa-mem2 mem -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
+        "minimap2" => format!("minimap2 -a -x sr -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
+        "bowtie2" => format!("bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg SM:{sample} --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\""),
         custom => format!(
             "{custom} \"$REF\" \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"",
         ),
@@ -1079,10 +1101,26 @@ fn write_event_bed(output_dir: &str, events: &[SimEvent], flank: u64) -> Result<
     Ok(())
 }
 
-/// Write merge.sh: merges sim.bam with the original BAM, replacing event-region reads.
+/// Write replaced_reads.txt: the names of the originals spike took out of the BAM.
+///
+/// merge.sh feeds this to `samtools view -N` to drop exactly these records from
+/// the original, one name per line, sorted.
+fn write_replaced_reads(output_dir: &str, names: &BTreeSet<String>) -> Result<()> {
+    use std::io::Write as IoWrite;
+    let path = Path::new(output_dir).join("replaced_reads.txt");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    for name in names {
+        writeln!(f, "{}", name)?;
+    }
+    f.flush()?;
+    Ok(())
+}
+
+/// Write merge.sh: merges sim.bam with the original BAM, replacing the reads spike took.
 ///
 /// After running align.sh to produce sim.bam, run merge.sh to produce merged.bam,
-/// which is the original BAM with the spiked reads substituted in the event regions.
+/// which is the original BAM with the spiked reads substituted for the originals
+/// listed in replaced_reads.txt.
 fn write_merge_script(
     output_dir: &str,
     original_bam: &str,
@@ -1097,13 +1135,16 @@ fn write_merge_script(
 set -euo pipefail
 # Merge sim.bam (spiked reads) into the original BAM.
 #
-# Reads in the event regions (events.bed ± flank) are replaced by the spiked
-# reads from sim.bam. All other reads are kept from the original BAM.
+# The originals spike extracted are listed by read name in replaced_reads.txt;
+# sim.bam holds their replacements. Removing them by name (rather than by event
+# region) keeps every record spike did not take -- duplicates, non-proper pairs,
+# low-MAPQ or orphaned mates -- and also removes the out-of-region mates spike
+# did take, so no record is lost and none appears twice.
 #
 # Usage: bash merge.sh [ORIGINAL_BAM] [REFERENCE_FASTA] [THREADS]
 #
 # REFERENCE_FASTA is required when ORIGINAL_BAM is a CRAM file.
-# Requires: samtools (>= 1.13 for -U flag support)
+# Requires: samtools (>= 1.13 for -N and -U flag support)
 ORIGINAL="${{1:-{original_bam}}}"
 REF="${{2:-{ref_path}}}"
 THREADS="${{3:-{threads}}}"
@@ -1115,10 +1156,15 @@ if [ ! -f "$DIR/sim.bam" ]; then
     exit 1
 fi
 
-echo "Extracting reads outside event regions from $ORIGINAL..."
-"$SAMTOOLS" view -b -T "$REF" -L "$DIR/events.bed" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
+if [ ! -f "$DIR/replaced_reads.txt" ]; then
+    echo "Error: $DIR/replaced_reads.txt not found. Re-run spike." >&2
+    exit 1
+fi
 
-echo "Merging spiked reads with outside-region originals..."
+echo "Removing the replaced originals from $ORIGINAL..."
+"$SAMTOOLS" view -b -T "$REF" -N "$DIR/replaced_reads.txt" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
+
+echo "Merging spiked reads with the untouched originals..."
 "$SAMTOOLS" merge -f -@ "$THREADS" "$DIR/merged_tmp.bam" "$DIR/sim.bam" "$DIR/outside.bam"
 rm -f "$DIR/outside.bam"
 
@@ -1300,6 +1346,7 @@ fn write_readme(
     writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
     writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
     writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
+    writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took; `merge.sh` removes exactly these |")?;
     writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions ± {}bp flank) |", flank)?;
     writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
     writeln!(md)?;
@@ -1384,6 +1431,69 @@ mod tests {
             gene_b: "B".to_string(),
             allele_fraction: None,
             join: FusionJoin::Forward,
+        }
+    }
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("spike_test_{}_{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_replaced_reads_file_lists_each_consumed_name_once() {
+        let dir = scratch_dir("replaced_reads");
+        let names: BTreeSet<String> = ["b", "a", "b"].iter().map(|n| n.to_string()).collect();
+
+        write_replaced_reads(dir.to_str().unwrap(), &names).unwrap();
+
+        let text = std::fs::read_to_string(dir.join("replaced_reads.txt")).unwrap();
+        assert_eq!(text, "a\nb\n");
+    }
+
+    #[test]
+    fn test_merge_script_removes_originals_by_read_name() {
+        // Removing by BED region loses in-region records spike never extracted
+        // (duplicates, non-proper pairs, low-MAPQ or orphaned mates) and keeps
+        // out-of-region mates that spike did extract, so those end up twice.
+        let dir = scratch_dir("merge_script");
+
+        write_merge_script(dir.to_str().unwrap(), "orig.bam", "ref.fa", 4, "samtools").unwrap();
+
+        let script = std::fs::read_to_string(dir.join("merge.sh")).unwrap();
+        assert!(
+            script.contains("-N \"$DIR/replaced_reads.txt\""),
+            "merge.sh must select the originals to drop by read name:\n{}",
+            script
+        );
+        assert!(
+            !script.contains("-L \"$DIR/events.bed\""),
+            "merge.sh must not drop originals by BED region:\n{}",
+            script
+        );
+    }
+
+    #[test]
+    fn test_align_script_tags_reads_with_the_bam_sample_name() {
+        for aligner in ["bwa-mem2", "minimap2", "bowtie2"] {
+            let dir = scratch_dir(&format!("align_script_{}", aligner));
+
+            write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002")
+                .unwrap();
+
+            let script = std::fs::read_to_string(dir.join("align.sh")).unwrap();
+            assert!(
+                script.contains("SM:HG002"),
+                "{} align.sh must tag reads with the original sample:\n{}",
+                aligner,
+                script
+            );
+            assert!(
+                !script.contains("SM:SIM"),
+                "{} align.sh must not invent a second sample:\n{}",
+                aligner,
+                script
+            );
         }
     }
 

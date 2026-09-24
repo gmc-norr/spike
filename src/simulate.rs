@@ -4,7 +4,7 @@
 //! Replaces the per-SV splice functions (splice_deletion, splice_duplication, etc.)
 //! with a single `simulate_event` that works for all SV types.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use rand::rngs::StdRng;
@@ -265,6 +265,24 @@ fn simulate_event_with_copies(
         suppressed_count: suppressed.len(),
         suppressed_names: suppressed,
     })
+}
+
+/// Names of the original read pairs spike took out of the BAM.
+///
+/// An original enters an event's pool either passed through (`kept_originals`)
+/// or suppressed, so the union of the two is exactly the set merge.sh must
+/// remove from the original BAM. Synthetic pairs carry fresh names and are
+/// never in it.
+pub fn consumed_original_names(outputs: &[SplicedOutput]) -> BTreeSet<String> {
+    outputs
+        .iter()
+        .flat_map(|o| {
+            o.kept_originals
+                .iter()
+                .map(|p| p.name.clone())
+                .chain(o.suppressed_names.iter().cloned())
+        })
+        .collect()
 }
 
 /// Combine the outputs of all simulated events into the final set of pairs.
@@ -1753,6 +1771,23 @@ mod tests {
         assert_eq!(pairs[0].name, "keep");
         assert_eq!(pairs[1].name, "dup");
         assert_eq!(pairs[1].ref_start, 90);
+    }
+
+    #[test]
+    fn test_consumed_original_names_covers_kept_and_suppressed() {
+        // merge.sh removes these names from the original BAM, so the set has to
+        // be every original the pools took: the passed-through ones (which come
+        // back realigned from sim.bam) and the suppressed ones. Synthetic pairs
+        // are not in the original BAM and must never appear.
+        // r1 is only ever suppressed, r3 only ever kept, r2 kept by both events.
+        let outputs = vec![
+            spliced(&["r2", "r3"], &["ev0001_a"], &["r1"]),
+            spliced(&["r2", "r3"], &["ev0002_a"], &[]),
+        ];
+
+        let names: Vec<String> = consumed_original_names(&outputs).into_iter().collect();
+
+        assert_eq!(names, vec!["r1", "r2", "r3"]);
     }
 
     #[test]
