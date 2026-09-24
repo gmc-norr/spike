@@ -875,9 +875,10 @@ bash scripts/validate_pipeline.sh \
   --outdir /scratch/spike_validation
 ```
 
-Output goes to `--outdir`, which defaults to `<repo>/validation_run` (untracked).
-The script refuses to run when `--outdir` names a directory whose contents git
-tracks, so it cannot overwrite committed fixtures.
+Output goes to `--outdir` (or `$OUTDIR`), which defaults to
+`<repo>/validation_run` (untracked). A relative `--outdir` is resolved against
+the current directory. The script refuses to run when it names a directory
+whose contents git tracks, so it cannot overwrite committed fixtures.
 
 Requires `samtools`, `bwa-mem2`, `bcftools`, `bgzip`, `tabix`, `delly`,
 `truvari` and `python3`. Each is taken from `PATH` and can be overridden with an
@@ -885,7 +886,7 @@ environment variable of the same name (`SAMTOOLS=...`, `DELLY=...`, ...); the
 GIAB paths default to `<repo>/data/giab_hg38` and can be moved with
 `--giab-dir` or with `GIAB_DIR` / `REFERENCE` / `TRUTH_VCF` / `BENCH_BED`
 (inside a git worktree `data/giab_hg38` is a dangling symlink, so pass
-`--giab-dir` there).
+`--giab-dir` there). The output directory can also be set with `OUTDIR`.
 
 Options: `--region chr:beg-end` restricts the run to one window (it slices the
 background BAM, so the whole run stays small), `--max-events N` caps the number
@@ -893,7 +894,11 @@ of truth DELs, `--min-events N` is the floor below which the run aborts
 (default 5), `--vafs "0.5 0.25 0.1"` sets the allele fractions, `--min-recall F`
 fails the run when any VAF recalls less than `F`, and `--min-gain N` is how many
 truth events the highest VAF must recover *beyond the background control*
-(default 1; `--min-gain 0` turns that gate off).
+(default 1). `--min-gain 0` is the weakest setting, not an off switch: the
+highest VAF must still at least match the control, and a run with no control to
+compare against still fails. `--skip-to N` resumes an existing `--outdir` at
+step N (1-8); a value outside that range is refused rather than silently
+skipping the whole pipeline.
 
 The background BAM must be aligned to the same reference: Delly refuses a BAM
 whose header names contigs the FASTA does not have (an `_alt` background next
@@ -905,13 +910,19 @@ ones, so Delly recovers some of them with no spike-in at all. On a 2.3 Mb chr20
 window (8 truth DELs) Delly finds 3 of them in the *unspiked* background — three
 of the four recovered at VAF 0.5. Step 7b measures that floor for you: it runs
 the same `delly call` and the same `truvari bench` on the background BAM alone
-and writes the result as the `background` row of the summary table.
+and writes the result as the `background` row of the summary table. Its calls
+are cached in `<outdir>/background_control/`, keyed on the background BAM, the
+reference, `--region` and the truth VCF, so re-running the same outdir with a
+different window or truth set recomputes the floor instead of scoring a fresh
+spiked number against a stale one.
 
 The script **exits non-zero** when it did not validate anything: a missing tool
 or data file, fewer than `--min-events` truth events, a `spike` or `merge.sh`
 error, an unparseable `spike validate` report, a missing Truvari summary, a
 missing background control, or a highest-VAF result that does not recover at
-least `--min-gain` more truth events than that control. That last gate is the
+least `--min-gain` more truth events than that control. The verdict is reached
+whichever steps ran: `--skip-to 8` over an outdir whose highest VAF has no
+Truvari output fails there, rather than printing a row of `N/A` and passing. That last gate is the
 one that makes the verdict mean something: a plain "recovered more than zero"
 test passes on the background alone, so a run in which the spike-in contributed
 nothing would still print `VALIDATION PASSED`. A summary table is written to

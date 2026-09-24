@@ -153,11 +153,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --min-recall <F>         Fail the run if any VAF recalls < F"
             echo "  --min-gain <N>           The highest VAF must recover N more truth"
             echo "                           events than the unspiked background control"
-            echo "                           [default: 1; 0 disables the attribution gate]"
+            echo "                           [default: 1; 0 only asks it to match the"
+            echo "                           control, which is still a gate]"
             echo "  -h, --help               Show this help"
             echo ""
             echo "Environment overrides: SPIKE, SAMTOOLS, BWAMEM2, BCFTOOLS, DELLY,"
-            echo "TRUVARI, BGZIP, TABIX, GIAB_DIR, REFERENCE, TRUTH_VCF, BENCH_BED."
+            echo "TRUVARI, BGZIP, TABIX, GIAB_DIR, REFERENCE, TRUTH_VCF, BENCH_BED, OUTDIR."
             exit 0 ;;
         *)
             echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -171,6 +172,20 @@ BENCH_BED="${BENCH_BED:-${GIAB_DIR}/HG002/GRCh38_HG2-T2TQ100-V1.1_stvar.benchmar
 
 [[ "$MIN_GAIN" =~ ^[0-9]+$ ]] \
     || { echo "ERROR: --min-gain must be a non-negative integer (got '$MIN_GAIN')" >&2; exit 1; }
+
+# An out-of-range --skip-to skipped every step and still reached the verdict,
+# which then had nothing to judge. 0 is the default (run everything).
+{ [[ "$SKIP_TO" =~ ^[0-9]+$ ]] && (( SKIP_TO <= 8 )); } \
+    || { echo "ERROR: --skip-to must be a step number from 1 to 8 (got '$SKIP_TO')" >&2; exit 1; }
+
+# Resolve --outdir once, here, against $PWD like every other path on the
+# command line. check_outdir_not_tracked used to resolve a relative --outdir
+# against $PROJECT_DIR instead: from scripts/, "--outdir ../data/validation"
+# made it ask git about the wrong path and let the run write into tracked
+# fixtures, while from outside the repository it refused an unrelated
+# directory that merely shared a name. realpath -m does not require the
+# directory to exist yet.
+OUTDIR="$(realpath -m "$OUTDIR")"
 
 REGION_START=0
 REGION_END=0
@@ -197,6 +212,17 @@ FAILURES=()
 note_failure() {
     FAILURES+=("$1")
     echo "FAILURE: $1" >&2
+}
+
+# A file's identity for a cache key: path, size, mtime. Missing is a value
+# too -- a control computed against a truth VCF that has since been rebuilt
+# must not be reused.
+file_stamp() {
+    if [[ -f "$1" ]]; then
+        stat -c '%n:%s:%Y' "$1"
+    else
+        printf '%s:missing' "$1"
+    fi
 }
 
 check_tool() {
@@ -276,11 +302,20 @@ beats_background_control() {
 # checked-in fixtures -- and left the ones it did not rewrite stale.
 check_outdir_not_tracked() {
     command -v git >/dev/null 2>&1 || return 0
-    git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-    local tracked
-    tracked=$(git -C "$PROJECT_DIR" ls-files -- "$OUTDIR" 2>/dev/null | head -3 || true)
+    local repo_root
+    repo_root=$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null) || return 0
+
+    # $OUTDIR is absolute by now. A directory outside the repository cannot
+    # hold tracked files, and asking git about it only produces an "outside
+    # repository" error -- which, swallowed, used to read as "not tracked".
+    [[ "$OUTDIR" == "$repo_root" || "$OUTDIR" == "$repo_root"/* ]] || return 0
+
+    local tracked rc=0
+    tracked=$(git -C "$PROJECT_DIR" ls-files -- "$OUTDIR" 2>&1) || rc=$?
+    [[ "$rc" -eq 0 ]] \
+        || fail "git could not say whether --outdir $OUTDIR is tracked: $tracked"
     [[ -z "$tracked" ]] && return 0
-    fail "--outdir $OUTDIR holds files git tracks (e.g. $(echo $tracked | tr '\n' ' ')).
+    fail "--outdir $OUTDIR holds files git tracks (e.g. $(echo "$tracked" | head -3 | tr '\n' ' ')).
        This run would overwrite them. Point --outdir at a scratch directory."
 }
 
@@ -353,10 +388,14 @@ check_background_contigs() {
 discover_background_bam() {
     local dir="${OUTDIR}/background" f
     local whole=() sliced=()
+    # slice_background_to_region only ever writes <name>.<CHROM>_<beg>_<end>.bam
+    # for the chromosome under test; a looser <anything>_<n>_<n>.bam pattern
+    # also matched a user BAM called e.g. sample.run_1_2.bam.
+    local slice_re="\.${CHROM}_[0-9]+_[0-9]+\.bam$"
     [[ -d "$dir" ]] || return 1
     for f in "$dir"/*.bam; do
         [[ -f "$f" ]] || continue
-        if [[ "$f" =~ \.[^./]+_[0-9]+_[0-9]+\.bam$ ]]; then
+        if [[ "$f" =~ $slice_re ]]; then
             sliced+=("$f")
         else
             whole+=("$f")
@@ -852,6 +891,20 @@ step7b_background_control() {
     [[ -f "$truth_bgz" ]] \
         || fail "No spike truth VCF at $truth_bgz to score the control against (run steps 3-7 first)"
 
+    # Step 7 re-runs truvari for every VAF on every run, so a cached control
+    # would put a fresh spiked number next to a floor computed from a different
+    # background, region or truth set. Key the cache on all three and redo the
+    # control whenever any of them moved.
+    local key_file="${ctl_dir}/cache_key.txt" key
+    key="bg=$(file_stamp "$BG_BAM") region=${REGION:-all} ref=$(file_stamp "$REFERENCE")"
+    key="$key truth=$(file_stamp "$truth_bgz") minsize=${MIN_DEL_SIZE}"
+    if [[ ! -f "$key_file" || "$(cat "$key_file")" != "$key" ]]; then
+        [[ -f "$key_file" ]] && log "  Control inputs changed; recomputing it."
+        rm -rf "${ctl_dir}/delly.bcf" "${ctl_dir}/delly.bcf.csi" \
+               "${ctl_dir}/delly.vcf.gz" "${ctl_dir}/delly.vcf.gz.tbi" \
+               "${ctl_dir}/truvari" "$key_file"
+    fi
+
     if [[ -f "${ctl_dir}/delly.vcf.gz" && -f "${ctl_dir}/delly.vcf.gz.tbi" ]]; then
         log "  Control Delly output already exists, skipping."
     else
@@ -888,6 +941,7 @@ step7b_background_control() {
         read -r tp fp fn recall precision f1 \
             < <(read_truvari_summary "${ctl_dir}/truvari/summary.json")
         n_truth=$(count_records "${OUTDIR}/spike_vaf_${best_vaf}/truth.vcf")
+        printf '%s\n' "$key" > "$key_file"
         log "  Background alone recovers ${tp}/${n_truth} truth DELs (recall ${recall}) — this is the floor the spike-in has to beat."
     else
         note_failure "background control produced no truvari summary (check ${ctl_dir}/truvari.log); nothing in this run can be attributed to the spike-in"
@@ -965,6 +1019,13 @@ step8_summarize() {
                 && awk -v r="$recall" -v m="$MIN_RECALL" 'BEGIN{exit !(r<m)}'; then
                 note_failure "VAF=${vaf}: recall $recall below --min-recall $MIN_RECALL"
             fi
+        elif [[ "$vaf" == "$best_vaf" ]]; then
+            # The gate above sits inside the branch, so a highest VAF with no
+            # truvari output at all used to skip it: the row printed N/A and
+            # the run still said VALIDATION PASSED. Step 7's own complaint
+            # about a missing summary only covers the case where step 7 ran,
+            # and --skip-to 8 lands here having measured nothing.
+            note_failure "VAF=${vaf} (highest): no truvari summary at ${truvari_out}/summary.json, so this run measured nothing that could be attributed to the spike-in"
         fi
 
         # Spike validate results

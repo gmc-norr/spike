@@ -1925,6 +1925,104 @@ done"#,
     }
 
     #[test]
+    fn test_validate_pipeline_verdict_fails_when_the_highest_vaf_has_no_truvari() {
+        // The test above pins the gate's truth table; this one pins that the
+        // verdict actually consults it. Step 8 used to evaluate the gate only
+        // *inside* `if [[ -f summary.json ]]`, so an outdir whose highest VAF
+        // has no truvari output at all -- what `--skip-to 8` over an
+        // incomplete run looks like -- printed a row of N/A and then
+        // "VALIDATION PASSED". Showing that needs no caller, benchmarker or
+        // aligner: fabricate the outdir and drive steps 8 and 9 over it.
+        let dir = scratch_dir("validate_pipeline_wiring");
+
+        let truth_vcf = "##fileformat=VCFv4.2\n\
+                         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+                         chr20\t1000\tsim_del_1\tA\t<DEL>\t.\tPASS\tSVTYPE=DEL\n\
+                         chr20\t2000\tsim_del_2\tA\t<DEL>\t.\tPASS\tSVTYPE=DEL\n";
+        let summary = |tp: u32| {
+            format!(
+                "{{\"TP-base\": {}, \"FP\": 1, \"FN\": 4, \
+                 \"recall\": 0.5, \"precision\": 0.8, \"f1\": 0.6154}}",
+                tp
+            )
+        };
+
+        // Two fabricated outdirs, alike but for the highest VAF's truvari
+        // output: "with" has it and beats the control by 1, "without" has
+        // none. Everything else -- the lower VAF, the control -- is identical,
+        // so only the missing summary can change the verdict.
+        for case in ["with", "without"] {
+            let out = dir.join(case);
+            for vaf in ["0.5", "0.25"] {
+                let spike_out = out.join(format!("spike_vaf_{}", vaf));
+                std::fs::create_dir_all(spike_out.join("truvari")).unwrap();
+                std::fs::write(spike_out.join("truth.vcf"), truth_vcf).unwrap();
+                if case == "without" && vaf == "0.5" {
+                    std::fs::remove_dir_all(spike_out.join("truvari")).unwrap();
+                    continue;
+                }
+                let tp = if vaf == "0.5" { 4 } else { 3 };
+                std::fs::write(spike_out.join("truvari/summary.json"), summary(tp)).unwrap();
+            }
+            let control = out.join("background_control/truvari");
+            std::fs::create_dir_all(&control).unwrap();
+            std::fs::write(control.join("summary.json"), summary(3)).unwrap();
+        }
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"script="$1"; root="$2"; shift 2; source "$script"
+VAFS=(0.5 0.25)
+MIN_GAIN=1
+for case in with without; do
+    OUTDIR="$root/$case"
+    FAILURES=()
+    rc=0
+    msg=$( { step8_summarize >/dev/null; step9_verdict; } 2>&1 ) || rc=$?
+    echo "$case rc=$rc"
+    printf '%s\n' "$msg" | sed "s/^/$case /"
+done"#,
+            )
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&dir)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "driving step8_summarize + step9_verdict over a fabricated outdir \
+             must not error out:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+        // A complete run that beats the control still passes.
+        assert!(
+            stdout.contains("with rc=0"),
+            "a highest VAF that beats the control by --min-gain must pass:\n{}",
+            stdout
+        );
+        // The one under review: no truvari output for the highest VAF means
+        // nothing was measured, so nothing can be attributed to the spike-in.
+        assert!(
+            stdout.contains("without rc=1"),
+            "a highest VAF with no truvari summary must fail the verdict, \
+             whichever steps ran:\n{}",
+            stdout
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|l| l.starts_with("without ") && l.contains("truvari")),
+            "the verdict must say the highest VAF has no truvari result:\n{}",
+            stdout
+        );
+    }
+
+    #[test]
     fn test_validate_pipeline_aborts_when_its_data_files_are_missing() {
         // A harness that cannot fail is worthless: missing inputs must stop the
         // run, not let it continue and report an empty result as a pass.
