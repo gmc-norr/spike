@@ -2,3 +2,7 @@
 /target/
 *.bam
 *.bai
+
+# Default --outdir of scripts/validate_pipeline.sh (was data/validation, which
+# is tracked, so every run overwrote committed fixtures).
+/validation_run/

@@ -18,7 +18,7 @@ Date: 2026-09-24 · Reviewed: working tree on `master` at `f5428ce` plus uncommi
 | `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) |
 | `cargo test` | 128 passed, 0 failed |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` |
-| `scripts/validate_pipeline.sh` | **Fixed** (M17): runs end to end |
+| `scripts/validate_pipeline.sh` | **Fixed** (M17): runs end to end, and fails (exit 1) when the spike-in contributed nothing the background does not already carry |
 
 The tests pass, but most would still pass with the high-severity bugs below. See [Test gaps](#test-gaps).
 
@@ -52,6 +52,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
+| N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 
 ## High severity
 
@@ -291,8 +292,68 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 - Paths at lines 33-35 point to old `data/giab_hg38/` locations. Tool paths are hard-coded to `/home/parlar_ai/dev/sv_caller/.pixi`.
 - **Fixed**, and measured: the harness now runs to completion. chr20:61.9-64.2 Mb, 8 het DELs, 3 VAFs, NA18488 background — 5 min wall, exit 0, recall 0.500 / 0.375 / 0.500 at VAF 0.5 / 0.25 / 0.1. Before: exit 1 at step 0 (reference not found); with the paths corrected, exit 1 at step 3 ("overlapping events detected", 2 overlapping pairs of 26).
 - The `"0\n0"` guards are fixed and now stop the run: with 5 events and `--min-events 6` the script exits 1 (it previously printed `[[: 0\n0: syntax error in expression` and carried on).
-- Step 4 no longer re-implements the merge: it runs spike's own `align.sh` and `merge.sh`, so the second half of **M5** (`-L events.bed -U`, hard-coded `SM:SPIKE`) is gone from the harness too. Merged BAM: 600 608 reads from a 601 429-read background — no read lost or duplicated, Delly reports `Sample:NA18488`.
-- Still true after the fix, and not an M17 defect: Delly recovers 3 of the 8 truth DELs from the *unspiked* background (recall 0.375), so the recall column is dominated by common DELs NA18488 shares with HG002, not by the spike-in. Documented in `README.md`; a background-only control belongs in a future revision of the harness.
+- Step 4 no longer re-implements the merge: it runs spike's own `align.sh` and `merge.sh`, so the second half of **M5** (`-L events.bed -U`, hard-coded `SM:SPIKE`) is gone from the harness too, and Delly reports `Sample:NA18488`.
+- Correction to the read counts first published here ("600 608 reads from a 601 429-read background — no read lost or duplicated"): those two totals count supplementary records differently, so they were not comparable. Re-measured at VAF 0.5 — background 601 429 records (599 048 primary, 2 381 supplementary) → merged 600 608 (598 142 primary, 2 466 supplementary): **906 primary records fewer**, not zero. Nothing is lost in the merge: `merge.sh` removes 15 068 original pairs by name and spike writes 14 615 back (13 800 originals unchanged, 1 268 suppressed, 815 new ALT-junction pairs `ev*`), and 1 268 − 815 = 453 pairs = 906 records, exactly the difference. The suppressed pairs are the deleted haplotype's own coverage — that is what injecting a het DEL does — not reads the harness dropped: spike's log reads "15068 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality".
+- **Fix pass: the verdict still could not fail.** The only unconditional gates were "truvari recovered 0 at the highest VAF" and "`spike validate` passed 0 checks", and the unspiked background satisfies both on its own — Delly recovers 3 of the 8 truth DELs from the background alone, and `spike validate` run on the background BAM with the same truth VCF passes **7/19**, one *more* than the spiked BAM's 6/19. A run in which spike contributed nothing therefore printed `VALIDATION PASSED` and exited 0, while `README.md` claimed the opposite. Step 7b now runs the same `delly call` and `truvari bench` on the background BAM, writes it as the `background` row of the summary, and step 8 fails the run unless the highest VAF recovers at least `--min-gain` (default 1) more truth events than that control. Measured: legitimate run TP-base 4 vs control 3 → exit 0, and the one event it adds is `sim_del_6` (chr20:63636171), exactly the one truth DEL NA18488 does not carry; the same harness with the merged BAM replaced by the background itself → TP-base 3 vs control 3, `VALIDATION FAILED`, exit 1. Known limit of the gate: it counts events, so on one replicate it cannot separate a very weak spike-in from re-alignment noise — a `--vafs 0.001` run still scores 4 vs 3, but the extra event is `sim_del_8`, a DEL the background carries that re-alignment flipped from FN to TP. Catching that needs replicates or a titration.
+- Also in the fix pass: step 3 now skips only when the directory holds everything step 4 needs (`align.sh`, `merge.sh`, `replaced_reads.txt` as well as the FASTQs and the truth VCF) — `data/validation/spike_vaf_0.5` ships only the latter, so `--outdir data/validation` used to skip step 3 and then abort in step 4 with "re-run step 3", a loop; the default `--outdir` moved off the tracked `data/validation` to `validation_run/` and the script now refuses an `--outdir` whose contents git tracks; step 2 no longer needs gawk (POSIX `match()` + `RSTART`/`RLENGTH`, so mawk no longer reports "Only 0 events after filtering"); the summary reports base-side `TP-base` next to the base-side `FN` and `recall`; and `align.sh`'s `grep -c "SA:Z:" ... || echo "0"` — the same `"0\n0"` idiom, which fires on any sim.bam with no supplementary alignments — is fixed in `main.rs:742`.
+
+## Found during the fix run
+
+### N1 · `spike validate` 6/19 is the harness's input, not the checks
+
+*Found while fixing M17, not part of the original review. Measured on
+`/home/parlar_ai/spike-review-run/scratch/work/task-07/final`: chr20:61.9–64.2 Mb,
+NA18488 background, 8 het HG002 DELs, VAF 0.5. Recorded, not fixed — `validate.rs`
+is not the defect, so nothing in it was changed.*
+
+The obvious reading of "6/19 checks passed" is that the checks are too strict or
+the spike-in too weak. Neither is true. Running the same `spike validate`, same
+truth VCF, on the **unspiked background BAM** passes **7/19** — one *more* than
+the spiked BAM:
+
+| event | check | background | spiked | expected |
+| --- | --- | --- | --- | --- |
+| chr20:61943513-61945040 | coverage_ratio | 0.04 | 0.04 | 0.50 |
+| chr20:61946250-61947090 | coverage_ratio | 0.03 | 0.09 | 0.50 |
+| chr20:62057603-62058413 | coverage_ratio | 0.08 | 0.09 | 0.50 |
+| chr20:63093345-63094243 | coverage_ratio | 0.00 | 0.00 | 0.50 |
+| chr20:63134604-63135240 | coverage_ratio | **0.45 pass** | **0.28 pass** | 0.50 |
+| chr20:63636171-63636676 | coverage_ratio | 1.00 | **0.60 pass** | 0.50 |
+| chr20:63964828-63965924 | coverage_ratio | 0.12 | 0.07 | 0.50 |
+| chr20:64127245-64127815 | coverage_ratio | **0.20 pass** | 0.17 | 0.50 |
+| chr20:63093345-63094243 | split_reads | **24 pass** | **25 pass** | >=2 |
+| chr20:63134604-63135240 | split_reads | **2 pass** | 0 | >=2 |
+| the other six | split_reads | 0 | 0 | >=2 |
+| [global] | insert_size / dup_rate / mean_mapq | **455±111 / 10.1% / 58.7, all pass** | **identical, all pass** | — |
+
+- **`coverage_ratio`.** Seven of the eight truth DELs are *already depleted in
+  the background* — NA18488 carries them too. Spike then correctly multiplies
+  what is there by (1 − VAF), so the post-spike ratio tracks
+  `background_ratio × 0.5`, while the M10-strengthened check expects
+  1 − VAF = 0.50 ± 0.30 against a clean background. The one event the background
+  does **not** carry (chr20:63636171, background ratio 1.00) is exactly the one
+  whose `coverage_ratio` passes cleanly, at 0.60. The check is behaving
+  correctly; the harness's truth-event selection is confounded.
+- **`split_reads`.** A different cause. At chr20:63636171 spike emitted 188 ALT
+  fragment pairs (`ev0006*`, 376 records): 0 unmapped, 0 supplementary, **0 with
+  an `SA:Z` tag**, 11 soft-clipped records with a maximum clip of 26 bp, and 16
+  pairs whose TLEN carries the 505 bp deletion. `check_split_reads`
+  (`validate.rs:493-520`) requires ≥ 2 SA alignments landing at the partner
+  breakpoint, so it reads 0. Of the ~8 013 SA-tagged records in the merged BAM
+  only **16 / 4 / 2** are synthetic (`ev*`) at VAF 0.5 / 0.25 / 0.1 — flat in
+  VAF, i.e. the SA signal is background-derived. The single passing
+  `split_reads` (25 reads at chr20:63093345) is at the event NA18488 carries
+  homozygously; the background BAM alone scores 24 there. For sub-2 kb DELs the
+  M12 check looks for supplementary alignments that spike plus bwa-mem2 defaults
+  do not produce.
+- **The three global checks** are byte-identical between the two BAMs: they are
+  whole-BAM statistics of a 600 608-record BAM of which 29 381 records are
+  synthetic, so the spike-in cannot move them.
+
+**What would settle the rest:** (1) make the per-check background baseline above
+part of the harness and read every check as a delta rather than as an absolute;
+(2) re-run the harness restricted to truth DELs whose background depth ratio is
+≈ 1.0, which isolates the check from the confound.
 
 ## Low severity
 

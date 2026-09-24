@@ -739,7 +739,10 @@ echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ({aligner}, $THREADS threads)..."
 "$SAMTOOLS" index "$DIR/sim.bam"
 
 TOTAL=$("$SAMTOOLS" view -c "$DIR/sim.bam" 2>/dev/null || echo "?")
-SA_COUNT=$("$SAMTOOLS" view "$DIR/sim.bam" | grep -c "SA:Z:" 2>/dev/null || echo "0")
+# `grep -c` exits 1 when it counts nothing but still prints "0", so the
+# `|| echo "0"` this used to end with produced the two-line string "0\n0" on
+# every sim.bam with no supplementary alignments -- which is most of them.
+SA_COUNT=$("$SAMTOOLS" view "$DIR/sim.bam" | grep -c "SA:Z:" || true)
 echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
 "#
     );
@@ -1849,6 +1852,75 @@ esac
             String::from_utf8_lossy(&output.stdout),
             "0",
             "count_records must return a single integer for a header-only VCF"
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_verdict_needs_the_spike_in_to_beat_the_background() {
+        // The harness's verdict gate. The truth DELs are common HG002
+        // variants, so the background sample carries several of them and a
+        // caller recovers those with no spike-in at all: a "TP > 0" gate
+        // passes on the background alone, and the run then prints
+        // "VALIDATION PASSED" having validated nothing. The gate compares
+        // against the background control instead, and is on by default.
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"script="$1"; shift; source "$script"
+echo "min_gain=$MIN_GAIN"
+for case in "4 3 1" "3 3 1" "0 0 1" "2 3 1" "4 NONE 1"; do
+    set -- $case
+    control="$2"
+    if [ "$control" = NONE ]; then control=""; fi
+    rc=0
+    beats_background_control "$1" "$control" "$3" || rc=$?
+    echo "tp=$1 control=$2 gain=$3 rc=$rc"
+done"#,
+            )
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "sourcing validate_pipeline.sh must define beats_background_control:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+        // Spike attribution must be the default, not an opt-in flag.
+        assert!(
+            stdout.contains("min_gain=1"),
+            "the attribution gate must be on by default (MIN_GAIN=1):\n{}",
+            stdout
+        );
+        // Recovering more than the background does: that is the spike-in.
+        assert!(
+            stdout.contains("tp=4 control=3 gain=1 rc=0"),
+            "beating the control by 1 must pass:\n{}",
+            stdout
+        );
+        // Matching the background, at any level, is not a spike-in result.
+        for line in [
+            "tp=3 control=3 gain=1 rc=1",
+            "tp=0 control=0 gain=1 rc=1",
+            "tp=2 control=3 gain=1 rc=1",
+        ] {
+            assert!(
+                stdout.contains(line),
+                "a run that does not beat the background control must fail the \
+                 gate ({}):\n{}",
+                line,
+                stdout
+            );
+        }
+        // No control result at all is a failure, never a pass.
+        assert!(
+            stdout.contains("tp=4 control=NONE gain=1 rc=2"),
+            "a missing control must be reported as uncomparable, not as a pass:\n{}",
+            stdout
         );
     }
 

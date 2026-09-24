@@ -9,14 +9,19 @@
 # Usage:
 #   bash scripts/validate_pipeline.sh [--background-bam <path>] [--skip-to <step>]
 #
-# Nothing below is hard-coded to one machine: every tool is taken from PATH (or
-# from $SAMTOOLS, $DELLY, ... if set), and every data path defaults to this
-# repository's layout but can be overridden with --giab-dir or with the
-# $REFERENCE / $TRUTH_VCF / $BENCH_BED environment variables. Inside a git
-# worktree data/giab_hg38 is a dangling symlink, so pass --giab-dir there.
+# Every tool is taken from PATH (or from $SAMTOOLS, $DELLY, ... if set), and
+# every data path defaults to this repository's layout but can be overridden
+# with --giab-dir or with the $REFERENCE / $TRUTH_VCF / $BENCH_BED environment
+# variables. Inside a git worktree data/giab_hg38 is a dangling symlink, so pass
+# --giab-dir there. EXTRA_TOOL_DIRS below is a last-resort fallback that does
+# name one developer's directories; PATH and the environment overrides are the
+# portable route.
 #
 # The run ends non-zero when the pipeline produced no usable result (see
-# step 9), so this harness can actually fail.
+# step 9), so this harness can actually fail. The verdict is attributed to the
+# spike-in: step 7b calls the same SVs on the *unspiked* background, and step 8
+# fails the run unless the spiked BAM recovers at least --min-gain events more
+# than that control does.
 #
 set -euo pipefail
 
@@ -29,6 +34,10 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Directories searched for a tool that is not on PATH. Conda/pixi environments
 # are usually not activated when this script runs from cron or from an editor.
+# The last entry is machine-specific: it is where delly, truvari, bgzip and
+# tabix happen to live on the box this harness was developed on. It is a
+# convenience fallback, not a requirement -- anywhere else, put the tools on
+# PATH or set $DELLY / $TRUVARI / ... instead.
 EXTRA_TOOL_DIRS=(
     "${PROJECT_DIR}/.pixi/envs/default/bin"
     "${HOME}/.pixi/bin"
@@ -74,8 +83,9 @@ REFERENCE="${REFERENCE:-}"
 TRUTH_VCF="${TRUTH_VCF:-}"
 BENCH_BED="${BENCH_BED:-}"
 
-# Output
-OUTDIR="${PROJECT_DIR}/data/validation"
+# Output. Not data/validation: that directory is committed, so the old default
+# overwrote tracked fixtures on every run (and left half of them stale).
+OUTDIR="${OUTDIR:-${PROJECT_DIR}/validation_run}"
 
 # Parameters
 THREADS=8
@@ -88,6 +98,7 @@ REGION=""          # optional CHROM:START-END, for a small/fast run
 MAX_EVENTS=0       # 0 = no cap
 MIN_EVENTS=5       # abort if fewer events survive filtering
 MIN_RECALL=""      # optional per-VAF recall floor
+MIN_GAIN=1         # spiked TP must beat the background control by this many
 
 # Background sample (1000G NYGC, NA18488, YRI, NovaSeq 2x151, ~30x)
 CRAM_URL="https://ftp.sra.ebi.ac.uk/vol1/run/ERR323/ERR3239491/NA18488.final.cram"
@@ -122,13 +133,16 @@ while [[ $# -gt 0 ]]; do
             MIN_EVENTS="$2"; shift 2 ;;
         --min-recall)
             MIN_RECALL="$2"; shift 2 ;;
+        --min-gain)
+            MIN_GAIN="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --background-bam <path>  Use this BAM as clean background (skip download)"
             echo "  --skip-to <step>         Skip to step N (1-8)"
-            echo "  --outdir <dir>           Output directory [default: data/validation]"
+            echo "  --outdir <dir>           Output directory [default: <repo>/validation_run;"
+            echo "                           a directory whose contents git tracks is refused]"
             echo "  --threads <N>            Thread count [default: 8]"
             echo "  --giab-dir <dir>         GIAB data dir [default: <repo>/data/giab_hg38]"
             echo "  --region <chr:beg-end>   Restrict the whole run to this window"
@@ -137,6 +151,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-events <N>         Use at most N truth DELs (0 = all)"
             echo "  --min-events <N>         Abort if fewer than N DELs survive [default: 5]"
             echo "  --min-recall <F>         Fail the run if any VAF recalls < F"
+            echo "  --min-gain <N>           The highest VAF must recover N more truth"
+            echo "                           events than the unspiked background control"
+            echo "                           [default: 1; 0 disables the attribution gate]"
             echo "  -h, --help               Show this help"
             echo ""
             echo "Environment overrides: SPIKE, SAMTOOLS, BWAMEM2, BCFTOOLS, DELLY,"
@@ -151,6 +168,9 @@ done
 REFERENCE="${REFERENCE:-${GIAB_DIR}/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta}"
 TRUTH_VCF="${TRUTH_VCF:-${GIAB_DIR}/HG002/GRCh38_HG2-T2TQ100-V1.1_chr20.vcf.gz}"
 BENCH_BED="${BENCH_BED:-${GIAB_DIR}/HG002/GRCh38_HG2-T2TQ100-V1.1_stvar.benchmark.bed}"
+
+[[ "$MIN_GAIN" =~ ^[0-9]+$ ]] \
+    || { echo "ERROR: --min-gain must be a non-negative integer (got '$MIN_GAIN')" >&2; exit 1; }
 
 REGION_START=0
 REGION_END=0
@@ -207,6 +227,63 @@ count_records() {
     printf '%s' "$n"
 }
 
+# Read one truvari summary.json as "tp fp fn recall precision f1".
+#
+# TP is base-side (TP-base): TP + FN is then the number of truth events and
+# TP/(TP+FN) is the recall printed next to it. TP-comp counts the *calls* that
+# matched, which does not add up with the base-side FN in the same row.
+read_truvari_summary() {
+    python3 - "$1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+tp = d.get('TP-base', d.get('TP', 0))
+fp = d.get('FP', 0)
+fn = d.get('FN', 0)
+recall = d.get('recall', 0) or 0
+precision = d.get('precision', 0) or 0
+f1 = d.get('f1', 0) or 0
+print(f'{tp} {fp} {fn} {recall:.4f} {precision:.4f} {f1:.4f}')
+PY
+}
+
+# The highest allele fraction in --vafs: the run's best case, and the one the
+# background control and the verdict gate are scored against.
+highest_vaf() {
+    local best="${VAFS[0]}" vaf
+    for vaf in "${VAFS[@]}"; do
+        if awk -v a="$vaf" -v b="$best" 'BEGIN{exit !(a>b)}'; then best="$vaf"; fi
+    done
+    printf '%s' "$best"
+}
+
+# The verdict's real question: did the *spike-in* change the result?
+#
+# The truth DELs are common HG002 variants, so a 1000 Genomes background carries
+# several of them already and a caller recovers those with no spike-in at all. A
+# plain "TP > 0" gate is therefore satisfied by the background alone. Require
+# the spiked run to beat the background control by <gain> events instead.
+# Returns 0 (beats it), 1 (does not), 2 (inputs are not counts).
+beats_background_control() {
+    local tp="$1" control_tp="$2" gain="$3"
+    [[ "$tp" =~ ^[0-9]+$ ]] || return 2
+    [[ "$control_tp" =~ ^[0-9]+$ ]] || return 2
+    [[ "$gain" =~ ^[0-9]+$ ]] || return 2
+    (( tp >= control_tp + gain ))
+}
+
+# Refuse to write into a directory whose contents git tracks. The default used
+# to be data/validation, which is committed, so a plain run silently rewrote
+# checked-in fixtures -- and left the ones it did not rewrite stale.
+check_outdir_not_tracked() {
+    command -v git >/dev/null 2>&1 || return 0
+    git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    local tracked
+    tracked=$(git -C "$PROJECT_DIR" ls-files -- "$OUTDIR" 2>/dev/null | head -3 || true)
+    [[ -z "$tracked" ]] && return 0
+    fail "--outdir $OUTDIR holds files git tracks (e.g. $(echo $tracked | tr '\n' ' ')).
+       This run would overwrite them. Point --outdir at a scratch directory."
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 0: Check prerequisites
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +313,7 @@ step0_check_prereqs() {
         fail "Prerequisite check failed. Aborting."
     fi
 
+    check_outdir_not_tracked
     mkdir -p "$OUTDIR"
     log "  All prerequisites OK."
 }
@@ -268,8 +346,38 @@ check_background_contigs() {
     fi
 }
 
+# Find the background BAM a previous run left in ${OUTDIR}/background, for
+# --skip-to. Prefer a whole BAM over one of this script's own region slices;
+# do not guess when there is more than one candidate.
+# Prints the path; returns 1 (none) or 2 (ambiguous).
+discover_background_bam() {
+    local dir="${OUTDIR}/background" f
+    local whole=() sliced=()
+    [[ -d "$dir" ]] || return 1
+    for f in "$dir"/*.bam; do
+        [[ -f "$f" ]] || continue
+        if [[ "$f" =~ \.[^./]+_[0-9]+_[0-9]+\.bam$ ]]; then
+            sliced+=("$f")
+        else
+            whole+=("$f")
+        fi
+    done
+    if [[ "${#whole[@]}" -eq 1 ]]; then printf '%s' "${whole[0]}"; return 0; fi
+    if [[ "${#whole[@]}" -gt 1 ]]; then return 2; fi
+    if [[ "${#sliced[@]}" -eq 1 ]]; then printf '%s' "${sliced[0]}"; return 0; fi
+    if [[ "${#sliced[@]}" -gt 1 ]]; then return 2; fi
+    return 1
+}
+
 slice_background_to_region() {
     [[ -n "$REGION" ]] || return 0
+
+    # A resumed run (--skip-to) may have found this run's own slice; slicing it
+    # again would only write a second copy under a doubled-up name.
+    if [[ "$BG_BAM" == *".${CHROM}_${REGION_START}_${REGION_END}.bam" ]]; then
+        log "  Background already sliced to $REGION: $BG_BAM"
+        return 0
+    fi
 
     local bg_dir="${OUTDIR}/background"
     mkdir -p "$bg_dir"
@@ -397,9 +505,13 @@ step2_filter_truth_vcf() {
             # Must have SVTYPE=DEL
             if ($8 !~ /SVTYPE=DEL/) next
 
-            # Parse SVLEN (may be positive or negative in T2TQ100)
-            match($8, /SVLEN=(-?[0-9]+)/, a)
-            len = a[1] + 0
+            # Parse SVLEN (may be positive or negative in T2TQ100).
+            # POSIX match() + RSTART/RLENGTH, not the 3-argument match() that
+            # only gawk has: under mawk that form is a syntax error and every
+            # event is dropped, surfacing only as "Only 0 events after
+            # filtering".
+            if (!match($8, /SVLEN=-?[0-9]+/)) next
+            len = substr($8, RSTART + 6, RLENGTH - 6) + 0
             if (len < 0) len = -len
             if (len < min || len > max) next
 
@@ -447,8 +559,8 @@ step2_filter_truth_vcf() {
         | awk -F'\t' -v cap="$MAX_EVENTS" '
             BEGIN { kept_chrom=""; kept_end=0; n=0 }
             {
-                match($8, /SVLEN=(-?[0-9]+)/, a)
-                len = a[1] + 0
+                if (!match($8, /SVLEN=-?[0-9]+/)) next
+                len = substr($8, RSTART + 6, RLENGTH - 6) + 0
                 if (len < 0) len = -len
                 # spike compares [POS, POS+SVLEN) — see validate_event_overlaps.
                 if ($1 == kept_chrom && $2 < kept_end) next
@@ -491,9 +603,22 @@ step3_spike_inject() {
     for vaf in "${VAFS[@]}"; do
         local spike_out="${OUTDIR}/spike_vaf_${vaf}"
 
-        if [[ -f "${spike_out}/R1.fq.gz" && -f "${spike_out}/truth.vcf" ]]; then
-            log "  VAF=${vaf}: spike output already exists, skipping."
+        # Skip only when the directory holds everything step 4 needs. Step 4
+        # runs spike's own align.sh and merge.sh, and merge.sh needs
+        # replaced_reads.txt; a directory with just the FASTQs and the truth VCF
+        # (which is exactly what data/validation ships) used to skip here and
+        # then abort in step 4 with "re-run step 3" -- a loop, because step 3
+        # skipped again.
+        local complete=true f
+        for f in R1.fq.gz R2.fq.gz truth.vcf align.sh merge.sh replaced_reads.txt; do
+            [[ -f "${spike_out}/${f}" ]] || complete=false
+        done
+        if [[ "$complete" == "true" ]]; then
+            log "  VAF=${vaf}: spike output already complete, skipping."
             continue
+        fi
+        if [[ -d "$spike_out" ]]; then
+            log "  VAF=${vaf}: incomplete spike output, re-running spike."
         fi
 
         log "  VAF=${vaf}: running spike..."
@@ -543,8 +668,8 @@ step4_align() {
             continue
         fi
 
-        for s in align.sh merge.sh; do
-            [[ -f "${spike_out}/${s}" ]] || fail "${spike_out}/${s} not found (re-run step 3)"
+        for s in align.sh merge.sh replaced_reads.txt; do
+            [[ -f "${spike_out}/${s}" ]] || fail "${spike_out}/${s} not found. Delete ${spike_out} and re-run from step 3."
         done
 
         # align.sh invokes the aligner by bare name, so make sure the aligner
@@ -697,21 +822,76 @@ step7_truvari_bench() {
 
         # Show results
         if [[ -f "${truvari_out}/summary.json" ]]; then
-            python3 -c "
-import json
-d = json.load(open('${truvari_out}/summary.json'))
-recall = d.get('recall', 0) or 0
-precision = d.get('precision', 0) or 0
-f1 = d.get('f1', 0) or 0
-tp = d.get('TP-comp', d.get('TP', 0))
-fp = d.get('FP', 0)
-fn = d.get('FN', 0)
-print(f'  Recall={recall:.3f}  Precision={precision:.3f}  F1={f1:.3f}  TP={tp}  FP={fp}  FN={fn}')
-"
+            local tp fp fn recall precision f1
+            read -r tp fp fn recall precision f1 \
+                < <(read_truvari_summary "${truvari_out}/summary.json")
+            log "  VAF=${vaf}: Recall=${recall}  Precision=${precision}  F1=${f1}  TP=${tp}  FP=${fp}  FN=${fn}"
         else
             note_failure "VAF=${vaf}: truvari produced no summary (check ${spike_out}/truvari.log)"
         fi
     done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 7b: Background control — what the background recovers with no spike-in
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Run exactly the same caller and the same benchmark on the *unspiked*
+# background BAM. Everything it recovers is a truth DEL the background sample
+# carries itself, and no gate built on the spiked numbers alone can tell those
+# apart from the spike-in's own contribution.
+step7b_background_control() {
+    log "Step 7b: Background control (same calls on the unspiked background)..."
+
+    local ctl_dir="${OUTDIR}/background_control"
+    mkdir -p "$ctl_dir"
+
+    local best_vaf truth_bgz
+    best_vaf="$(highest_vaf)"
+    truth_bgz="${OUTDIR}/spike_vaf_${best_vaf}/truth.vcf.gz"
+    [[ -f "$truth_bgz" ]] \
+        || fail "No spike truth VCF at $truth_bgz to score the control against (run steps 3-7 first)"
+
+    if [[ -f "${ctl_dir}/delly.vcf.gz" && -f "${ctl_dir}/delly.vcf.gz.tbi" ]]; then
+        log "  Control Delly output already exists, skipping."
+    else
+        log "  Running delly call on the background alone ($BG_BAM)..."
+        "$DELLY" call \
+            -t DEL \
+            -g "$REFERENCE" \
+            -o "${ctl_dir}/delly.bcf" \
+            "$BG_BAM" \
+            2>"${ctl_dir}/delly.log"
+        "$BCFTOOLS" view "${ctl_dir}/delly.bcf" \
+            | "$BGZIP" -c > "${ctl_dir}/delly.vcf.gz"
+        "$TABIX" -f -p vcf "${ctl_dir}/delly.vcf.gz"
+    fi
+
+    if [[ ! -f "${ctl_dir}/truvari/summary.json" ]]; then
+        rm -rf "${ctl_dir}/truvari"
+        log "  Benchmarking the control against the same truth VCF..."
+        "$TRUVARI" bench \
+            -b "$truth_bgz" \
+            -c "${ctl_dir}/delly.vcf.gz" \
+            -o "${ctl_dir}/truvari" \
+            -f "$REFERENCE" \
+            --passonly \
+            -r 500 \
+            -p 0.5 \
+            -P 0.5 \
+            -s "$MIN_DEL_SIZE" \
+            2>"${ctl_dir}/truvari.log" || true
+    fi
+
+    if [[ -f "${ctl_dir}/truvari/summary.json" ]]; then
+        local tp fp fn recall precision f1 n_truth
+        read -r tp fp fn recall precision f1 \
+            < <(read_truvari_summary "${ctl_dir}/truvari/summary.json")
+        n_truth=$(count_records "${OUTDIR}/spike_vaf_${best_vaf}/truth.vcf")
+        log "  Background alone recovers ${tp}/${n_truth} truth DELs (recall ${recall}) — this is the floor the spike-in has to beat."
+    else
+        note_failure "background control produced no truvari summary (check ${ctl_dir}/truvari.log); nothing in this run can be attributed to the spike-in"
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -722,13 +902,30 @@ step8_summarize() {
     log "Step 8: Generating summary..."
 
     local summary_tsv="${OUTDIR}/validation_summary.tsv"
-    local best_vaf="${VAFS[0]}"
-    for vaf in "${VAFS[@]}"; do
-        if awk -v a="$vaf" -v b="$best_vaf" 'BEGIN{exit !(a>b)}'; then best_vaf="$vaf"; fi
-    done
+    local best_vaf
+    best_vaf="$(highest_vaf)"
 
     printf "VAF\tN_truth\tN_delly\tTP\tFP\tFN\tRecall\tPrecision\tF1\tSpike_validate\n" \
         > "$summary_tsv"
+
+    # The background control goes in first: every row below it has to be read
+    # against this floor, not against zero.
+    local control_json="${OUTDIR}/background_control/truvari/summary.json"
+    local control_tp=""
+    if [[ -f "$control_json" ]]; then
+        local c_tp c_fp c_fn c_recall c_precision c_f1 c_calls=0 c_truth=0
+        read -r c_tp c_fp c_fn c_recall c_precision c_f1 \
+            < <(read_truvari_summary "$control_json")
+        control_tp="$c_tp"
+        c_truth=$(count_records "${OUTDIR}/spike_vaf_${best_vaf}/truth.vcf")
+        if [[ -f "${OUTDIR}/background_control/delly.vcf.gz" ]]; then
+            c_calls=$("$BCFTOOLS" view -H "${OUTDIR}/background_control/delly.vcf.gz" 2>/dev/null | wc -l)
+        fi
+        printf "background\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$c_truth" "$c_calls" "$c_tp" "$c_fp" "$c_fn" \
+            "$c_recall" "$c_precision" "$c_f1" "n/a" \
+            >> "$summary_tsv"
+    fi
 
     for vaf in "${VAFS[@]}"; do
         local spike_out="${OUTDIR}/spike_vaf_${vaf}"
@@ -748,22 +945,21 @@ step8_summarize() {
 
         # Truvari results
         if [[ -f "${truvari_out}/summary.json" ]]; then
-            read -r tp fp fn recall precision f1 < <(python3 -c "
-import json
-d = json.load(open('${truvari_out}/summary.json'))
-tp = d.get('TP-comp', d.get('TP', 0))
-fp = d.get('FP', 0)
-fn = d.get('FN', 0)
-recall = d.get('recall', 0) or 0
-precision = d.get('precision', 0) or 0
-f1 = d.get('f1', 0) or 0
-print(f'{tp} {fp} {fn} {recall:.4f} {precision:.4f} {f1:.4f}')
-")
-            # A run that recovers nothing at the highest VAF has not validated
-            # anything; neither has one that recalls less than --min-recall.
-            if [[ "$vaf" == "$best_vaf" ]] \
-                && awk -v t="$tp" 'BEGIN{exit !(t+0==0)}'; then
-                note_failure "VAF=${vaf} (highest): truvari recovered 0 of $n_truth spiked DELs"
+            read -r tp fp fn recall precision f1 \
+                < <(read_truvari_summary "${truvari_out}/summary.json")
+            # The verdict gate. Recovering events the background already
+            # carries validates nothing, so the highest VAF has to beat the
+            # background control by --min-gain events. (A bare "TP > 0" gate
+            # passes on the background alone: on chr20:61.9-64.2 Mb the
+            # unspiked NA18488 background already yields TP=3 of 8.)
+            if [[ "$vaf" == "$best_vaf" ]]; then
+                local rc=0
+                beats_background_control "$tp" "${control_tp:-}" "$MIN_GAIN" || rc=$?
+                if [[ "$rc" -eq 2 ]]; then
+                    note_failure "VAF=${vaf} (highest): no usable background control (control TP='${control_tp:-<none>}', TP='$tp'), so nothing here can be attributed to the spike-in"
+                elif [[ "$rc" -ne 0 ]]; then
+                    note_failure "VAF=${vaf} (highest): truvari recovered $tp of $n_truth truth DELs but the unspiked background alone recovers $control_tp — the spike-in contributed $((tp - control_tp)), need at least $MIN_GAIN (--min-gain)"
+                fi
             fi
             if [[ -n "$MIN_RECALL" ]] \
                 && awk -v r="$recall" -v m="$MIN_RECALL" 'BEGIN{exit !(r<m)}'; then
@@ -842,8 +1038,13 @@ main() {
     else
         # Skipped step 1: discover an existing background BAM.
         if [[ -z "$BG_BAM" || ! -f "$BG_BAM" ]]; then
-            local found_bg="${OUTDIR}/background/NA18488.chr20.bam"
-            [[ -f "$found_bg" ]] || fail "No background BAM found. Run without --skip-to first."
+            local found_bg rc=0
+            found_bg="$(discover_background_bam)" || rc=$?
+            case "$rc" in
+                0) ;;
+                2) fail "Several BAMs in ${OUTDIR}/background; pass --background-bam to say which one." ;;
+                *) fail "No background BAM in ${OUTDIR}/background. Run without --skip-to first, or pass --background-bam." ;;
+            esac
             BG_BAM="$found_bg"
             log "  Discovered background BAM: $BG_BAM"
         fi
@@ -857,6 +1058,8 @@ main() {
     [[ "$SKIP_TO" -le 5 ]] && step5_spike_validate
     [[ "$SKIP_TO" -le 6 ]] && step6_call_svs
     [[ "$SKIP_TO" -le 7 ]] && step7_truvari_bench
+    # Always: the verdict is meaningless without the floor it is measured from.
+    step7b_background_control
     step8_summarize
 
     log "=== Pipeline complete ==="

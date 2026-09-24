@@ -856,8 +856,9 @@ spike --bam sample.bam --reference GRCh38.fasta \
 `scripts/validate_pipeline.sh` runs the whole loop on real data: it takes het
 DELs from the GIAB HG002 T2TQ100 truth set, spikes them into a clean
 1000 Genomes background BAM at several VAFs, aligns and merges with the
-generated `align.sh` / `merge.sh`, runs `spike validate` and Delly, and scores
-the calls with Truvari.
+generated `align.sh` / `merge.sh`, runs `spike validate` and Delly, scores the
+calls with Truvari, and runs the same caller on the *unspiked* background so the
+verdict can be attributed to the spike-in rather than to the background sample.
 
 ```bash
 # Full chr20 run
@@ -874,6 +875,10 @@ bash scripts/validate_pipeline.sh \
   --outdir /scratch/spike_validation
 ```
 
+Output goes to `--outdir`, which defaults to `<repo>/validation_run` (untracked).
+The script refuses to run when `--outdir` names a directory whose contents git
+tracks, so it cannot overwrite committed fixtures.
+
 Requires `samtools`, `bwa-mem2`, `bcftools`, `bgzip`, `tabix`, `delly`,
 `truvari` and `python3`. Each is taken from `PATH` and can be overridden with an
 environment variable of the same name (`SAMTOOLS=...`, `DELLY=...`, ...); the
@@ -885,22 +890,45 @@ GIAB paths default to `<repo>/data/giab_hg38` and can be moved with
 Options: `--region chr:beg-end` restricts the run to one window (it slices the
 background BAM, so the whole run stays small), `--max-events N` caps the number
 of truth DELs, `--min-events N` is the floor below which the run aborts
-(default 5), `--vafs "0.5 0.25 0.1"` sets the allele fractions, and
-`--min-recall F` fails the run when any VAF recalls less than `F`.
+(default 5), `--vafs "0.5 0.25 0.1"` sets the allele fractions, `--min-recall F`
+fails the run when any VAF recalls less than `F`, and `--min-gain N` is how many
+truth events the highest VAF must recover *beyond the background control*
+(default 1; `--min-gain 0` turns that gate off).
 
 The background BAM must be aligned to the same reference: Delly refuses a BAM
 whose header names contigs the FASTA does not have (an `_alt` background next
 to a `no_alt` reference, say), so step 1 checks that up front and stops.
 
-Read the recall column with the background in mind: the truth DELs are common
-HG002 variants, and a 1000 Genomes background often carries the same ones, so
-Delly recovers some of them from the background alone. On a 2.3 Mb chr20 window
-(8 truth DELs) Delly found 3 of them in the *unspiked* background — three of
-the four recovered at VAF 0.5. Run Delly on the background BAM by itself to get
-that floor before reading a titration.
+Read the recall column against the background, not against zero: the truth DELs
+are common HG002 variants, and a 1000 Genomes background often carries the same
+ones, so Delly recovers some of them with no spike-in at all. On a 2.3 Mb chr20
+window (8 truth DELs) Delly finds 3 of them in the *unspiked* background — three
+of the four recovered at VAF 0.5. Step 7b measures that floor for you: it runs
+the same `delly call` and the same `truvari bench` on the background BAM alone
+and writes the result as the `background` row of the summary table.
 
 The script **exits non-zero** when it did not validate anything: a missing tool
 or data file, fewer than `--min-events` truth events, a `spike` or `merge.sh`
-error, an unparseable `spike validate` report, a missing Truvari summary, or
-zero recovered events at the highest VAF. A summary table is written to
-`<outdir>/validation_summary.tsv`.
+error, an unparseable `spike validate` report, a missing Truvari summary, a
+missing background control, or a highest-VAF result that does not recover at
+least `--min-gain` more truth events than that control. That last gate is the
+one that makes the verdict mean something: a plain "recovered more than zero"
+test passes on the background alone, so a run in which the spike-in contributed
+nothing would still print `VALIDATION PASSED`. A summary table is written to
+`<outdir>/validation_summary.tsv`, and the control's own calls to
+`<outdir>/background_control/`.
+
+The gate counts recovered truth events, so it catches a run that contributed
+nothing at all; on a single replicate it cannot separate a very weak spike-in
+from re-alignment noise. Measured on the 2.3 Mb window: at VAF 0.5 the spiked
+run recovers `sim_del_6` (chr20:63636171) on top of the control's three — the
+one truth DEL the background does *not* carry, which is the right answer; at
+`--vafs 0.001` it also recovers one more than the control, but that one is
+`sim_del_8`, a DEL the background carries and that re-alignment flipped from FN
+to TP. Separating those needs replicates or a VAF titration, not a single run.
+
+Note that `spike validate`'s per-event checks are *not* part of the verdict
+beyond "the report parsed and at least one check passed". On a cross-sample
+spike-in most of them compare against a background that already carries the
+event, so they fail for reasons that have nothing to do with the injection —
+see `N1` in `REVIEW.md`.
