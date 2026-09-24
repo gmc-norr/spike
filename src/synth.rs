@@ -474,9 +474,13 @@ impl<'a> SynthReadGenerator<'a> {
 
     /// Generate a synthetic read pair for a fragment at a given position.
     ///
-    /// R1 is forward-strand at `frag_start`. R2 is reverse-strand at
-    /// `frag_start + frag_len - read_length`, stored in FASTQ orientation
-    /// (reverse-complemented). Both reads carry `alleles` (see `generate_read`).
+    /// The fragment is `[frag_start, frag_start + frag_len)` either way; a
+    /// coin flip decides which mate comes off which end. F1R2: R1 forward at
+    /// `frag_start`, R2 reverse at `frag_start + frag_len - read_length`.
+    /// F2R1: the other way round. Real libraries are ~50/50 (M13), and a
+    /// one-sided strand makes callers' read-orientation filters fire.
+    /// The reverse mate is stored in FASTQ orientation (reverse-complemented).
+    /// Both reads carry `alleles` (see `generate_read`).
     pub fn generate_read_pair(
         &self,
         chrom: &str,
@@ -491,16 +495,33 @@ impl<'a> SynthReadGenerator<'a> {
             return None;
         }
 
-        let r2_start = frag_start + frag_len - rl;
+        let right_start = frag_start + frag_len - rl;
 
-        // Generate R1 (forward strand).
-        let (seq1, qual1) = self.generate_read(chrom, frag_start, alleles, 1, false, rng);
+        // Draw the orientation before either read, so the stream stays in a
+        // fixed order and the same --seed keeps giving the same output (M7).
+        let r1_is_reverse = rng.gen::<bool>();
+        // Either way the left end is read forward and the right end reverse —
+        // the flip only decides which of the two is R1. read_num picks the
+        // quality model, reverse_cycles handles the flip, so whichever mate
+        // ends up as R1 keeps the R1 model.
+        let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
-        // Generate R2 (reverse strand) — generate forward then revcomp for FASTQ.
-        // reverse_cycles=true so quality profile cycles align after qual2.reverse().
-        let (mut seq2, mut qual2) = self.generate_read(chrom, r2_start, alleles, 2, true, rng);
-        reverse_complement(&mut seq2);
-        qual2.reverse();
+        // Forward mate (left end of the fragment).
+        let (fwd_seq, fwd_qual) =
+            self.generate_read(chrom, frag_start, alleles, fwd_num, false, rng);
+
+        // Reverse mate (right end) — generate forward then revcomp for FASTQ.
+        // reverse_cycles=true so quality profile cycles align after the reverse.
+        let (mut rev_seq, mut rev_qual) =
+            self.generate_read(chrom, right_start, alleles, rev_num, true, rng);
+        reverse_complement(&mut rev_seq);
+        rev_qual.reverse();
+
+        let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
+            (rev_seq, rev_qual, fwd_seq, fwd_qual)
+        } else {
+            (fwd_seq, fwd_qual, rev_seq, rev_qual)
+        };
 
         Some(ReadPair {
             name: name.to_string(),
@@ -696,9 +717,11 @@ impl<'a> SynthReadGenerator<'a> {
 
     /// Generate a synthetic read pair from a variant haplotype.
     ///
-    /// R1 starts at `hap_frag_start` (forward), R2 at `hap_frag_start + frag_len - rl`
-    /// (reverse-complement for FR orientation). Reference coordinates for the
-    /// ReadPair are mapped back from the haplotype via `hap_to_ref`.
+    /// A coin flip decides which end of the fragment each mate comes off, as
+    /// in `generate_read_pair` (M13): the forward mate starts at
+    /// `hap_frag_start`, the reverse mate at `hap_frag_start + frag_len - rl`
+    /// and is reverse-complemented for FR orientation. Reference coordinates
+    /// for the ReadPair are mapped back from the haplotype via `hap_to_ref`.
     pub fn generate_haplotype_read_pair(
         &self,
         haplotype: &VariantHaplotype,
@@ -712,34 +735,50 @@ impl<'a> SynthReadGenerator<'a> {
             return None;
         }
 
-        let r2_hap_start = hap_frag_start + frag_len - rl;
+        let right_hap_start = hap_frag_start + frag_len - rl;
 
         // Get sequences from the haplotype.
-        let r1_seq = haplotype.get_sequence(hap_frag_start, self.read_length);
-        let r2_seq = haplotype.get_sequence(r2_hap_start, self.read_length);
+        let left_seq = haplotype.get_sequence(hap_frag_start, self.read_length);
+        let right_seq = haplotype.get_sequence(right_hap_start, self.read_length);
 
-        if r1_seq.len() < self.read_length || r2_seq.len() < self.read_length {
+        if left_seq.len() < self.read_length || right_seq.len() < self.read_length {
             return None;
         }
 
-        // Generate R1 (forward strand).
-        let (seq1, qual1) = self.generate_read_from_seq(r1_seq, 1, false, rng);
+        // Draw the orientation before either read, so the stream stays in a
+        // fixed order and the same --seed keeps giving the same output (M7).
+        let r1_is_reverse = rng.gen::<bool>();
+        // read_num picks the quality model, reverse_cycles handles the flip,
+        // so whichever mate ends up as R1 keeps the R1 model.
+        let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
-        // Generate R2 (reverse strand): generate forward then revcomp.
-        let (mut seq2, mut qual2) = self.generate_read_from_seq(r2_seq, 2, true, rng);
-        reverse_complement(&mut seq2);
-        qual2.reverse();
+        // Forward mate (left end of the fragment).
+        let (fwd_seq, fwd_qual) = self.generate_read_from_seq(left_seq, fwd_num, false, rng);
+
+        // Reverse mate (right end): generate forward then revcomp.
+        let (mut rev_seq, mut rev_qual) =
+            self.generate_read_from_seq(right_seq, rev_num, true, rng);
+        reverse_complement(&mut rev_seq);
+        rev_qual.reverse();
+
+        let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
+            (rev_seq, rev_qual, fwd_seq, fwd_qual)
+        } else {
+            (fwd_seq, fwd_qual, rev_seq, rev_qual)
+        };
 
         // Map haplotype positions back to reference coordinates. An end inside
         // inserted sequence takes the nearest reference base: such pairs are
         // the one-end-anchored evidence for the insertion.
-        let (chrom, r1_ref) = haplotype.hap_to_ref_nearest(hap_frag_start)?;
-        let (_, r2_ref) = haplotype.hap_to_ref_nearest(r2_hap_start + rl - 1)?;
+        // Both fragment ends are mapped, so the span does not depend on which
+        // mate is R1.
+        let (chrom, left_ref) = haplotype.hap_to_ref_nearest(hap_frag_start)?;
+        let (_, right_ref) = haplotype.hap_to_ref_nearest(right_hap_start + rl - 1)?;
 
         // Normalize: ensure ref_start <= ref_end. For reads in inverted
-        // segments, R1 maps to a higher ref position than R2 (reversed mapping).
-        let ref_start = r1_ref.min(r2_ref);
-        let ref_end = r1_ref.max(r2_ref) + 1; // exclusive
+        // segments the left end maps to a higher ref position (reversed mapping).
+        let ref_start = left_ref.min(right_ref);
+        let ref_end = left_ref.max(right_ref) + 1; // exclusive
 
         Some(ReadPair {
             name: name.to_string(),
@@ -1325,5 +1364,189 @@ mod tests {
 
         // R1's start maps to the nearest reference base: hap 3000 = ref 2000.
         assert_eq!((pair.chrom.as_str(), pair.ref_start, pair.ref_end), ("chr1", 2000, 2200));
+    }
+
+    // ── Fragment orientation (F1R2 vs F2R1) ─────────────────────────────
+
+    /// A generator over `seq` on chr1, with every R1 base at Q`q1` and every
+    /// R2 base at Q`q2`.
+    fn mock_gen_over(seq: Vec<u8>, read_length: usize, q1: u8, q2: u8) -> SynthReadGenerator<'static> {
+        let qual1 = vec![b'!' + q1; read_length];
+        let qual2 = vec![b'!' + q2; read_length];
+        let pairs: Vec<ReadPair> = (0..100)
+            .map(|i| {
+                mock_read_pair(&format!("mock_{}", i), qual1.clone(), qual2.clone(), i as u64 * 500)
+            })
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, read_length);
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chr1".to_string(), seq);
+        let reference: &'static SharedReference =
+            Box::leak(Box::new(SharedReference::from_sequences(seqs)));
+        SynthReadGenerator::new(profile, reference, read_length, 0.0)
+    }
+
+    /// A sequence with no palindromic structure, so a read off the left end of
+    /// a fragment never equals the reverse complement of the right end.
+    fn scrambled_seq(len: usize, seed: u64) -> Vec<u8> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        (0..len).map(|_| b"ACGT"[rng.gen_range(0..4)]).collect()
+    }
+
+    /// True when at least 90% of `seq` is `base`. Over an all-A reference an
+    /// R1 is all A forward and all T reverse, bar the odd sequencing error.
+    fn mostly(seq: &[u8], base: u8) -> bool {
+        seq.iter().filter(|&&b| b == base).count() * 10 >= seq.len() * 9
+    }
+
+    #[test]
+    fn test_read_pair_orientation_splits_near_half() {
+        // Real Illumina libraries are ~50/50 F1R2 / F2R1 (M13).
+        let gen = mock_gen_over(vec![b'A'; 100_000], 150, 40, 40);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(1);
+        let (mut fwd, mut rev) = (0usize, 0usize);
+        for i in 0..400u64 {
+            let pair = gen
+                .generate_read_pair("chr1", 1000 + i * 100, 400, &no_alleles, "p", &mut rng)
+                .unwrap();
+            if mostly(&pair.seq1, b'A') {
+                fwd += 1;
+            } else if mostly(&pair.seq1, b'T') {
+                rev += 1;
+            }
+        }
+        assert_eq!(fwd + rev, 400, "every R1 should be one orientation or the other");
+        assert!(fwd > 140 && rev > 140, "orientation split {} fwd / {} rev of 400", fwd, rev);
+    }
+
+    #[test]
+    fn test_reversed_read_pair_covers_the_same_fragment() {
+        // Flipping orientation must move which end each mate comes from, not
+        // where the fragment sits: R1 reverse-complemented off the right end,
+        // R2 forward off the left end.
+        let rl = 150usize;
+        let seq = scrambled_seq(50_000, 7);
+        let gen = mock_gen_over(seq.clone(), rl, 93, 93); // Q93: no sequencing errors
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(2);
+        let (mut fwd, mut rev) = (0usize, 0usize);
+        for i in 0..100u64 {
+            let frag_start = 1000 + i * 37;
+            let frag_len = 400u64;
+            let pair = gen
+                .generate_read_pair("chr1", frag_start, frag_len, &no_alleles, "p", &mut rng)
+                .unwrap();
+            let (s, e) = (frag_start as usize, (frag_start + frag_len) as usize);
+            let left = seq[s..s + rl].to_vec();
+            let mut right_rc = seq[e - rl..e].to_vec();
+            reverse_complement(&mut right_rc);
+            assert_ne!(left, right_rc, "the test sequence must not be palindromic");
+            if pair.seq1 == left {
+                assert_eq!(pair.seq2, right_rc, "F1R2 pair at {} has the wrong R2", frag_start);
+                fwd += 1;
+            } else if pair.seq1 == right_rc {
+                assert_eq!(pair.seq2, left, "F2R1 pair at {} has the wrong R2", frag_start);
+                rev += 1;
+            } else {
+                panic!("R1 at {} matches neither end of the fragment", frag_start);
+            }
+        }
+        assert!(fwd > 0 && rev > 0, "orientation split {} fwd / {} rev of 100", fwd, rev);
+    }
+
+    #[test]
+    fn test_read_pair_orientation_repeats_for_the_same_seed() {
+        // The orientation draw comes out of the seeded stream in a fixed
+        // order, so the same --seed still gives the same FASTQ (M7).
+        let gen = mock_gen_over(vec![b'A'; 100_000], 150, 40, 40);
+        let orientations = |seed: u64| -> Vec<bool> {
+            let no_alleles = HashMap::new();
+            let mut rng = StdRng::seed_from_u64(seed);
+            (0..200u64)
+                .map(|i| {
+                    let pair = gen
+                        .generate_read_pair("chr1", 1000 + i * 100, 400, &no_alleles, "p", &mut rng)
+                        .unwrap();
+                    mostly(&pair.seq1, b'T')
+                })
+                .collect()
+        };
+
+        let first = orientations(9);
+        assert_eq!(first, orientations(9), "the same seed must give the same orientations");
+        assert!(
+            first.iter().any(|&r| r) && first.iter().any(|&r| !r),
+            "both orientations should occur"
+        );
+    }
+
+    #[test]
+    fn test_reversed_r1_keeps_the_r1_quality_model() {
+        // R1 at Q40, R2 at Q20: the mate that is R1 keeps the R1 model even
+        // when it comes off the right end of the fragment.
+        let gen = mock_gen_over(vec![b'A'; 100_000], 150, 40, 20);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(3);
+        let mut reversed = 0usize;
+        for i in 0..200u64 {
+            let pair = gen
+                .generate_read_pair("chr1", 1000 + i * 100, 400, &no_alleles, "p", &mut rng)
+                .unwrap();
+            assert!(pair.qual1.iter().all(|&q| q == b'!' + 40), "R1 lost the R1 quality model");
+            assert!(pair.qual2.iter().all(|&q| q == b'!' + 20), "R2 lost the R2 quality model");
+            if mostly(&pair.seq1, b'T') {
+                reversed += 1;
+            }
+        }
+        assert!(reversed > 0, "no pair came out in F2R1 orientation");
+    }
+
+    #[test]
+    fn test_reversed_haplotype_pair_covers_the_same_fragment() {
+        // Same property for the haplotype/tiling path.
+        let rl = 150usize;
+        let hap_seq = scrambled_seq(4000, 13);
+        let hap = VariantHaplotype::from_segments(vec![HaplotypeSegment {
+            sequence: hap_seq.clone(),
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: 0,
+                ref_end: 4000,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        }]);
+        // This path reads the haplotype, not the reference; Q93: no errors.
+        let gen = mock_gen_over(vec![b'A'; 1000], rl, 93, 93);
+        let mut rng = StdRng::seed_from_u64(4);
+        let (mut fwd, mut rev) = (0usize, 0usize);
+        for i in 0..100u64 {
+            let hap_start = 100 + i * 17;
+            let frag_len = 400u64;
+            let pair = gen
+                .generate_haplotype_read_pair(&hap, hap_start, frag_len, "h", &mut rng)
+                .unwrap();
+            let (s, e) = (hap_start as usize, (hap_start + frag_len) as usize);
+            let left = hap_seq[s..s + rl].to_vec();
+            let mut right_rc = hap_seq[e - rl..e].to_vec();
+            reverse_complement(&mut right_rc);
+            assert_ne!(left, right_rc, "the test haplotype must not be palindromic");
+            if pair.seq1 == left {
+                assert_eq!(pair.seq2, right_rc, "F1R2 pair at {} has the wrong R2", hap_start);
+                fwd += 1;
+            } else if pair.seq1 == right_rc {
+                assert_eq!(pair.seq2, left, "F2R1 pair at {} has the wrong R2", hap_start);
+                rev += 1;
+            } else {
+                panic!("R1 at hap {} matches neither end of the fragment", hap_start);
+            }
+            assert_eq!(
+                (pair.ref_start, pair.ref_end),
+                (hap_start, hap_start + frag_len),
+                "the pair's reference span must not depend on orientation"
+            );
+        }
+        assert!(fwd > 0 && rev > 0, "orientation split {} fwd / {} rev of 100", fwd, rev);
     }
 }

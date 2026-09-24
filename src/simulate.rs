@@ -635,10 +635,12 @@ mod tests {
         }
     }
 
-    /// Make a novel (insertion) segment with no reference origin.
+    /// Make a novel (insertion) segment with no reference origin. G, not the
+    /// complement of the A flanks, so a read carrying inserted sequence is
+    /// recognizable whichever strand it came off (G forward, C reverse).
     fn novel_segment(len: u64) -> HaplotypeSegment {
         HaplotypeSegment {
-            sequence: vec![b'T'; len as usize],
+            sequence: vec![b'G'; len as usize],
             origin: None,
             hap_offset: 0,
         }
@@ -1505,7 +1507,7 @@ mod tests {
 
     #[test]
     fn test_long_insertion_yields_reads_carrying_inserted_sequence() {
-        // ref (A) [0,2000) | 1000 bp insertion (T) | ref (A) [2000,4000).
+        // ref (A) [0,2000) | 1000 bp insertion (G) | ref (A) [2000,4000).
         let mut hap = make_haplotype(vec![
             ref_segment(0, 2000),
             novel_segment(1000),
@@ -1515,7 +1517,7 @@ mod tests {
         let event = SimEvent::Insertion {
             chrom: "chr1".to_string(),
             pos: 2000,
-            ins_seq: Some(vec![b'T'; 1000]),
+            ins_seq: Some(vec![b'G'; 1000]),
             ins_len: 1000,
             gene: "TEST".to_string(),
             allele_fraction: Some(0.2),
@@ -1529,10 +1531,13 @@ mod tests {
 
         // With 400 bp fragments, 780 of the 4000 allowed starts put >= 10
         // inserted bases in a read (~19.5%). Before the fix it was 0.
-        // R2 is reverse-complemented, so inserted T reads as A there.
+        // Either mate may be reverse-complemented, so the inserted G reads as
+        // G or C; the A flanks never do.
         let carries_insert = |p: &&ReadPair| {
-            p.seq1.iter().filter(|&&b| b == b'T').count() >= 10
-                || p.seq2.iter().filter(|&&b| b == b'A').count() >= 10
+            let inserted = |seq: &[u8]| {
+                seq.iter().filter(|&&b| b == b'G' || b == b'C').count() >= 10
+            };
+            inserted(&p.seq1) || inserted(&p.seq2)
         };
         let n = out.chimeric_pairs.len();
         let with_insert = out.chimeric_pairs.iter().filter(carries_insert).count();
@@ -1567,12 +1572,14 @@ mod tests {
         )]
     }
 
-    /// Count pairs whose R1 is mostly G (event copy) and mostly C (other copy).
+    /// Count pairs whose R1 carries the event copy (G) and the other copy (A).
+    /// R1 comes off either end of the fragment, so the event copy reads G
+    /// forward and C reverse, and the other copy A forward and T reverse.
     fn count_by_copy(pairs: &[&ReadPair]) -> (usize, usize) {
         let mostly = |p: &ReadPair, b: u8| p.seq1.iter().filter(|&&x| x == b).count() * 2 > p.seq1.len();
         (
-            pairs.iter().filter(|p| mostly(p, b'G')).count(),
-            pairs.iter().filter(|p| mostly(p, b'C')).count(),
+            pairs.iter().filter(|p| mostly(p, b'G') || mostly(p, b'C')).count(),
+            pairs.iter().filter(|p| mostly(p, b'A') || mostly(p, b'T')).count(),
         )
     }
 
@@ -1617,9 +1624,9 @@ mod tests {
 
     #[test]
     fn test_synthetic_reads_carry_event_copy_alleles() {
-        // Event copy: G everywhere, other copy: C. At VAF 0.5 every
+        // Event copy: G everywhere, other copy: A. At VAF 0.5 every
         // synthetic read comes from the event copy.
-        let copies = uniform_copies(0, 4000, b'G', b'C', HashMap::new());
+        let copies = uniform_copies(0, 4000, b'G', b'A', HashMap::new());
         let pool = make_covering_pool(0, 5000, 1000);
         let mut rng = StdRng::seed_from_u64(5);
 
@@ -1638,7 +1645,7 @@ mod tests {
     fn test_synthetic_reads_above_half_vaf_come_from_both_copies() {
         // At VAF 0.8 the other copy carries the event in 2·0.8 − 1 = 60% of
         // cells, so it gives 0.5·0.6 / 0.8 = 37.5% of the synthetic reads.
-        let copies = uniform_copies(0, 4000, b'G', b'C', HashMap::new());
+        let copies = uniform_copies(0, 4000, b'G', b'A', HashMap::new());
         let pool = make_covering_pool(0, 5000, 1000);
         let mut rng = StdRng::seed_from_u64(5);
 
@@ -1656,7 +1663,7 @@ mod tests {
 
     #[test]
     fn test_small_variant_keeps_its_own_allele() {
-        // SNV A>T at 1000. The sample's copies carry G at every position,
+        // SNV A>T at 1000. The sample's event copy carries G at every position,
         // including 1000; the simulated allele must win there.
         let alt = HaplotypeSegment {
             sequence: vec![b'T'],
@@ -1677,7 +1684,7 @@ mod tests {
             gene: "TEST".to_string(),
             allele_fraction: Some(0.5),
         };
-        let copies = uniform_copies(0, 2001, b'G', b'C', HashMap::new());
+        let copies = uniform_copies(0, 2001, b'G', b'A', HashMap::new());
         let mut rng = StdRng::seed_from_u64(5);
 
         simulate_event_with_copies(
@@ -1704,7 +1711,7 @@ mod tests {
             pairs.push(make_pair(&name, start, start + 400));
         }
         let pool = make_pool(pairs);
-        let copies = uniform_copies(0, 10_000, b'G', b'C', read_copy);
+        let copies = uniform_copies(0, 10_000, b'G', b'A', read_copy);
         let event = SimEvent::Duplication {
             chrom: "chr1".to_string(),
             dup_start: 2000,

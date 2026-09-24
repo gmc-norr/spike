@@ -46,7 +46,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M10 | Medium | **Fixed.** `validate` coverage check always passes on WGS | `validate.rs:753-756` |
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
 | M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
-| M13 | Medium | All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
+| M13 | Medium | **Fixed.** All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
 | M14 | Medium | **Fixed.** Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
 | M15 | Medium | CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
@@ -225,6 +225,7 @@ Pairs come out of a `HashMap` in random order (`extract.rs:124`, `285`). `build_
 - `dup_test/sim.bam`: synthetic R1 forward 659/659; real reads 7305 fwd / 7357 rev.
 - Mutect2's read-orientation filter will likely flag simulated SNVs.
 - **Fix:** for a random half of fragments, take R1 from the right end on the reverse strand.
+- **Fixed:** `generate_read_pair` and `generate_haplotype_read_pair` now draw one `rng.gen::<bool>()` per fragment, before either read, and it decides which mate is R1. The fragment's left end is still always read forward and its right end reverse, so a flipped pair covers exactly the same interval; only `read_num` (the quality model) and the final R1/R2 assignment swap, so the mate that is R1 keeps the R1 model. HG002 (`dup:chr20:38423496-38427196`, seed 1, bwa-mem2, primary alignments): synthetic R1 forward 808/808 → 402 fwd / 406 rev of 808 (a fair coin gives sd 14.2, so this is 0.1 sd off centre); the real reads in the same BAM are 1544 fwd / 1491 rev. Synthetic proper-pair rate 97.5% → 97.4% and mean |TLEN| 490.2 → 489.4 bp, i.e. the flipped pairs are still FR over the same fragments. Two runs at `--seed 1` still give byte-identical `R1.fq.gz`/`R2.fq.gz`/`truth.vcf`. (The review's 659/659 came from a BAM not available here; the counts differ, the 100%-forward symptom reproduced exactly.)
 
 ### M14 · Missing base qualities → invalid FASTQ
 `extract.rs:453-460` does `s.wrapping_add(33)`; missing qualities (0xFF) become byte 32 (space).
