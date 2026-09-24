@@ -636,11 +636,20 @@ During the same pass, per-read allele observations are recorded, so no second BA
 
 ### gVCF (optional, `--gvcf`)
 
-Het SNP positions are loaded from a pre-called VCF (e.g., DeepVariant gVCF). Only biallelic SNPs with heterozygous genotype (0/1 or 1/0) are used. A single BAM pass then classifies reads by which allele they carry at these known positions.
+Het SNP positions are loaded from a pre-called VCF (e.g., DeepVariant gVCF). Only biallelic SNPs with heterozygous genotype (0/1 or 1/0) are used. A single BAM pass then records which allele each read carries at these known positions. Phased genotypes (`0|1`, `1|0`, with an optional `PS` phase set) are used for phasing (below); a phased VCF such as a GIAB/T2T benchmark gives the most realistic LOH.
+
+### Phasing
+
+A deletion or duplication affects one whole haplotype, so every het SNP in it must lose (or gain) the allele of the same haplotype. spike phases the het SNPs into blocks:
+
+- SNPs in the same phase set of a phased gVCF are linked outright.
+- Otherwise, SNPs are linked by fragments (mates pooled) that cover two or more of them; links are joined strongest first, and a link that contradicts stronger ones is ignored.
+
+One coin flip per block picks the "target" haplotype. SNPs that no read or phase set links (usually more than a fragment length apart) form separate blocks and get their own coin flip; with short reads alone their relative phase is unknown.
 
 ### Read classification
 
-At each het SNP position, one allele is randomly designated as the "target" haplotype. Each read is scored by counting how many het SNP positions match the target vs. the other allele. Reads with more target matches are placed in the target set; reads with more other-allele matches are placed in the other set; ties are marked ambiguous (excluded from both sets). Reads not overlapping any het SNP remain unclassified and fall back to random handling at the VAF rate.
+Each fragment is scored by how many het SNPs show the target vs. the other haplotype's allele. More target matches → target set; more other matches → other set. Ties, and fragments covering no het SNP, stay unclassified and fall back to random handling at the VAF rate.
 
 ## Quality profile
 

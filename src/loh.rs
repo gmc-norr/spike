@@ -33,6 +33,10 @@ struct HetSnp {
     pos: u64,    // 0-based reference position
     allele1: u8, // major allele (A/C/G/T)
     allele2: u8, // minor allele
+    /// Phase from a phased gVCF genotype: (phase set, the genotype's first
+    /// haplotype carries allele2). The phase set is the PS value, or empty
+    /// when the genotype is phased without PS (phased across the contig).
+    phase: Option<(String, bool)>,
 }
 
 /// Identify reads from one haplotype in a genomic region.
@@ -332,15 +336,35 @@ fn parse_gvcf_line(
     }
 
     // Check genotype for heterozygosity.
-    let gt_field = fields[sample_col].split(':').next().unwrap_or("");
+    let sample: Vec<&str> = fields[sample_col].split(':').collect();
+    let gt_field = sample.first().copied().unwrap_or("");
     let is_het =
         gt_field == "0/1" || gt_field == "1/0" || gt_field == "0|1" || gt_field == "1|0";
+
+    // A phased genotype also says which haplotype carries ALT; PS names the
+    // phase set (absent: phased across the contig).
+    let phase = match gt_field {
+        "0|1" => Some(false),
+        "1|0" => Some(true),
+        _ => None,
+    }
+    .map(|first_is_alt| {
+        let ps = fields[sample_col - 1]
+            .split(':')
+            .position(|key| key == "PS")
+            .and_then(|i| sample.get(i))
+            .filter(|v| **v != ".")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        (ps, first_is_alt)
+    });
 
     if is_het {
         het_snps.push(HetSnp {
             pos,
             allele1: ref_allele[0].to_ascii_uppercase(),
             allele2: alt_allele[0].to_ascii_uppercase(),
+            phase,
         });
     }
 }
@@ -621,6 +645,7 @@ fn find_het_snps(
                     pos,
                     allele1: sorted[0].0,
                     allele2: sorted[1].0,
+                    phase: None,
                 });
             }
         }
@@ -673,6 +698,17 @@ fn phase_het_snps(
         for pair in seen.windows(2) {
             let ((i, a), (j, b)) = (pair[0], pair[1]);
             *votes.entry((i, j)).or_insert(0) += if a == b { 1 } else { -1 };
+        }
+    }
+
+    // A phased gVCF links SNPs of one phase set outright, overriding reads.
+    const GVCF_LINK: i64 = 1_000_000;
+    let mut last_in_set: HashMap<&str, (usize, bool)> = HashMap::new();
+    for (j, snp) in het_snps.iter().enumerate() {
+        let Some((set, first_is_allele2)) = &snp.phase else { continue };
+        if let Some((i, prev)) = last_in_set.insert(set.as_str(), (j, *first_is_allele2)) {
+            let vote = if prev == *first_is_allele2 { GVCF_LINK } else { -GVCF_LINK };
+            *votes.entry((i, j)).or_insert(0) += vote;
         }
     }
 
@@ -1042,7 +1078,43 @@ mod tests {
     use rand::SeedableRng;
 
     fn snp(pos: u64) -> HetSnp {
-        HetSnp { pos, allele1: b'A', allele2: b'G' }
+        HetSnp { pos, allele1: b'A', allele2: b'G', phase: None }
+    }
+
+    fn phased(pos: u64, set: &str, first_is_allele2: bool) -> HetSnp {
+        HetSnp { phase: Some((set.to_string(), first_is_allele2)), ..snp(pos) }
+    }
+
+    fn gvcf_snp(line: &str) -> Vec<HetSnp> {
+        let mut snps = Vec::new();
+        parse_gvcf_line(line, "chr1", 0, 1_000_000, 9, &mut snps, &mut None);
+        snps
+    }
+
+    #[test]
+    fn test_gvcf_phase_is_read_from_genotype_and_ps() {
+        let with_ps = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT:GQ:PS\t1|0:50:77");
+        assert_eq!(with_ps[0].phase, Some(("77".to_string(), true)));
+        let no_ps = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1");
+        assert_eq!(no_ps[0].phase, Some((String::new(), false)));
+        let unphased = gvcf_snp("chr1\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0/1");
+        assert_eq!(unphased[0].phase, None);
+    }
+
+    #[test]
+    fn test_gvcf_phase_links_snps_no_read_covers() {
+        let none: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
+        // Same phase set: one block; 1|0 and 0|1 get opposite flips.
+        let snps = vec![phased(100, "7", true), phased(5000, "7", false), phased(9000, "7", true)];
+        let phase = phase_het_snps(&snps, &none);
+        assert_eq!(phase[&100].0, phase[&5000].0);
+        assert_eq!(phase[&100].0, phase[&9000].0);
+        assert_ne!(phase[&100].1, phase[&5000].1);
+        assert_eq!(phase[&100].1, phase[&9000].1);
+        // Different phase sets stay apart.
+        let snps = vec![phased(100, "7", true), phased(5000, "8", true)];
+        let phase = phase_het_snps(&snps, &none);
+        assert_ne!(phase[&100].0, phase[&5000].0);
     }
 
     fn frag(alleles: &[(u64, u8)]) -> Vec<(u64, u8)> {
