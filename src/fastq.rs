@@ -94,8 +94,14 @@ pub fn write_paired_fastq(pairs: &[ReadPair], output_dir: &str) -> Result<(Strin
         writeln!(r2_gz)?;
     }
 
-    r1_gz.finish()?;
-    r2_gz.finish()?;
+    // `finish()` only flushes flate2's own internal buffer into the
+    // `BufWriter` it returns; small output can still be sitting unwritten
+    // in that `BufWriter`'s buffer. Without an explicit `flush()` here, a
+    // write error (e.g. a full disk) surfaces only when the `BufWriter` is
+    // dropped, where `Drop::flush` errors are silently discarded — so a
+    // failed write would be reported as `Ok` (L4).
+    r1_gz.finish()?.flush()?;
+    r2_gz.finish()?.flush()?;
 
     let r1_str = r1_path.to_string_lossy().to_string();
     let r2_str = r2_path.to_string_lossy().to_string();
@@ -190,6 +196,31 @@ mod tests {
         assert!(
             !dir.join("R1.fq.gz").exists() && !dir.join("R2.fq.gz").exists(),
             "a refused write must leave no output file behind"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- L4: a write error on the final flush must not be silently ignored ---
+
+    #[test]
+    fn test_write_paired_fastq_reports_error_writing_to_dev_full() {
+        let dir = scratch_dir("devfull");
+
+        // /dev/full always fails a write with ENOSPC. Symlinking R1.fq.gz to
+        // it means File::create opens the device itself, so any byte that
+        // actually reaches the OS write() call errors — the same failure a
+        // real full disk would give partway through the final gzip flush.
+        std::os::unix::fs::symlink("/dev/full", dir.join("R1.fq.gz")).unwrap();
+
+        let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
+
+        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+
+        assert!(
+            result.is_err(),
+            "writing the final FASTQ to a full disk must be reported as an \
+             error, not returned as Ok"
         );
 
         std::fs::remove_dir_all(&dir).ok();

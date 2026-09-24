@@ -800,6 +800,8 @@ Without the drop, a missing quality used to decode to an invalid FASTQ quality b
 
 As a last line of defense, `write_paired_fastq` validates every pair *before* it creates either output file — so a refusal leaves no half-written `.fq.gz` in `--output` — and returns an error if a quality string's length does not match its SEQ, or if any byte falls outside the printable Phred+33 range `!`-`~` (33-126).
 
+`write_paired_fastq` also flushes each gzip stream's returned writer explicitly after `finish()`, rather than only letting it drop. `finish()` empties flate2's own internal buffer into the `BufWriter` it hands back, but that write can land entirely inside the `BufWriter`'s own buffer without ever reaching the file — a write failure (e.g. a full disk) then surfaces only when the `BufWriter` is dropped, where `Drop`'s own flush swallows any error. Calling `write_paired_fastq` with `R1.fq.gz` symlinked to `/dev/full` and a single small read pair returned `Ok(...)` before this fix and now returns `Err("No space left on device (os error 28)")`.
+
 ### Indel error model
 
 When `--indel-error-rate` is set above 0, a fraction of sequencing errors are modeled as insertions or deletions (50/50 split) rather than substitutions. This maintains fixed read length: insertions consume an output position without advancing the reference, and deletions skip a reference base without consuming an output position.
