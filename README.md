@@ -850,3 +850,57 @@ spike --bam sample.bam --reference GRCh38.fasta \
   --align \
   -o sim_panel/
 ```
+
+### End-to-end validation harness
+
+`scripts/validate_pipeline.sh` runs the whole loop on real data: it takes het
+DELs from the GIAB HG002 T2TQ100 truth set, spikes them into a clean
+1000 Genomes background BAM at several VAFs, aligns and merges with the
+generated `align.sh` / `merge.sh`, runs `spike validate` and Delly, and scores
+the calls with Truvari.
+
+```bash
+# Full chr20 run
+bash scripts/validate_pipeline.sh \
+  --giab-dir /path/to/giab_hg38 \
+  --background-bam NA18488.chr20.bam
+
+# Small, fast run: one 2.3 Mb window, two allele fractions
+bash scripts/validate_pipeline.sh \
+  --giab-dir /path/to/giab_hg38 \
+  --background-bam NA18488.chr20.bam \
+  --region chr20:61900000-64200000 \
+  --vafs "0.5 0.25" \
+  --outdir /scratch/spike_validation
+```
+
+Requires `samtools`, `bwa-mem2`, `bcftools`, `bgzip`, `tabix`, `delly`,
+`truvari` and `python3`. Each is taken from `PATH` and can be overridden with an
+environment variable of the same name (`SAMTOOLS=...`, `DELLY=...`, ...); the
+GIAB paths default to `<repo>/data/giab_hg38` and can be moved with
+`--giab-dir` or with `GIAB_DIR` / `REFERENCE` / `TRUTH_VCF` / `BENCH_BED`
+(inside a git worktree `data/giab_hg38` is a dangling symlink, so pass
+`--giab-dir` there).
+
+Options: `--region chr:beg-end` restricts the run to one window (it slices the
+background BAM, so the whole run stays small), `--max-events N` caps the number
+of truth DELs, `--min-events N` is the floor below which the run aborts
+(default 5), `--vafs "0.5 0.25 0.1"` sets the allele fractions, and
+`--min-recall F` fails the run when any VAF recalls less than `F`.
+
+The background BAM must be aligned to the same reference: Delly refuses a BAM
+whose header names contigs the FASTA does not have (an `_alt` background next
+to a `no_alt` reference, say), so step 1 checks that up front and stops.
+
+Read the recall column with the background in mind: the truth DELs are common
+HG002 variants, and a 1000 Genomes background often carries the same ones, so
+Delly recovers some of them from the background alone. On a 2.3 Mb chr20 window
+(8 truth DELs) Delly found 3 of them in the *unspiked* background — three of
+the four recovered at VAF 0.5. Run Delly on the background BAM by itself to get
+that floor before reading a titration.
+
+The script **exits non-zero** when it did not validate anything: a missing tool
+or data file, fewer than `--min-events` truth events, a `spike` or `merge.sh`
+error, an unparseable `spike validate` report, a missing Truvari summary, or
+zero recovered events at the highest VAF. A summary table is written to
+`<outdir>/validation_summary.tsv`.

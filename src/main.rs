@@ -1815,6 +1815,72 @@ esac
         }
     }
 
+    fn validate_pipeline_script() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/validate_pipeline.sh")
+    }
+
+    #[test]
+    fn test_validate_pipeline_counts_a_header_only_vcf_as_one_zero() {
+        // `grep -c` exits 1 when it counts nothing, so the harness's old
+        // `$(grep -vc '^#' f || echo 0)` yielded the two-line string "0\n0",
+        // and every `[[ $n -lt 5 ]]` guard built on it errored out instead of
+        // stopping the run.
+        let dir = scratch_dir("validate_pipeline_count");
+        let vcf = dir.join("headers_only.vcf");
+        std::fs::write(&vcf, "##fileformat=VCFv4.2\n#CHROM\tPOS\n").unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(r#"script="$1"; vcf="$2"; shift 2; source "$script"; count_records "$vcf""#)
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&vcf)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "sourcing validate_pipeline.sh must define its helpers without running \
+             the pipeline:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "0",
+            "count_records must return a single integer for a header-only VCF"
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_aborts_when_its_data_files_are_missing() {
+        // A harness that cannot fail is worthless: missing inputs must stop the
+        // run, not let it continue and report an empty result as a pass.
+        let dir = scratch_dir("validate_pipeline_prereq");
+        let output = std::process::Command::new("bash")
+            .arg(validate_pipeline_script())
+            .arg("--giab-dir")
+            .arg(dir.join("no_such_giab_dir"))
+            .arg("--outdir")
+            .arg(dir.join("out"))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "validate_pipeline.sh must exit non-zero when its data files are \
+             missing:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr
+        );
+        assert!(
+            stderr.contains("Prerequisite check failed"),
+            "it must say which prerequisite failed, and must accept --giab-dir:\n{}",
+            stderr
+        );
+    }
+
     #[test]
     fn test_flank_smaller_than_haplotype_flank_is_rejected() {
         // With --flank 500, originals 500-2000 bp from the event are never

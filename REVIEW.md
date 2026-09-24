@@ -18,7 +18,7 @@ Date: 2026-09-24 · Reviewed: working tree on `master` at `f5428ce` plus uncommi
 | `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) |
 | `cargo test` | 128 passed, 0 failed |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` |
-| `scripts/validate_pipeline.sh` | Broken (see M17) |
+| `scripts/validate_pipeline.sh` | **Fixed** (M17): runs end to end |
 
 The tests pass, but most would still pass with the high-severity bugs below. See [Test gaps](#test-gaps).
 
@@ -50,7 +50,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M14 | Medium | **Fixed.** Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
 | M15 | Medium | CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
-| M17 | Medium | `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
+| M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
 
 ## High severity
@@ -289,6 +289,10 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 - Step 3 aborts: the filtered truth has overlapping DELs, and the script doesn't pass `--allow-overlap` or filter them.
 - `$(grep -vc '^#' f || echo 0)` gives `"0\n0"` on empty input; the `[[ -lt 5 ]]` guard then errors silently and the run continues with 0 events (lines 252, 264, 315, 570).
 - Paths at lines 33-35 point to old `data/giab_hg38/` locations. Tool paths are hard-coded to `/home/parlar_ai/dev/sv_caller/.pixi`.
+- **Fixed**, and measured: the harness now runs to completion. chr20:61.9-64.2 Mb, 8 het DELs, 3 VAFs, NA18488 background — 5 min wall, exit 0, recall 0.500 / 0.375 / 0.500 at VAF 0.5 / 0.25 / 0.1. Before: exit 1 at step 0 (reference not found); with the paths corrected, exit 1 at step 3 ("overlapping events detected", 2 overlapping pairs of 26).
+- The `"0\n0"` guards are fixed and now stop the run: with 5 events and `--min-events 6` the script exits 1 (it previously printed `[[: 0\n0: syntax error in expression` and carried on).
+- Step 4 no longer re-implements the merge: it runs spike's own `align.sh` and `merge.sh`, so the second half of **M5** (`-L events.bed -U`, hard-coded `SM:SPIKE`) is gone from the harness too. Merged BAM: 600 608 reads from a 601 429-read background — no read lost or duplicated, Delly reports `Sample:NA18488`.
+- Still true after the fix, and not an M17 defect: Delly recovers 3 of the 8 truth DELs from the *unspiked* background (recall 0.375), so the recall column is dominated by common DELs NA18488 shares with HG002, not by the spike-in. Documented in `README.md`; a background-only control belongs in a future revision of the harness.
 
 ## Low severity
 
