@@ -10,6 +10,8 @@ use anyhow::{bail, Context, Result};
 use noodles::sam::alignment::record::cigar::op::Kind;
 use noodles::sam::alignment::record::Cigar as CigarTrait;
 
+use crate::extract::record_is_on_queried_reference;
+
 /// Parsed command-line arguments for `spike validate`.
 struct ValidateArgs {
     bam_path: String,
@@ -712,10 +714,20 @@ fn count_depth_in_region(
             crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
                 .context("failed to open CRAM for depth counting")?;
         let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
 
         for rec_result in query {
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole and `Query`
+            // filters on coordinates alone, so another contig's reads would be
+            // counted as this region's (L2, N4). The BAM arm below needs no
+            // such guard: noodles-bam's `Query` compares the reference id.
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
             let flags = buf.flags();
             if flags.is_unmapped()
                 || flags.is_secondary()
@@ -823,10 +835,20 @@ fn split_reads_to_partner(
             crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
                 .context("failed to open CRAM for SA tag counting")?;
         let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
 
         for rec_result in query {
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole and `Query`
+            // filters on coordinates alone, so another contig's reads would be
+            // counted as this region's (L2, N4). The BAM arm below needs no
+            // such guard: noodles-bam's `Query` compares the reference id.
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
             let flags = buf.flags();
             if flags.is_unmapped()
                 || flags.is_secondary()
@@ -948,10 +970,20 @@ fn pileup_region(
             crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
                 .context("failed to open CRAM for pileup")?;
         let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
 
         for rec_result in query {
             let cram_record = rec_result?;
             let buf = cram_record.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole and `Query`
+            // filters on coordinates alone, so another contig's reads would be
+            // counted as this region's (L2, N4). The BAM arm below needs no
+            // such guard: noodles-bam's `Query` compares the reference id.
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
             let flags = buf.flags();
             if flags.is_unmapped()
                 || flags.is_secondary()
@@ -1534,5 +1566,107 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
     fn test_escape_json() {
         assert_eq!(escape_json("hello \"world\""), "hello \\\"world\\\"");
         assert_eq!(escape_json("a\\b"), "a\\\\b");
+    }
+
+    // --- N4: `validate`'s CRAM queries must not read another contig's reads ---
+
+    /// The shared two-contig CRAM fixture in a scratch directory of its own.
+    /// Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
+    fn two_contig_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_validate_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
+        (dir, fasta, cram)
+    }
+
+    #[test]
+    fn test_count_depth_in_region_skips_another_contigs_reads() {
+        // chrA's six reads cover 600 of the region's 2000 bases, so its mean
+        // depth is 0.3. chrB's four reads cover another 400 bases of the same
+        // window from the shared container; counted, they lift the answer to
+        // 0.5 and with it every coverage-ratio verdict (L2).
+        let (dir, fasta, cram) = two_contig_cram("depth");
+
+        let depth = count_depth_in_region(&cram, &fasta, "chrA", 0, 2000, 20).unwrap();
+
+        assert_eq!(
+            depth, 0.3,
+            "only chrA's reads may count toward chrA's depth"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_split_reads_to_partner_skips_another_contigs_reads() {
+        // Every fixture record carries the same SA:Z, so what comes back is
+        // exactly "the records this query saw" — which is what makes a
+        // foreign contig's read names visible here.
+        let (dir, fasta, cram) = two_contig_cram("split_reads");
+
+        let found = split_reads_to_partner(
+            &cram,
+            &fasta,
+            "chrA",
+            0,
+            2000,
+            20,
+            &("chrA".to_string(), 1500),
+            10,
+        )
+        .unwrap();
+
+        let mut names: Vec<String> = found.into_iter().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
+            "a chrB read's name must not be counted as a chrA split read"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_pileup_region_skips_another_contigs_reads() {
+        // The allele-fraction check's pileup. chrA and chrB cover disjoint
+        // intervals, so every count over chrB's 301-400, 501-600 and 701-800
+        // is a base that arrived from the other contig.
+        let (dir, fasta, cram) = two_contig_cram("pileup");
+
+        let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
+        let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
+        pileup_region(
+            &cram,
+            &fasta,
+            "chrA",
+            0,
+            2000,
+            20,
+            &mut allele_counts,
+            &mut read_alleles,
+        )
+        .unwrap();
+
+        // The three intervals only chrB covers hold all 400 of its bases.
+        let foreign: u32 = (300..400u64)
+            .chain(500..600)
+            .chain(700..800)
+            .filter_map(|pos| allele_counts.get(&pos))
+            .map(|c| c.iter().sum::<u32>())
+            .sum();
+        assert_eq!(foreign, 0, "chrB's bases must not enter the chrA pileup");
+
+        let mut names: Vec<String> = read_alleles.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
+            "only chrA reads may carry an allele in a chrA pileup"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

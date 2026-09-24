@@ -348,7 +348,7 @@ fn extract_read_pairs_cram(
 
             let flags = buf.flags();
 
-            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+            if !pair_is_on_queried_reference(&buf, queried_reference_sequence_id) {
                 continue;
             }
             if !passes_filters_buf(min_mapq, &buf) {
@@ -424,7 +424,14 @@ fn extract_read_pairs_cram(
 
             let flags = buf.flags();
 
-            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+            // Defence in depth, and deliberately not independently testable:
+            // pass 2 only completes a pair whose other mate pass 1 stored, and
+            // pass 1's guard already kept every foreign record out of those
+            // maps, so removing this alone turns no test red. Keep it — the
+            // invariant that makes it redundant is emergent and lives ~100
+            // lines away, and an edit that let pass 2 seed the maps would
+            // silently reopen L2.
+            if !pair_is_on_queried_reference(&buf, queried_reference_sequence_id) {
                 continue;
             }
             if !passes_filters_buf(min_mapq, &buf) {
@@ -793,16 +800,36 @@ fn passes_filters_bam(
 /// noodles-cram 0.74's `Query` compares only coordinates: a container that
 /// holds several contigs — what htslib writes with `multi_seq_per_slice=1` —
 /// is decoded whole, and every record in it whose position intersects the
-/// region is handed back, whatever contig it is on (L2). The mate's reference
-/// has to match too: a pair is only donor material if both its mates lie on
-/// the contig being simulated, and `build_pair_from_partials` labels the pair
-/// with that contig's name. The BAM path needs none of this — noodles-bam's
-/// `Query` already drops records on other references.
-fn record_is_on_queried_reference(
+/// region is handed back, whatever contig it is on (L2). The BAM path needs
+/// none of this — noodles-bam's `Query` already drops records on other
+/// references — so this is what it takes to make the two agree, and no more.
+///
+/// The *mate's* reference is deliberately not consulted here: a read on the
+/// queried contig whose mate lies on another one is a genuine record of this
+/// contig, and every BAM query returns it (28 of 6865 in a 20 kb HG002 chr20
+/// window). `loh`'s and `validate`'s pileups judge records one at a time and
+/// want exactly that (N4); read extraction wants whole pairs and uses
+/// [`pair_is_on_queried_reference`] instead.
+pub(crate) fn record_is_on_queried_reference(
     buf: &noodles::sam::alignment::RecordBuf,
     queried_reference_sequence_id: Option<usize>,
 ) -> bool {
     buf.reference_sequence_id() == queried_reference_sequence_id
+}
+
+/// Whether both ends of a CRAM record sit on the queried contig.
+///
+/// A pair is only donor material if both mates lie on the contig being
+/// simulated, which is the contig `build_pair_from_partials` stamps on the
+/// pair. On well-formed input the mate half adds nothing — the extraction
+/// loops also require `is_properly_segmented`, and a proper pair has both
+/// mates on one reference — so it is stated here rather than left implicit
+/// in a flag another tool sets.
+fn pair_is_on_queried_reference(
+    buf: &noodles::sam::alignment::RecordBuf,
+    queried_reference_sequence_id: Option<usize>,
+) -> bool {
+    record_is_on_queried_reference(buf, queried_reference_sequence_id)
         && buf.mate_reference_sequence_id() == queried_reference_sequence_id
 }
 
@@ -861,6 +888,159 @@ pub fn reverse_complement(seq: &mut [u8]) {
             b'g' => b'c',
             other => other, // N stays N
         };
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_fixtures {
+    //! CRAM fixtures shared with `loh`'s and `validate`'s tests: every
+    //! consumer of a CRAM `Query` needs the same multi-contig container to
+    //! show it does not read another contig's records (L2, N4).
+
+    use super::build_fasta_repository;
+
+    /// Write a two-contig reference (FASTA + `.fai`) and a CRAM whose single
+    /// container holds both contigs' records, plus its `.crai`.
+    ///
+    /// This is the shape `samtools view -C --output-fmt-option
+    /// multi_seq_per_slice=1` produces: one multi-reference slice, and one
+    /// `.crai` line per contig, all pointing at the same container offset.
+    /// noodles' writer packs records into one slice the same way, and its
+    /// indexer emits the same per-contig entries.
+    ///
+    /// Layout (1-based, 100 bp reads, all MAPQ 60 and properly segmented):
+    /// chrA covers 201-300, 401-500 (twice), 601-700 (twice) and 801-900;
+    /// chrB covers 301-400, 501-600 (twice) and 701-800. The two sets are
+    /// **disjoint**, so any coverage a chrA query reports over 301-400 or
+    /// 701-800 came from chrB. chrA's bases cycle `ACGT` and chrB's `TTAGGC`,
+    /// so a leaked base is visible in a pileup as well as in a depth count.
+    /// Every record carries `SA:Z:chrA,1501,+,100M,60,0;`, which gives
+    /// `validate`'s split-read scan something to match.
+    ///
+    /// Returns `(fasta_path, cram_path)`.
+    pub(crate) fn write_two_contig_cram(dir: &std::path::Path) -> (String, String) {
+        use std::num::NonZeroUsize;
+
+        const CONTIG_LEN: usize = 2000;
+        const READ_LEN: usize = 100;
+
+        let contig =
+            |bases: &[u8]| -> Vec<u8> { (0..CONTIG_LEN).map(|i| bases[i % bases.len()]).collect() };
+        let sequences = [("chrA", contig(b"ACGT")), ("chrB", contig(b"TTAGGC"))];
+
+        let mut fasta = String::new();
+        let mut fai = String::new();
+        for (name, seq) in &sequences {
+            fasta.push_str(&format!(">{}\n", name));
+            let offset = fasta.len();
+            for chunk in seq.chunks(60) {
+                fasta.push_str(std::str::from_utf8(chunk).unwrap());
+                fasta.push('\n');
+            }
+            fai.push_str(&format!("{}\t{}\t{}\t60\t61\n", name, seq.len(), offset));
+        }
+        let fasta_path = dir.join("two_contig.fa");
+        std::fs::write(&fasta_path, fasta).unwrap();
+        std::fs::write(dir.join("two_contig.fa.fai"), fai).unwrap();
+
+        let mut header = noodles::sam::Header::builder();
+        for (name, seq) in &sequences {
+            header = header.add_reference_sequence(
+                *name,
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
+            );
+        }
+        let header = header.build();
+
+        // An SA:Z pointing at chrA:1501 (1-based), the same on every record:
+        // `validate`'s split-read scan keys on the tag, so without one it
+        // would return an empty set whatever the reference-id filter does.
+        let sa_tag: noodles::sam::alignment::record_buf::Data = [(
+            noodles::sam::alignment::record::data::field::Tag::new(b'S', b'A'),
+            noodles::sam::alignment::record_buf::data::field::Value::from("chrA,1501,+,100M,60,0;"),
+        )]
+        .into_iter()
+        .collect();
+
+        // One pair = two records, read1 forward (0x63) and read2 reverse
+        // (0x93), both properly segmented so extraction keeps them.
+        let record = |name: &str, ref_id: usize, start: usize, first: bool| {
+            let (pos, mate_pos) = if first {
+                (start, start + 200)
+            } else {
+                (start + 200, start)
+            };
+            let span = 200 + READ_LEN;
+            let seq = &sequences[ref_id].1[pos - 1..pos - 1 + READ_LEN];
+            noodles::cram::Record::builder()
+                .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
+                    0x63u16
+                } else {
+                    0x93u16
+                }))
+                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
+                .set_reference_sequence_id(ref_id)
+                .set_read_length(READ_LEN)
+                .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                .set_name(name)
+                .set_next_fragment_reference_sequence_id(ref_id)
+                .set_next_mate_alignment_start(noodles::core::Position::new(mate_pos).unwrap())
+                .set_template_size(if first { span as i32 } else { -(span as i32) })
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
+                )
+                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
+                    seq.to_vec(),
+                ))
+                .set_quality_scores(noodles::sam::alignment::record_buf::QualityScores::from(
+                    vec![40u8; READ_LEN],
+                ))
+                .set_tags(sa_tag.clone())
+                .build()
+        };
+
+        let cram_path = dir.join("two_contig.cram");
+        let repository = build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
+        {
+            let mut writer = noodles::cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(repository)
+                .build_from_path(&cram_path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            for (i, start) in [201usize, 401, 601].iter().enumerate() {
+                let name = format!("chrA_pair{}", i);
+                writer
+                    .write_record(&header, record(&name, 0, *start, true))
+                    .unwrap();
+                writer
+                    .write_record(&header, record(&name, 0, *start, false))
+                    .unwrap();
+            }
+            for (i, start) in [301usize, 501].iter().enumerate() {
+                let name = format!("chrB_pair{}", i);
+                writer
+                    .write_record(&header, record(&name, 1, *start, true))
+                    .unwrap();
+                writer
+                    .write_record(&header, record(&name, 1, *start, false))
+                    .unwrap();
+            }
+            writer.try_finish(&header).unwrap();
+        }
+
+        let index = noodles::cram::index(&cram_path).unwrap();
+        let mut index_writer = noodles::cram::crai::io::Writer::new(
+            std::fs::File::create(dir.join("two_contig.cram.crai")).unwrap(),
+        );
+        index_writer.write_index(&index).unwrap();
+        index_writer.finish().unwrap();
+
+        (
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
     }
 }
 
@@ -1035,123 +1215,7 @@ mod tests {
 
     // --- L2: a CRAM container holding several contigs must not leak reads ---
 
-    /// Write a two-contig reference (FASTA + `.fai`) and a CRAM whose single
-    /// container holds both contigs' records, plus its `.crai`.
-    ///
-    /// This is the shape `samtools view -C --output-fmt-option
-    /// multi_seq_per_slice=1` produces: one multi-reference slice, and one
-    /// `.crai` line per contig, all pointing at the same container offset.
-    /// noodles' writer packs records into one slice the same way, and its
-    /// indexer emits the same per-contig entries.
-    ///
-    /// Returns `(fasta_path, cram_path)`.
-    fn write_two_contig_cram(dir: &std::path::Path) -> (String, String) {
-        use std::num::NonZeroUsize;
-
-        const CONTIG_LEN: usize = 2000;
-        const READ_LEN: usize = 100;
-
-        let contig = |bases: &[u8]| -> Vec<u8> {
-            (0..CONTIG_LEN).map(|i| bases[i % bases.len()]).collect()
-        };
-        let sequences = [("chrA", contig(b"ACGT")), ("chrB", contig(b"TTAGGC"))];
-
-        let mut fasta = String::new();
-        let mut fai = String::new();
-        for (name, seq) in &sequences {
-            fasta.push_str(&format!(">{}\n", name));
-            let offset = fasta.len();
-            for chunk in seq.chunks(60) {
-                fasta.push_str(std::str::from_utf8(chunk).unwrap());
-                fasta.push('\n');
-            }
-            fai.push_str(&format!("{}\t{}\t{}\t60\t61\n", name, seq.len(), offset));
-        }
-        let fasta_path = dir.join("two_contig.fa");
-        std::fs::write(&fasta_path, fasta).unwrap();
-        std::fs::write(dir.join("two_contig.fa.fai"), fai).unwrap();
-
-        let mut header = noodles::sam::Header::builder();
-        for (name, seq) in &sequences {
-            header = header.add_reference_sequence(
-                *name,
-                noodles::sam::header::record::value::Map::<
-                    noodles::sam::header::record::value::map::ReferenceSequence,
-                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
-            );
-        }
-        let header = header.build();
-
-        // One pair = two records, read1 forward (0x63) and read2 reverse
-        // (0x93), both properly segmented so extraction keeps them.
-        let record = |name: &str, ref_id: usize, start: usize, first: bool| {
-            let (pos, mate_pos) = if first {
-                (start, start + 200)
-            } else {
-                (start + 200, start)
-            };
-            let span = 200 + READ_LEN;
-            let seq = &sequences[ref_id].1[pos - 1..pos - 1 + READ_LEN];
-            noodles::cram::Record::builder()
-                .set_bam_flags(noodles::sam::alignment::record::Flags::from(
-                    if first { 0x63u16 } else { 0x93u16 },
-                ))
-                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
-                .set_reference_sequence_id(ref_id)
-                .set_read_length(READ_LEN)
-                .set_alignment_start(noodles::core::Position::new(pos).unwrap())
-                .set_name(name)
-                .set_next_fragment_reference_sequence_id(ref_id)
-                .set_next_mate_alignment_start(noodles::core::Position::new(mate_pos).unwrap())
-                .set_template_size(if first { span as i32 } else { -(span as i32) })
-                .set_mapping_quality(
-                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
-                )
-                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
-                    seq.to_vec(),
-                ))
-                .set_quality_scores(
-                    noodles::sam::alignment::record_buf::QualityScores::from(vec![
-                        40u8;
-                        READ_LEN
-                    ]),
-                )
-                .build()
-        };
-
-        let cram_path = dir.join("two_contig.cram");
-        let repository = build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
-        {
-            let mut writer = noodles::cram::io::writer::Builder::default()
-                .set_reference_sequence_repository(repository)
-                .build_from_path(&cram_path)
-                .unwrap();
-            writer.write_header(&header).unwrap();
-            for (i, start) in [201usize, 401, 601].iter().enumerate() {
-                let name = format!("chrA_pair{}", i);
-                writer.write_record(&header, record(&name, 0, *start, true)).unwrap();
-                writer.write_record(&header, record(&name, 0, *start, false)).unwrap();
-            }
-            for (i, start) in [301usize, 501].iter().enumerate() {
-                let name = format!("chrB_pair{}", i);
-                writer.write_record(&header, record(&name, 1, *start, true)).unwrap();
-                writer.write_record(&header, record(&name, 1, *start, false)).unwrap();
-            }
-            writer.try_finish(&header).unwrap();
-        }
-
-        let index = noodles::cram::index(&cram_path).unwrap();
-        let mut index_writer = noodles::cram::crai::io::Writer::new(
-            std::fs::File::create(dir.join("two_contig.cram.crai")).unwrap(),
-        );
-        index_writer.write_index(&index).unwrap();
-        index_writer.finish().unwrap();
-
-        (
-            fasta_path.to_str().unwrap().to_string(),
-            cram_path.to_str().unwrap().to_string(),
-        )
-    }
+    use super::test_fixtures::write_two_contig_cram;
 
     #[test]
     fn test_two_contig_cram_puts_both_contigs_in_one_container() {
@@ -1194,8 +1258,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let (fasta, cram) = write_two_contig_cram(&dir);
 
-        let extraction =
-            extract_read_pairs(&cram, "chrA", 0, 2000, 20, Some(&fasta)).unwrap();
+        let extraction = extract_read_pairs(&cram, "chrA", 0, 2000, 20, Some(&fasta)).unwrap();
         let mut names: Vec<String> = extraction.pairs.iter().map(|p| p.name.clone()).collect();
         names.sort();
 

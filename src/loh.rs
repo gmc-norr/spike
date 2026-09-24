@@ -26,6 +26,8 @@ use noodles::sam::alignment::record::Cigar as CigarTrait;
 use rand::rngs::StdRng;
 use rand::Rng;
 
+use crate::extract::record_is_on_queried_reference;
+
 /// The sample's two copies of a region: the alleles each carries, and which
 /// copy each original fragment came from.
 #[derive(Debug, Default)]
@@ -656,12 +658,21 @@ fn count_alleles_cram(
         crate::extract::open_cram_reader_for_region(cram_path, &repository, &region)
             .with_context(|| format!("failed to open CRAM for pileup: {}", cram_path))?;
     let query = reader.query(&header, &region)?;
+    // `query` has already rejected an unknown contig, so this is `Some`.
+    let queried_reference_sequence_id = header.reference_sequences().get_index_of(chrom.as_bytes());
 
     for rec_result in query {
         let cram_record = rec_result?;
         let buf = cram_record
             .try_into_alignment_record(&header)
             .with_context(|| "failed to convert CRAM record")?;
+
+        // A container holding several contigs is decoded whole and `Query`
+        // filters on coordinates alone, so another contig's bases would land
+        // in this pileup and change which SNPs are called het (L2, N4).
+        if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+            continue;
+        }
 
         let flags = buf.flags();
 
@@ -1061,12 +1072,21 @@ fn collect_snp_alleles_cram(
                 )
             })?;
     let query = reader.query(&header, &region)?;
+    // `query` has already rejected an unknown contig, so this is `Some`.
+    let queried_reference_sequence_id = header.reference_sequences().get_index_of(chrom.as_bytes());
 
     for rec_result in query {
         let cram_record = rec_result?;
         let buf = cram_record
             .try_into_alignment_record(&header)
             .with_context(|| "failed to convert CRAM record")?;
+
+        // A container holding several contigs is decoded whole and `Query`
+        // filters on coordinates alone, so another contig's bases would land
+        // in this pileup and change which SNPs are called het (L2, N4).
+        if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+            continue;
+        }
 
         let flags = buf.flags();
 
@@ -1544,5 +1564,84 @@ mod tests {
             assert_eq!(c.read_copy["h2b_3"], event == h2);
         }
         assert!(seen_h1, "the event copy should sometimes be haplotype 1");
+    }
+
+    // --- N4: the CRAM pileup must not read another contig's records ---
+
+    /// The shared two-contig CRAM fixture in a scratch directory of its own.
+    /// Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
+    fn two_contig_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let dir =
+            std::env::temp_dir().join(format!("spike_test_loh_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
+        (dir, fasta, cram)
+    }
+
+    /// Bases counted over the three intervals only chrB covers (0-based,
+    /// half-open): all 400 of chrB's aligned bases land in them.
+    fn foreign_bases(counts: &HashMap<u64, [u32; 4]>) -> u32 {
+        (300..400u64)
+            .chain(500..600)
+            .chain(700..800)
+            .filter_map(|pos| counts.get(&pos))
+            .map(|c| c.iter().sum::<u32>())
+            .sum()
+    }
+
+    #[test]
+    fn test_count_alleles_cram_skips_another_contigs_reads() {
+        // chrA and chrB cover disjoint intervals in the fixture, so any
+        // count a chrA pileup reports over chrB's 301-400, 501-600 and
+        // 701-800 is a base noodles-cram's `Query` handed over from the
+        // shared container without comparing the record's reference id (L2).
+        // This is the pileup het calls and phasing are built from, so a leak
+        // here reaches the truth set: assert on the counts, not on what LOH
+        // later decides.
+        let (dir, fasta, cram) = two_contig_cram("count_alleles");
+
+        let counts = count_alleles_cram(&cram, "chrA", 0, 2000, 20, &fasta).unwrap();
+
+        assert_eq!(
+            foreign_bases(&counts),
+            0,
+            "chrB's bases must not enter the chrA pileup"
+        );
+        // chrA's own six reads are still counted in full, so this is a filter
+        // and not an empty result.
+        let total: u32 = counts.values().map(|c| c.iter().sum::<u32>()).sum();
+        assert_eq!(total, 600, "every chrA base must still be counted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_collect_snp_alleles_cram_skips_another_contigs_reads() {
+        // The second LOH pass reads each fragment's base at the het SNPs. A
+        // chrB fragment that reaches it gets a haplotype verdict of its own
+        // and then helps decide which chrA originals are suppressed.
+        let (dir, fasta, cram) = two_contig_cram("collect_alleles");
+
+        // 250 sits under chrA's own reads, 350 under chrB's only.
+        let positions: HashSet<u64> = [250u64, 350].into_iter().collect();
+        let alleles =
+            collect_snp_alleles_cram(&cram, "chrA", 0, 2000, 20, &positions, &fasta).unwrap();
+
+        let mut names: Vec<String> = alleles.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
+            "only chrA fragments may be classified for a chrA region"
+        );
+        assert!(
+            alleles
+                .values()
+                .all(|bases| bases.iter().all(|&(pos, _)| pos != 350)),
+            "no fragment may report a base at a position only chrB covers"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

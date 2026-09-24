@@ -54,6 +54,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
+| N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
 
 ## High severity
 
@@ -416,12 +417,58 @@ defect in the `spike validate` subcommand.
   one base changes the extraction (4561 vs 4560 pairs), and both match their own
   unpruned run.
 
+### N4 · The same five CRAM query sites read another contig's records
+
+*Found while fixing L2, which names `extract.rs` only; those two loops are
+fixed. `loh.rs:656` (`count_alleles_cram`), `loh.rs:1056`
+(`collect_snp_alleles_cram`), `validate.rs:712` (`count_depth_in_region`),
+`validate.rs:823` (`split_reads_to_partner`) and `validate.rs:948`
+(`pileup_region`) iterate a CRAM `Query` the same way and had the same hole.
+They are the same five sites N3 covers.*
+
+This is worse than L2 rather than a milder copy of it. L2 diluted the donor
+pool; these decide the **truth set**. `loh.rs`'s two passes call the
+heterozygous SNPs a region is phased on and then assign each fragment to a
+haplotype, which is what decides whose originals are suppressed — and
+`validate` is the check that would otherwise notice, so a leak there hides
+the leak here.
+
+- **Fix:** `extract::record_is_on_queried_reference` made `pub(crate)` and
+  applied at all five, ahead of the flag and MAPQ filters.
+- **Fixed**, and measured. HG002 chr20:38.40–38.43 Mb + chr21:38.40–38.43 Mb
+  written as one multi-reference CRAM (`multi_seq_per_slice=1`, both contigs in
+  one container), `del:chr20:38412500-38422500 --region
+  chr20:38405000-38425000 --seed 1`. LOH called **10 510 het SNPs → 15**, in
+  **1 phase block → 4**, classifying **4152 fragments → 543**, and wrote
+  **4424 read pairs → 3435**. chr21's bases, laid over chr20's reference, had
+  made almost every position look heterozygous. Every one of those "after"
+  numbers is exactly what the same reads give from a **chr20-only** CRAM, and
+  R1, R2, `truth.vcf` and `replaced_reads.txt` are byte-identical to that
+  control — the foreign contribution is zero, not merely smaller.
+- **`spike validate` gave a false PASS**, measured on a CRAM whose chr21 reads
+  sit only inside the deletion: `coverage_ratio` **1.77 → 0.91** (control
+  0.91), so a region with no coverage drop looked like one with a 77% *rise*;
+  and `allele_freq` at chr20:38415000, where chr20's reads read G and chr21's
+  read C, **0.54 PASS → 0.00 FAIL** (control 0.00 FAIL) — the check passed on
+  an unspiked CRAM entirely on the other chromosome's bases.
+- **The mate's reference is deliberately not checked at these five**, unlike
+  the two extraction loops. They judge records one at a time, and a read on the
+  queried contig whose mate lies elsewhere is a genuine record of this contig —
+  28 of 6865 in the test window — that every BAM query returns. Measured: with
+  the mate clause added, the same **single-contig** CRAM run classifies **542**
+  fragments where both the BAM run and the record-only guard classify **543**.
+  So `record_is_on_queried_reference` compares the record's reference id only,
+  and `pair_is_on_queried_reference` adds the mate clause for extraction.
+- Each guard is independently observable: removing any one of the five reddens
+  its own test and only that one. The mate clause is the exception, and is
+  reported under L2.
+
 ## Low severity
 
 | ID | Problem | Where | Fix |
 | --- | --- | --- | --- |
 | L1 | **Fixed.** Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
-| L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs |
+| L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs (the same hole at `loh.rs`/`validate.rs` is tracked as N4) |
 | L3 | bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" | `reference.rs:33-35` | Use `fasta::io::indexed_reader::Builder` |
 | L4 | Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`) | `fastq.rs:47-48` | `r1_gz.finish()?.flush()?` |
 | L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
@@ -571,13 +618,24 @@ mate reference id is not the queried contig's.
   The queried contig's own `.crai` entry points at the shared container, so
   pruning keeps it and the container's other contigs come along. The M15 entry
   above is corrected accordingly.
-- Scope note: `open_cram_reader_for_region` has five more callers that iterate
-  a CRAM `Query` the same way and have the same hole — `loh.rs:656`
-  (`count_alleles_cram`), `loh.rs:1056`, and `validate.rs:712, 823, 948`. On a
-  multi-contig CRAM a foreign contig's bases would enter the LOH pileup and
-  `validate`'s depth/pileup checks. Left alone here: L2's row names `extract.rs`
-  only, and each of those deserves its own test. Not a regression — they behave
-  today exactly as they did at `8d1beba`.
+- Scope note, now closed: `open_cram_reader_for_region` has five more callers
+  that iterate a CRAM `Query` the same way and had the same hole — `loh.rs:656`
+  (`count_alleles_cram`), `loh.rs:1056`, and `validate.rs:712, 823, 948`. They
+  are **fixed and measured under N4**, which is where their numbers live; the
+  L2 numbers below are extraction's alone.
+- The equality with the single-contig control below says the filter removes the
+  foreign reads and nothing else, but it says it by *count*, and a count would
+  come out equal even if the mate clause were too broad — a pair can only form
+  from two records the same query returned, so both its mates are on the queried
+  contig whatever the mate clause does. The strong evidence is the one actually
+  taken: R1, R2, `truth.vcf` and `replaced_reads.txt` are byte-identical to the
+  control, not merely equinumerous. Separately, and reported rather than hidden:
+  the mate clause in `pair_is_on_queried_reference` reddens **no** test even
+  with the whole suite run, because `is_properly_segmented` already implies both
+  mates are on one reference. It is kept for the reason that rule is another
+  tool's flag, not spike's invariant — but it is not, and on well-formed input
+  cannot be, independently observable. It is confined to extraction: propagating
+  it to N4's five sites would drop genuine records (see N4).
 - The pass-2 guard is defence in depth and is **not** independently observable:
   pass 2 only completes a pair whose other mate pass 1 already stored, and the
   pass-1 guard keeps every foreign record out of those maps. Measured —
