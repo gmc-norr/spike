@@ -127,11 +127,16 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     for record in &records {
         match record.sv_type {
             SvTypeTag::Del => {
-                let end = parse_info_u64(&record.info, "END")
-                    .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
-                    })
-                    .unwrap_or(record.pos + 1);
+                let end = match resolve_sv_end(record) {
+                    Some(e) => e,
+                    None => {
+                        log::warn!(
+                            "DEL record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
+                            record.id
+                        );
+                        continue;
+                    }
+                };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
@@ -147,11 +152,16 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Dup => {
-                let end = parse_info_u64(&record.info, "END")
-                    .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
-                    })
-                    .unwrap_or(record.pos + 1);
+                let end = match resolve_sv_end(record) {
+                    Some(e) => e,
+                    None => {
+                        log::warn!(
+                            "DUP record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
+                            record.id
+                        );
+                        continue;
+                    }
+                };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
@@ -166,11 +176,16 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Inv => {
-                let end = parse_info_u64(&record.info, "END")
-                    .or_else(|| {
-                        parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs())
-                    })
-                    .unwrap_or(record.pos + 1);
+                let end = match resolve_sv_end(record) {
+                    Some(e) => e,
+                    None => {
+                        log::warn!(
+                            "INV record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
+                            record.id
+                        );
+                        continue;
+                    }
+                };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
@@ -395,6 +410,21 @@ fn parse_info_u64(info: &str, key: &str) -> Option<u64> {
 /// Parse a signed integer INFO field value (e.g., SVLEN which can be negative).
 fn parse_info_i64(info: &str, key: &str) -> Option<i64> {
     parse_info_field(info, key)?.parse().ok()
+}
+
+/// Resolve a DEL/DUP/INV record's end coordinate: prefer INFO/END, then
+/// INFO/SVLEN, then — for a sequence-resolved record (REF = anchor base +
+/// affected bases, ALT = the anchor alone) — the length implied by REF.
+/// Returns `None` when none of those give a length (single-base REF, no
+/// END, no SVLEN): the caller must reject the record rather than silently
+/// treat it as a 1 bp event.
+fn resolve_sv_end(record: &SvRecord) -> Option<u64> {
+    parse_info_u64(&record.info, "END")
+        .or_else(|| parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs()))
+        .or_else(|| {
+            (record.ref_allele.len() > 1)
+                .then(|| record.pos + record.ref_allele.len() as u64 - 1)
+        })
 }
 
 /// Check if a VCF allele string contains only valid DNA bases (A, C, G, T).
@@ -693,5 +723,88 @@ mod tests {
             }
             _ => panic!("expected Insertion"),
         }
+    }
+
+    /// DEL/DUP/INV with no END and no SVLEN must not silently become a 1 bp
+    /// event. When REF is sequence-resolved (anchor + affected bases, ALT is
+    /// the anchor alone), the length is derived from REF; when REF is a
+    /// single base there is no length information at all, so the record is
+    /// rejected loudly instead of guessed at.
+    #[test]
+    fn test_del_no_end_no_svlen_derives_length_from_ref() {
+        // REF=ACGT, ALT=A: 3 deleted bases (ACGT minus the anchor A).
+        let vcf = "chr1\t100\ttest_del\tACGT\tA\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
+                assert_eq!(*del_start, 100);
+                assert_eq!(*del_end, 103);
+            }
+            _ => panic!("expected Deletion"),
+        }
+    }
+
+    #[test]
+    fn test_dup_no_end_no_svlen_derives_length_from_ref() {
+        let vcf = "chr1\t100\ttest_dup\tACGT\tA\t.\t.\tSVTYPE=DUP\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => {
+                assert_eq!(*dup_start, 100);
+                assert_eq!(*dup_end, 103);
+            }
+            _ => panic!("expected Duplication"),
+        }
+    }
+
+    #[test]
+    fn test_inv_no_end_no_svlen_derives_length_from_ref() {
+        let vcf = "chr1\t100\ttest_inv\tACGT\tA\t.\t.\tSVTYPE=INV\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SimEvent::Inversion {
+                inv_start, inv_end, ..
+            } => {
+                assert_eq!(*inv_start, 100);
+                assert_eq!(*inv_end, 103);
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    #[test]
+    fn test_del_no_end_no_svlen_single_base_ref_is_rejected() {
+        // Symbolic ALT, single-base REF, no END, no SVLEN: no length
+        // information exists. Must not silently become a 1 bp deletion.
+        let vcf = "chr1\t100\ttest_del\tN\t<DEL>\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_dup_no_end_no_svlen_single_base_ref_is_rejected() {
+        let vcf = "chr1\t100\ttest_dup\tN\t<DUP>\t.\t.\tSVTYPE=DUP\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_inv_no_end_no_svlen_single_base_ref_is_rejected() {
+        let vcf = "chr1\t100\ttest_inv\tN\t<INV>\t.\t.\tSVTYPE=INV\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty());
     }
 }

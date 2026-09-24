@@ -234,7 +234,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
 ```
 
 Supported VCF records:
-- **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN
+- **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN. A DEL/DUP/INV with neither falls back to the length implied by a sequence-resolved `REF` (`REF` longer than 1 base, e.g. `REF=ACGT ALT=A`); if `REF` is a single base too, there is no length information at all and the record is rejected with a warning (logged to stderr) instead of being silently treated as a 1 bp event
 - **BND** — breakend notation, paired by MATEID into Fusion events. All four forms are read (`t[p[`, `]p]t`, `t]p]`, `[p[t`); either record of a mate pair gives the same fusion
 - **SNP/indel** — standard REF/ALT records without SVTYPE
 - **AF from INFO** — reads `SIM_VAF`, `VAF`, or `AF` fields (checked in that order)
