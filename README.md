@@ -769,6 +769,8 @@ Quality scores are sampled using a 4-level fallback hierarchy, from most specifi
 
 The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Each level requires at least 30 observations before it is used; otherwise sampling falls through to the next level.
 
+Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its Markov chain runs with the cycle counter like the forward mate's instead of against it.
+
 Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
 
 ### Missing or unusable donor base qualities
@@ -788,6 +790,8 @@ As a last line of defense, `write_paired_fastq` validates every pair *before* it
 ### Indel error model
 
 When `--indel-error-rate` is set above 0, a fraction of sequencing errors are modeled as insertions or deletions (50/50 split) rather than substitutions. This maintains fixed read length: insertions consume an output position without advancing the reference, and deletions skip a reference base without consuming an output position.
+
+Because a deletion error consumes a template base without emitting one, the read runs past the end of the window it would otherwise need. Generation therefore fetches 10 extra template bases past each read's 3' end — to the right of a forward read, to the left of a reverse one — so those bases are real sequence. `N` padding is now only a last resort at a contig or haplotype end.
 
 ## Pipeline validation examples
 

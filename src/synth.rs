@@ -32,6 +32,10 @@ const PREV_Q_BINS: usize = 4;
 /// Minimum observations in a Markov transition bin before we trust it.
 const MIN_MARKOV_OBS: usize = 30;
 
+/// Extra template bases fetched past a read's 3' end when indel errors are on,
+/// so a deletion error is covered by real sequence instead of `N` padding (L1).
+const INDEL_SLACK: usize = 10;
+
 /// Empirical per-cycle quality score distributions learned from real reads.
 ///
 /// Two levels of conditioning:
@@ -363,66 +367,38 @@ impl<'a> SynthReadGenerator<'a> {
         self.reference
     }
 
-    /// Generate a single synthetic read at a reference position.
+    /// Generate a read from a template that is already in sequencing order.
     ///
-    /// `alleles` maps reference position → the base of the sample copy the
-    /// read comes from; other positions take the reference base.
-    ///
-    /// Returns `(sequence, quality)` in forward-strand orientation relative to
-    /// the reference. For read2 (reverse strand in BAM), the caller must
-    /// reverse-complement the sequence and reverse the quality.
-    ///
-    /// `read_num`: 1 or 2 (controls which quality distribution is sampled).
-    /// `reverse_cycles`: when true, sample quality from profile cycle `rl-1-c`
-    ///   instead of `c`. Use this for R2 which will be reversed after generation,
-    ///   so that the final FASTQ-oriented quality matches the learned profile.
-    pub fn generate_read(
+    /// `template` is what the sequencer reads, 5'→3', with the sample's own
+    /// alleles baked in; it should carry a few bases past `rl` so a deletion
+    /// error is covered by real sequence instead of `N` padding (L1).
+    /// Generating in sequencing order also keeps the quality Markov chain
+    /// running with the cycle counter for both mates, not against it (L17).
+    fn generate_from_template(
         &self,
-        chrom: &str,
-        ref_start: u64,
-        alleles: &HashMap<u64, u8>,
+        template: &[u8],
+        rl: usize,
         read_num: u8,
-        reverse_cycles: bool,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
-        let rl = self.read_length;
-        // Fetch extra ref bases in case indel errors shift our position.
-        let fetch_extra = if self.indel_error_rate > 0.0 { 10 } else { 0 };
-        let ref_end = ref_start + (rl + fetch_extra) as u64;
-
-        let ref_seq = self
-            .reference
-            .fetch_sequence(chrom, ref_start, ref_end)
-            .unwrap_or_else(|_| vec![b'N'; rl + fetch_extra]);
-
         let mut seq = Vec::with_capacity(rl);
         let mut qual = Vec::with_capacity(rl);
-        let mut ref_idx = 0usize; // current position in ref_seq
+        let mut idx = 0usize; // current position in template
         let mut prev_qual: Option<u8> = None; // Markov chain state
 
-        while seq.len() < rl && ref_idx < ref_seq.len() {
+        while seq.len() < rl && idx < template.len() {
             let c = seq.len(); // cycle position in the read
+            let true_base = template[idx].to_ascii_uppercase();
 
-            let ref_base = ref_seq[ref_idx].to_ascii_uppercase();
-
-            let genomic_pos = ref_start + ref_idx as u64;
-            let true_base = alleles.get(&genomic_pos).copied().unwrap_or(ref_base);
-
-            let qual_cycle = if reverse_cycles { rl - 1 - c } else { c };
-            let profile_base = if reverse_cycles {
-                complement(true_base)
-            } else {
-                true_base
-            };
             let q = self
                 .profile
-                .sample_quality(read_num, qual_cycle, profile_base, prev_qual, rng);
+                .sample_quality(read_num, c, true_base, prev_qual, rng);
 
             if true_base == b'N' {
                 seq.push(b'N');
                 qual.push(q);
                 prev_qual = Some(q);
-                ref_idx += 1;
+                idx += 1;
                 continue;
             }
 
@@ -433,15 +409,15 @@ impl<'a> SynthReadGenerator<'a> {
                 if self.indel_error_rate > 0.0 && rng.gen::<f64>() < self.indel_error_rate {
                     // Indel error: 50/50 insertion vs deletion.
                     if rng.gen::<bool>() {
-                        // Insertion: add a random base without consuming ref.
+                        // Insertion: add a random base without consuming template.
                         seq.push(random_base(rng));
                         qual.push(q);
                         prev_qual = Some(q);
-                        // Don't advance ref_idx — the ref base will be read next cycle.
+                        // Don't advance idx — the template base is read next cycle.
                     } else {
-                        // Deletion: skip this ref base entirely.
-                        ref_idx += 1;
-                        // Don't add to seq/qual — next iteration will read next ref base.
+                        // Deletion: skip this template base entirely.
+                        idx += 1;
+                        // Don't add to seq/qual — next iteration reads the next base.
                         // Don't update prev_qual — no quality was emitted.
                     }
                 } else {
@@ -449,17 +425,17 @@ impl<'a> SynthReadGenerator<'a> {
                     seq.push(random_different_base(true_base, rng));
                     qual.push(q);
                     prev_qual = Some(q);
-                    ref_idx += 1;
+                    idx += 1;
                 }
             } else {
                 seq.push(true_base);
                 qual.push(q);
                 prev_qual = Some(q);
-                ref_idx += 1;
+                idx += 1;
             }
         }
 
-        // Pad if we ran out of ref bases due to deletions.
+        // Pad only if the template itself ran out (contig or haplotype end).
         while seq.len() < rl {
             seq.push(b'N');
             qual.push(b'!' + 2); // Q2
@@ -470,6 +446,64 @@ impl<'a> SynthReadGenerator<'a> {
         qual.truncate(rl);
 
         (seq, qual)
+    }
+
+    /// Generate a single synthetic read at a reference position.
+    ///
+    /// `alleles` maps reference position → the base of the sample copy the
+    /// read comes from; other positions take the reference base.
+    ///
+    /// `ref_start` is the leftmost reference base the read covers either way.
+    ///
+    /// `read_num`: 1 or 2 (controls which quality distribution is sampled).
+    /// `is_reverse`: when true the read comes off the reverse strand. Its
+    ///   template is complemented and walked right to left, so generation runs
+    ///   in sequencing order and the returned `(sequence, quality)` is already
+    ///   in FASTQ orientation — the caller must not reverse it again. A
+    ///   forward read is returned in reference orientation, which is the same
+    ///   thing. Reads are `read_length` long either way.
+    pub fn generate_read(
+        &self,
+        chrom: &str,
+        ref_start: u64,
+        alleles: &HashMap<u64, u8>,
+        read_num: u8,
+        is_reverse: bool,
+        rng: &mut StdRng,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let rl = self.read_length;
+        // Fetch extra ref bases in case indel errors shift our position. They
+        // go past the read's 3' end, which for a reverse read is to the left.
+        let slack = if self.indel_error_rate > 0.0 { INDEL_SLACK as u64 } else { 0 };
+        let (fetch_start, fetch_end) = if is_reverse {
+            (ref_start.saturating_sub(slack), ref_start + rl as u64)
+        } else {
+            (ref_start, ref_start + rl as u64 + slack)
+        };
+
+        let ref_seq = self
+            .reference
+            .fetch_sequence(chrom, fetch_start, fetch_end)
+            .unwrap_or_else(|_| vec![b'N'; (fetch_end - fetch_start) as usize]);
+
+        // The sample's own allele where it has one, else the reference base.
+        let base_at = |i: usize| {
+            let ref_base = ref_seq[i].to_ascii_uppercase();
+            alleles
+                .get(&(fetch_start + i as u64))
+                .copied()
+                .unwrap_or(ref_base)
+                .to_ascii_uppercase()
+        };
+        // Put the template in sequencing order: a reverse-strand read runs
+        // right to left along the reference, complemented.
+        let template: Vec<u8> = if is_reverse {
+            (0..ref_seq.len()).rev().map(|i| complement(base_at(i))).collect()
+        } else {
+            (0..ref_seq.len()).map(base_at).collect()
+        };
+
+        self.generate_from_template(&template, rl, read_num, rng)
     }
 
     /// Generate a synthetic read pair for a fragment at a given position.
@@ -502,7 +536,7 @@ impl<'a> SynthReadGenerator<'a> {
         let r1_is_reverse = rng.gen::<bool>();
         // Either way the left end is read forward and the right end reverse —
         // the flip only decides which of the two is R1. read_num picks the
-        // quality model, reverse_cycles handles the flip, so whichever mate
+        // quality model, is_reverse handles the flip, so whichever mate
         // ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
@@ -510,12 +544,10 @@ impl<'a> SynthReadGenerator<'a> {
         let (fwd_seq, fwd_qual) =
             self.generate_read(chrom, frag_start, alleles, fwd_num, false, rng);
 
-        // Reverse mate (right end) — generate forward then revcomp for FASTQ.
-        // reverse_cycles=true so quality profile cycles align after the reverse.
-        let (mut rev_seq, mut rev_qual) =
+        // Reverse mate (right end) — generated in sequencing order, so it
+        // already comes back in FASTQ orientation.
+        let (rev_seq, rev_qual) =
             self.generate_read(chrom, right_start, alleles, rev_num, true, rng);
-        reverse_complement(&mut rev_seq);
-        rev_qual.reverse();
 
         let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
             (rev_seq, rev_qual, fwd_seq, fwd_qual)
@@ -638,81 +670,29 @@ impl<'a> SynthReadGenerator<'a> {
     /// `VariantHaplotype`) instead of fetching from the reference FASTA.
     /// Haplotype variants are already baked into the sequence.
     ///
+    /// `seq` is in haplotype orientation and should carry a few bases past the
+    /// read's 3' end so deletion errors have real sequence to fall back on.
+    /// The read is `min(read_length, seq.len())` bases long.
+    ///
     /// `read_num`: 1 or 2 (controls which quality distribution is sampled).
-    /// `reverse_cycles`: when true, sample quality from profile cycle `rl-1-c`
-    ///   instead of `c`. Use this for R2 (see `generate_read` docs).
+    /// `is_reverse`: when true the read comes off the reverse strand — `seq`
+    ///   is reverse-complemented first and the read is returned in FASTQ
+    ///   orientation (see `generate_read` docs).
     pub fn generate_read_from_seq(
         &self,
         seq: &[u8],
         read_num: u8,
-        reverse_cycles: bool,
+        is_reverse: bool,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
         let rl = self.read_length.min(seq.len());
-        let mut out_seq = Vec::with_capacity(rl);
-        let mut out_qual = Vec::with_capacity(rl);
-        let mut seq_idx = 0usize;
-        let mut prev_qual: Option<u8> = None; // Markov chain state
-
-        while out_seq.len() < rl && seq_idx < seq.len() {
-            let c = out_seq.len();
-            let true_base = seq[seq_idx].to_ascii_uppercase();
-
-            let qual_cycle = if reverse_cycles { rl - 1 - c } else { c };
-            let profile_base = if reverse_cycles {
-                complement(true_base)
-            } else {
-                true_base
-            };
-            let q = self
-                .profile
-                .sample_quality(read_num, qual_cycle, profile_base, prev_qual, rng);
-
-            if true_base == b'N' {
-                out_seq.push(b'N');
-                out_qual.push(q);
-                prev_qual = Some(q);
-                seq_idx += 1;
-                continue;
-            }
-
-            let phred = (q as f64 - 33.0).max(0.0);
-            let p_err = 10.0_f64.powf(-phred / 10.0);
-
-            if rng.gen::<f64>() < p_err {
-                if self.indel_error_rate > 0.0 && rng.gen::<f64>() < self.indel_error_rate {
-                    if rng.gen::<bool>() {
-                        // Insertion error.
-                        out_seq.push(random_base(rng));
-                        out_qual.push(q);
-                        prev_qual = Some(q);
-                    } else {
-                        // Deletion error: no quality emitted, don't update prev_qual.
-                        seq_idx += 1;
-                    }
-                } else {
-                    out_seq.push(random_different_base(true_base, rng));
-                    out_qual.push(q);
-                    prev_qual = Some(q);
-                    seq_idx += 1;
-                }
-            } else {
-                out_seq.push(true_base);
-                out_qual.push(q);
-                prev_qual = Some(q);
-                seq_idx += 1;
-            }
+        let mut template = seq.to_vec();
+        if is_reverse {
+            // Sequencing order: the reverse mate reads the other strand,
+            // 3' end of `seq` first.
+            reverse_complement(&mut template);
         }
-
-        while out_seq.len() < rl {
-            out_seq.push(b'N');
-            out_qual.push(b'!' + 2);
-        }
-
-        out_seq.truncate(rl);
-        out_qual.truncate(rl);
-
-        (out_seq, out_qual)
+        self.generate_from_template(&template, rl, read_num, rng)
     }
 
     /// Generate a synthetic read pair from a variant haplotype.
@@ -737,29 +717,36 @@ impl<'a> SynthReadGenerator<'a> {
 
         let right_hap_start = hap_frag_start + frag_len - rl;
 
-        // Get sequences from the haplotype.
-        let left_seq = haplotype.get_sequence(hap_frag_start, self.read_length);
-        let right_seq = haplotype.get_sequence(right_hap_start, self.read_length);
+        // Get sequences from the haplotype, with extra bases past each read's
+        // 3' end so deletion errors read real sequence, not `N` padding (L1).
+        // For the reverse mate that end is to the left of `right_hap_start`.
+        let slack = if self.indel_error_rate > 0.0 { INDEL_SLACK } else { 0 };
+        let right_slack = slack.min(right_hap_start as usize);
+        let left_seq = haplotype.get_sequence(hap_frag_start, self.read_length + slack);
+        let right_seq = haplotype.get_sequence(
+            right_hap_start - right_slack as u64,
+            right_slack + self.read_length,
+        );
 
-        if left_seq.len() < self.read_length || right_seq.len() < self.read_length {
+        if left_seq.len() < self.read_length
+            || right_seq.len() < right_slack + self.read_length
+        {
             return None;
         }
 
         // Draw the orientation before either read, so the stream stays in a
         // fixed order and the same --seed keeps giving the same output (M7).
         let r1_is_reverse = rng.gen::<bool>();
-        // read_num picks the quality model, reverse_cycles handles the flip,
+        // read_num picks the quality model, is_reverse handles the flip,
         // so whichever mate ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
         // Forward mate (left end of the fragment).
         let (fwd_seq, fwd_qual) = self.generate_read_from_seq(left_seq, fwd_num, false, rng);
 
-        // Reverse mate (right end): generate forward then revcomp.
-        let (mut rev_seq, mut rev_qual) =
-            self.generate_read_from_seq(right_seq, rev_num, true, rng);
-        reverse_complement(&mut rev_seq);
-        rev_qual.reverse();
+        // Reverse mate (right end): generated in sequencing order, so it
+        // already comes back in FASTQ orientation.
+        let (rev_seq, rev_qual) = self.generate_read_from_seq(right_seq, rev_num, true, rng);
 
         let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
             (rev_seq, rev_qual, fwd_seq, fwd_qual)
@@ -1368,9 +1355,29 @@ mod tests {
 
     // ── Fragment orientation (F1R2 vs F2R1) ─────────────────────────────
 
+    /// A generator using `profile` over `seq` on chr1.
+    fn mock_gen_with_profile(
+        profile: QualityProfile,
+        seq: Vec<u8>,
+        read_length: usize,
+        indel_error_rate: f64,
+    ) -> SynthReadGenerator<'static> {
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chr1".to_string(), seq);
+        let reference: &'static SharedReference =
+            Box::leak(Box::new(SharedReference::from_sequences(seqs)));
+        SynthReadGenerator::new(profile, reference, read_length, indel_error_rate)
+    }
+
     /// A generator over `seq` on chr1, with every R1 base at Q`q1` and every
-    /// R2 base at Q`q2`.
-    fn mock_gen_over(seq: Vec<u8>, read_length: usize, q1: u8, q2: u8) -> SynthReadGenerator<'static> {
+    /// R2 base at Q`q2`, and `indel_error_rate` of its errors indels.
+    fn mock_gen_over_with_indels(
+        seq: Vec<u8>,
+        read_length: usize,
+        q1: u8,
+        q2: u8,
+        indel_error_rate: f64,
+    ) -> SynthReadGenerator<'static> {
         let qual1 = vec![b'!' + q1; read_length];
         let qual2 = vec![b'!' + q2; read_length];
         let pairs: Vec<ReadPair> = (0..100)
@@ -1379,11 +1386,13 @@ mod tests {
             })
             .collect();
         let profile = QualityProfile::from_read_pairs(&pairs, read_length);
-        let mut seqs = StdHashMap::new();
-        seqs.insert("chr1".to_string(), seq);
-        let reference: &'static SharedReference =
-            Box::leak(Box::new(SharedReference::from_sequences(seqs)));
-        SynthReadGenerator::new(profile, reference, read_length, 0.0)
+        mock_gen_with_profile(profile, seq, read_length, indel_error_rate)
+    }
+
+    /// A generator over `seq` on chr1, with every R1 base at Q`q1` and every
+    /// R2 base at Q`q2`, and no indel sequencing errors.
+    fn mock_gen_over(seq: Vec<u8>, read_length: usize, q1: u8, q2: u8) -> SynthReadGenerator<'static> {
+        mock_gen_over_with_indels(seq, read_length, q1, q2, 0.0)
     }
 
     /// A sequence with no palindromic structure, so a read off the left end of
@@ -1548,5 +1557,110 @@ mod tests {
             );
         }
         assert!(fwd > 0 && rev > 0, "orientation split {} fwd / {} rev of 100", fwd, rev);
+    }
+
+    // ── Sequencing-order generation of the reverse mate (L1, L17) ───────
+
+    /// Quality that starts at Q30 and, once it drops to Q10, never recovers.
+    /// Only a Markov chain run in sequencing order reproduces that shape.
+    fn decaying_qual(read_length: usize, rng: &mut StdRng) -> Vec<u8> {
+        let mut qual = Vec::with_capacity(read_length);
+        let mut q = b'!' + 30;
+        for _ in 0..read_length {
+            qual.push(q);
+            if q > b'!' + 10 && rng.gen::<f64>() < 0.01 {
+                q = b'!' + 10;
+            }
+        }
+        qual
+    }
+
+    #[test]
+    fn test_indel_deletion_errors_never_pad_a_read_with_n() {
+        // A deletion sequencing error consumed a template base without
+        // emitting one, so the read ran off the end of its template and the
+        // shortfall was padded with `N` (L1) — at the 3' end of the forward
+        // mate and, after the reverse-complement, at the 5' end of the
+        // reverse one. Every base must come from real template sequence.
+        let rl = 150usize;
+        let hap_seq = scrambled_seq(4000, 21);
+        let hap = VariantHaplotype::from_segments(vec![HaplotypeSegment {
+            sequence: hap_seq,
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: 0,
+                ref_end: 4000,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        }]);
+        // Q20 → 1% of bases mis-called, every error an indel: ~0.75 deletion
+        // errors per read, so most reads used to need padding.
+        let gen = mock_gen_over_with_indels(vec![b'A'; 1000], rl, 20, 20, 1.0);
+        let mut rng = StdRng::seed_from_u64(5);
+        let mut padded = 0usize;
+        for i in 0..200u64 {
+            let pair = gen
+                .generate_haplotype_read_pair(&hap, 500 + i * 7, 400, "h", &mut rng)
+                .unwrap();
+            for seq in [&pair.seq1, &pair.seq2] {
+                assert_eq!(seq.len(), rl, "a synthetic read came out short");
+                if seq.contains(&b'N') {
+                    padded += 1;
+                }
+            }
+        }
+        assert_eq!(padded, 0, "{} of 400 synthetic reads carry padded `N` bases", padded);
+    }
+
+    #[test]
+    fn test_reverse_mate_quality_decays_in_sequencing_order() {
+        // The reverse mate was generated along the reference and reversed
+        // afterwards, which ran its quality Markov chain backwards (L17):
+        // each cycle was conditioned on the cycle after it, not before it.
+        let rl = 150usize;
+        let mut tr = StdRng::seed_from_u64(11);
+        let pairs: Vec<ReadPair> = (0..2000)
+            .map(|i| {
+                let q1 = decaying_qual(rl, &mut tr);
+                let q2 = decaying_qual(rl, &mut tr);
+                mock_read_pair(&format!("t_{}", i), q1, q2, i as u64 * 500)
+            })
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 100_000], rl, 0.0);
+
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(12);
+        let half = rl / 2;
+        let (mut fwd_head, mut fwd_tail) = (Vec::new(), Vec::new());
+        let (mut rev_head, mut rev_tail) = (Vec::new(), Vec::new());
+        for i in 0..200u64 {
+            let pair = gen
+                .generate_read_pair("chr1", 1000 + i * 100, 400, &no_alleles, "p", &mut rng)
+                .unwrap();
+            // Over an all-A reference the reverse mate reads as T.
+            let ts = pair.seq1.iter().filter(|&&b| b == b'T').count();
+            let as_ = pair.seq1.iter().filter(|&&b| b == b'A').count();
+            let (rev_q, fwd_q) =
+                if ts > as_ { (&pair.qual1, &pair.qual2) } else { (&pair.qual2, &pair.qual1) };
+            // Cycle 0 has no Markov predecessor either way — start at cycle 1.
+            fwd_head.extend_from_slice(&fwd_q[1..half]);
+            fwd_tail.extend_from_slice(&fwd_q[half..]);
+            rev_head.extend_from_slice(&rev_q[1..half]);
+            rev_tail.extend_from_slice(&rev_q[half..]);
+        }
+        let (fh, ft) = (mean_qual(&fwd_head), mean_qual(&fwd_tail));
+        let (rh, rt) = (mean_qual(&rev_head), mean_qual(&rev_tail));
+        assert!(fh > ft + 3.0, "forward mate quality should decay: head {:.2} tail {:.2}", fh, ft);
+        assert!(
+            rh > rt + 3.0,
+            "reverse mate quality should decay in sequencing order like the forward mate \
+             (forward head {:.2} tail {:.2}): head {:.2} tail {:.2}",
+            fh,
+            ft,
+            rh,
+            rt
+        );
     }
 }

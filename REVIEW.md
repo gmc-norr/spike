@@ -419,7 +419,7 @@ defect in the `spike validate` subcommand.
 
 | ID | Problem | Where | Fix |
 | --- | --- | --- | --- |
-| L1 | Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
+| L1 | **Fixed.** Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
 | L2 | CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs |
 | L3 | bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" | `reference.rs:33-35` | Use `fasta::io::indexed_reader::Builder` |
 | L4 | Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`) | `fastq.rs:47-48` | `r1_gz.finish()?.flush()?` |
@@ -435,9 +435,46 @@ defect in the `spike validate` subcommand.
 | L14 | Standard BED6: column 5 is score, so every gene is named `"0"` | `exon.rs:79-83` | Use column 4 or detect format |
 | L15 | `validate` global checks read only the first 100k records (whole-genome HG002 mean MAPQ 10.0 → FAIL); dup rate always 0 on unmarked BAM | `validate.rs:1031-1140` | Sample across the file / event regions |
 | L16 | `validate`: `truncate()` panics on non-ASCII gene names; `escape_json` misses `\t`, `\r` | `validate.rs:1266` | Truncate on char boundary; escape all control chars |
-| L17 | R2 quality Markov chain runs backwards (no measurable effect on NovaSeq: mean Q 35.628 vs 35.627) | `synth.rs:413-421, 651-659` | Fixed along with L1 |
+| L17 | **Fixed.** R2 quality Markov chain runs backwards (no measurable effect on NovaSeq: mean Q 35.628 vs 35.627) | `synth.rs:413-421, 651-659` | Fixed along with L1 |
 | L18 | Reference `N` bases get normal qualities (often Q37); real Illumina N is Q2 | `synth.rs:423-428` | Force Q2 on N |
 | L19 | Single-end BAM/CRAM is scanned end to end looking for proper pairs | `bam_stats.rs:81-83, 141-143` | Cap records scanned |
+
+### L1 + L17 · Reverse mate generated in sequencing order
+
+The Low table has no per-entry prose, so the measured result for these two goes
+here; they were one fix, as the L17 row says.
+
+Both defects lived in the `reverse_cycles` branch of `generate_read` /
+`generate_read_from_seq`. The reverse mate was generated along the reference and
+reverse-complemented afterwards, so (L17) its quality Markov chain conditioned
+each cycle on the cycle *after* it, and (L1) a deletion sequencing error ran the
+read off the far end of its template — the haplotype path was handed exactly
+`read_length` bases, with no slack at all — and the shortfall was padded with
+`N` at Q2, landing at the read's 5' end after the reverse-complement. Both mates
+now build a template in sequencing order (complemented and walked right to left
+for a reverse read, with `INDEL_SLACK` = 10 bases past the 3' end) and share one
+generation core, `generate_from_template`.
+
+**The two rows are worded for the wrong mate.** They predate M13, which split
+synthetic pairs 50/50 between F1R2 and F2R1; `read_num` and the reverse-strand
+flag are independent, so since M13 both defects follow the *reverse mate*, which
+is R1 half the time.
+
+- **Measured**, 40 seeds × (`dup:chr20:38423496-38427196` + `del:chr20:38412500-38422500`),
+  `--indel-error-rate 0.05`, 44 000 synthetic pairs per arm. At `8d1beba` (pre-M13)
+  the original wording holds: **0.777% of synthetic R1 end in `N`, 1.152% of
+  synthetic R2 start with `N`**, and nothing at the other end. At branch HEAD
+  `65a76b8` (post-M13) it is split across both mates and both ends: R1
+  **0.500%** start / **0.393%** end, R2 **0.564%** start / **0.530%** end. After
+  the fix: **0.000%** everywhere — no synthetic read contains an `N` at all
+  (0/88 000). Real donor reads keep their own `N`s, unchanged (R1 0.140%).
+- **L17, measured on the same reads:** mean Q of synthetic reads 35.9094 → 35.9144
+  (R1) and 35.5279 → 35.5274 (R2) — no measurable effect on NovaSeq, as the row
+  says. The visible part is at the read ends, where the backwards chain had been
+  distorting the per-cycle marginal: R2 cycle 0 mean Q 35.576 → 35.744, R1 cycle 150
+  34.606 → 34.788, and the RMS deviation of the synthetic per-cycle profile from
+  the donor reads it was learned from falls 0.0555 → 0.0501 Q (R1) and
+  0.0700 → 0.0651 Q (R2).
 
 ## Uncommitted changes
 
