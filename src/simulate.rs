@@ -1422,6 +1422,58 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn test_fusion_at_chromosome_end_tiles_at_the_real_breakpoint_coverage() {
+        // RightRight fusion 100 bp from a 10 kb contig's end: gene A's piece is
+        // revcomp(chrEnd[9900, 11900)), which the fetch returns as 100 bases.
+        // The junction sits at bp_a = 9900; a segment that still claims
+        // ref_end = 11900 maps it to 2*9900 + 2000 - 10000 = 11800, past the
+        // contig end, where the pool has no reads at all.
+        let pattern = b"ACGT";
+        let seq: Vec<u8> = (0..10_000u64).map(|i| pattern[(i % 4) as usize]).collect();
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chrEnd".to_string(), seq);
+        let reference = SharedReference::from_sequences(seqs);
+        let mut hap = VariantHaplotype::from_fusion(
+            &reference, "chrEnd", 9900, "chrEnd", 2000, 2000, FusionJoin::RightRight,
+        )
+        .unwrap();
+
+        // 400 bp fragments every 10 bp from 0 to 9990: depth 40 in the interior.
+        let pairs: Vec<ReadPair> = (0..1000u64)
+            .map(|i| make_pair(&format!("r{}", i), i * 10, i * 10 + 400))
+            .collect();
+        let pool = ReadPool {
+            pairs,
+            frag_dist: FragmentDist::from_stats(400.0, 80.0),
+        };
+
+        let event = SimEvent::Fusion {
+            chrom_a: "chrEnd".to_string(),
+            bp_a: 9900,
+            gene_a: "GENE_A".to_string(),
+            chrom_b: "chrEnd".to_string(),
+            bp_b: 2000,
+            gene_b: "GENE_B".to_string(),
+            join: FusionJoin::RightRight,
+            allele_fraction: Some(0.5),
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let out = simulate_event(
+            3, &event, &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, &mut rng,
+        )
+        .expect("simulate_event should succeed for a fusion at a contig end");
+
+        // estimate_coverage_at samples 50 points over [8900, 10900) in steps of
+        // 40: the 28 points up to 9980 see depth 40, the 10 from 10020 to 10380
+        // tail off (37, 33, ..., 1) as fragments run out, the last 12 see none:
+        // (28*40 + 190) / 50 = 26.2. An additive event tiles
+        // cov * v/(1-v) * breakpoints = 26.2 * 1.0 * 1 -> 26 pairs.
+        assert_eq!(out.chimeric_pairs.len(), 26);
+    }
+
     // ---------------------------------------------------------------
     // simulate_event suppression (real code)
     // ---------------------------------------------------------------

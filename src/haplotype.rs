@@ -16,8 +16,11 @@ use crate::types::FusionJoin;
 #[derive(Debug, Clone)]
 pub struct SegmentOrigin {
     pub chrom: String,
-    pub ref_start: u64,   // 0-based
-    pub ref_end: u64,     // 0-based, exclusive
+    pub ref_start: u64, // 0-based
+    /// 0-based, exclusive. Always `ref_start + sequence.len()`: a fetch that
+    /// runs off a chromosome end comes back short, and a segment must not
+    /// claim more reference than its sequence covers.
+    pub ref_end: u64,
     pub is_reverse: bool, // true for reverse-complemented segments (INV)
 }
 
@@ -84,6 +87,10 @@ impl VariantHaplotype {
 
         let left_seq = fetch_upper(reference, chrom, left_start, del_start)?;
         let right_seq = fetch_upper(reference, chrom, del_end, right_end)?;
+        // Near a chromosome end the fetch returns fewer bases than asked for,
+        // so each origin ends where its sequence ends.
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let right_ref_end = del_end + right_seq.len() as u64;
 
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
@@ -91,7 +98,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: del_start,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -101,7 +108,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: del_end,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -127,6 +134,8 @@ impl VariantHaplotype {
 
         let left_seq = fetch_upper(reference, chrom, left_start, dup_end)?;
         let right_seq = fetch_upper(reference, chrom, dup_start, right_end)?;
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let right_ref_end = dup_start + right_seq.len() as u64;
 
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
@@ -134,7 +143,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: dup_end,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -144,7 +153,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: dup_start,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -174,6 +183,9 @@ impl VariantHaplotype {
         let dup_seq_1 = fetch_upper(reference, chrom, dup_start, dup_end)?;
         let dup_seq_2 = fetch_upper(reference, chrom, dup_start, dup_end)?;
         let right_seq = fetch_upper(reference, chrom, dup_end, right_end)?;
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let dup_ref_end = dup_start + dup_seq_1.len() as u64;
+        let right_ref_end = dup_end + right_seq.len() as u64;
 
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
@@ -181,7 +193,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: dup_start,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -191,7 +203,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: dup_start,
-                    ref_end: dup_end,
+                    ref_end: dup_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -201,7 +213,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: dup_start,
-                    ref_end: dup_end,
+                    ref_end: dup_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -211,7 +223,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: dup_end,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -236,6 +248,9 @@ impl VariantHaplotype {
         let mut inv_seq = fetch_upper(reference, chrom, inv_start, inv_end)?;
         reverse_complement(&mut inv_seq);
         let right_seq = fetch_upper(reference, chrom, inv_end, right_end)?;
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let inv_ref_end = inv_start + inv_seq.len() as u64;
+        let right_ref_end = inv_end + right_seq.len() as u64;
 
         Ok(Self::from_segments(vec![
             HaplotypeSegment {
@@ -243,7 +258,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: inv_start,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -253,7 +268,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: inv_start,
-                    ref_end: inv_end,
+                    ref_end: inv_ref_end,
                     is_reverse: true,
                 }),
                 hap_offset: 0,
@@ -263,7 +278,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: inv_end,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -286,6 +301,8 @@ impl VariantHaplotype {
 
         let left_seq = fetch_upper(reference, chrom, left_start, pos)?;
         let right_seq = fetch_upper(reference, chrom, pos, right_end)?;
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let right_ref_end = pos + right_seq.len() as u64;
 
         // Uppercase the insertion sequence for consistency.
         let ins_upper: Vec<u8> = ins_seq.iter().map(|b| b.to_ascii_uppercase()).collect();
@@ -296,7 +313,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: pos,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -311,7 +328,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: pos,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -345,12 +362,13 @@ impl VariantHaplotype {
             if reverse {
                 reverse_complement(&mut sequence);
             }
+            let ref_end = start + sequence.len() as u64;
             Ok(HaplotypeSegment {
                 sequence,
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: start,
-                    ref_end: end,
+                    ref_end,
                     is_reverse: reverse,
                 }),
                 hap_offset: 0,
@@ -397,6 +415,8 @@ impl VariantHaplotype {
 
         let left_seq = fetch_upper(reference, chrom, left_start, pos)?;
         let right_seq = fetch_upper(reference, chrom, ref_end_pos, right_end)?;
+        let left_ref_end = left_start + left_seq.len() as u64;
+        let right_ref_end = ref_end_pos + right_seq.len() as u64;
         let alt_upper: Vec<u8> = alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
 
         // For SNPs/MNVs (equal length ref and alt), the alt segment has a 1:1
@@ -420,7 +440,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: left_start,
-                    ref_end: pos,
+                    ref_end: left_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -435,7 +455,7 @@ impl VariantHaplotype {
                 origin: Some(SegmentOrigin {
                     chrom: chrom.to_string(),
                     ref_start: ref_end_pos,
-                    ref_end: right_end,
+                    ref_end: right_ref_end,
                     is_reverse: false,
                 }),
                 hap_offset: 0,
@@ -1313,5 +1333,111 @@ mod tests {
         assert_eq!(ref_pos(&hap, 0), ("chrA".to_string(), 11));
         assert_eq!(ref_pos(&hap, 3), ("chrA".to_string(), 8));
         assert_eq!(ref_pos(&hap, 4), ("chrB".to_string(), 8));
+    }
+
+    // ---------------------------------------------------------------
+    // Chromosome-end clamping (M4), built from a real (in-memory) reference
+    // ---------------------------------------------------------------
+
+    /// A 10 kb contig: anything a constructor asks for past 10 000 comes back
+    /// short, because `SharedReference::fetch_sequence` clamps.
+    fn short_contig() -> SharedReference {
+        let pattern = b"ACGT";
+        let seq: Vec<u8> = (0..10_000u64).map(|i| pattern[(i % 4) as usize]).collect();
+        let mut seqs = std::collections::HashMap::new();
+        seqs.insert("chrEnd".to_string(), seq);
+        SharedReference::from_sequences(seqs)
+    }
+
+    #[test]
+    fn test_deletion_at_chromosome_end_does_not_overcount_ref_len() {
+        // A DEL ending 100 bp from the chromosome end, 2 kb flanks:
+        // left [1000, 3000) = 2000 bp, right [9900, 11900) → [9900, 10000) = 100 bp.
+        let hap =
+            VariantHaplotype::from_deletion(&short_contig(), "chrEnd", 3000, 9900, 2000).unwrap();
+        // 2000 + 100 = 2100 bases of reference, not 2000 + 2000 = 4000.
+        assert_eq!(hap.total_len, 2100);
+        assert_eq!(hap.ref_mapped_len(), 2100);
+        // The footprint ends at the contig end, not 1900 bp past it.
+        assert_eq!(hap.ref_range(), Some((1000, 10_000)));
+    }
+
+    #[test]
+    fn test_junction_duplication_at_chromosome_end_does_not_overcount_ref_len() {
+        // DUP [9500, 9900) junction, 2 kb flanks: left [7900, 9900) = 2000 bp,
+        // right [9500, 11500) → [9500, 10000) = 500 bp.
+        let hap =
+            VariantHaplotype::from_duplication(&short_contig(), "chrEnd", 9500, 9900, 2000).unwrap();
+        // 2000 + 500 = 2500, not 2000 + 2000 = 4000.
+        assert_eq!(hap.total_len, 2500);
+        assert_eq!(hap.ref_mapped_len(), 2500);
+        assert_eq!(hap.ref_range(), Some((7900, 10_000)));
+    }
+
+    #[test]
+    fn test_tandem_duplication_at_chromosome_end_does_not_overcount_ref_len() {
+        // DUP [3000, 9900) with 2 kb flanks: left 2000, two copies of the
+        // 6900 bp region, right flank [9900, 11900) → 100 bp.
+        let hap =
+            VariantHaplotype::from_tandem_duplication(&short_contig(), "chrEnd", 3000, 9900, 2000)
+                .unwrap();
+        // 2000 + 6900 + 6900 + 100 = 15900, not ... + 2000 = 17800.
+        assert_eq!(hap.total_len, 15_900);
+        assert_eq!(hap.ref_mapped_len(), 15_900);
+        assert_eq!(hap.ref_range(), Some((1000, 10_000)));
+    }
+
+    #[test]
+    fn test_inversion_at_chromosome_end_does_not_overcount_ref_len() {
+        // INV [3000, 9900) with 2 kb flanks: left 2000, inverted 6900,
+        // right flank [9900, 11900) → 100 bp.
+        let hap =
+            VariantHaplotype::from_inversion(&short_contig(), "chrEnd", 3000, 9900, 2000).unwrap();
+        // 2000 + 6900 + 100 = 9000, not ... + 2000 = 10900.
+        assert_eq!(hap.total_len, 9000);
+        assert_eq!(hap.ref_mapped_len(), 9000);
+        assert_eq!(hap.ref_range(), Some((1000, 10_000)));
+    }
+
+    #[test]
+    fn test_insertion_at_chromosome_end_does_not_overcount_ref_len() {
+        // INS at 9900 with 2 kb flanks: left [7900, 9900) = 2000 bp, 50 bp of
+        // novel sequence, right [9900, 11900) → 100 bp.
+        let hap =
+            VariantHaplotype::from_insertion(&short_contig(), "chrEnd", 9900, &[b'G'; 50], 2000)
+                .unwrap();
+        assert_eq!(hap.total_len, 2150);
+        // Reference-mapped bases only: 2000 + 100 = 2100, not 2000 + 2000 = 4000.
+        assert_eq!(hap.ref_mapped_len(), 2100);
+        assert_eq!(hap.ref_range(), Some((7900, 10_000)));
+    }
+
+    #[test]
+    fn test_small_variant_at_chromosome_end_does_not_overcount_ref_len() {
+        // SNP G→T at 9990 (the contig repeats ACGT, so 9990 is a G) with 2 kb
+        // flanks: left [7990, 9990) = 2000 bp, the 1 bp alt, right
+        // [9991, 11991) → [9991, 10000) = 9 bp.
+        let hap =
+            VariantHaplotype::from_small_variant(&short_contig(), "chrEnd", 9990, b"G", b"T", 2000)
+                .unwrap();
+        // 2000 + 1 + 9 = 2010, not 2000 + 1 + 2000 = 4001.
+        assert_eq!(hap.total_len, 2010);
+        assert_eq!(hap.ref_mapped_len(), 2010);
+        assert_eq!(hap.ref_range(), Some((7990, 10_000)));
+    }
+
+    #[test]
+    fn test_fusion_reverse_piece_at_chromosome_end_maps_to_real_bases() {
+        // RightRight keeps revcomp(A[bp_a, bp_a + flank)). With bp_a 100 bp
+        // from the contig end the fetch returns 100 bases, so haplotype offset
+        // 0 is the contig's last base (9999) and offset 99 is bp_a (9900).
+        // An unclamped ref_end would map them 1900 bp past the contig end.
+        let hap = VariantHaplotype::from_fusion(
+            &short_contig(), "chrEnd", 9900, "chrEnd", 2000, 2000, FusionJoin::RightRight,
+        )
+        .unwrap();
+        assert_eq!(hap.segments[0].sequence.len(), 100);
+        assert_eq!(ref_pos(&hap, 0), ("chrEnd".to_string(), 9999));
+        assert_eq!(ref_pos(&hap, 99), ("chrEnd".to_string(), 9900));
     }
 }

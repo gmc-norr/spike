@@ -37,7 +37,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M1 | Medium | **Fixed.** Allele fraction drifts at haplotype edges | `simulate.rs:123-130, 352, 437` |
 | M2 | Medium | **Fixed.** Short-insert libraries under-tiled | `simulate.rs:379` |
 | M3 | Medium | **Fixed** (rejected). `--flank` < 2000 leaves extra reads | `main.rs:379` |
-| M4 | Medium | Chromosome-end segments overcount length | `haplotype.rs:81-104` |
+| M4 | Medium | **Fixed.** Chromosome-end segments overcount length | `haplotype.rs:81-104` |
 | M5 | Medium | **Fixed.** `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
 | M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
@@ -173,6 +173,8 @@ Tiling starts uniformly on `[0, H − f]` (`simulate.rs:437`), suppression uses 
 `haplotype.rs:81-104` (same pattern at 168-174, 231-236, 283-286): `ref_end` is not clamped, but the fetched sequence is (`reference.rs:171-172`).
 - DEL ending 100 bp from the chromosome end: `ref_mapped_len` 4000 vs `total_len` 2100 → 250 fragments instead of 131 (~1.9× depth).
 - **Fix:** after fetch, set `ref_end = ref_start + seq.len()`.
+
+**Fixed:** every constructor now takes a segment's `ref_end` from the sequence the fetch returned (`haplotype.rs`: `from_deletion`, `from_duplication`, `from_tandem_duplication`, `from_inversion`, `from_insertion`, `from_small_variant`, and the `from_fusion` piece). HG002 on `chr14_KI270723v1_random` (38,115 bp, ~118x to its last base), seed 1: a 10 kb DEL ending 100 bp from the contig end (`del:...:28015-38015`) had `ref_mapped_len` 4000 against `total_len` 2100 → 2100/2100. Its **read count does not move** (229 tiled pairs, byte-identical FASTQ, before and after): `compute_tiling_count` has scaled by `total_len`, not `ref_mapped_len`, since `c07f9d2`, so the 250-vs-131 above belongs to the older `n = cov·VAF·ref_mapped_len / frag` — only its ratio survives (4000/2100 = 1.905 = 250/131). What the unclamped end still broke is *reversed* segments, whose `hap_to_ref` counts down from `ref_end`: a right-right fusion cut 100 bp from the contig end (`fusion:GENEA:exon1:GENEB:exon2`, bp_a 38,015) placed its junction at 39,915, 1,800 bp past the contig, where coverage reads 0.0 and tiling falls to its 2-pair floor — **2 → 88 chimeric pairs** (cov 0.0 → 87.6). A contig-end INV and `dup:chr20:38423496-38427196` are byte-identical before and after.
 
 ### M5 · `merge.sh` loses and duplicates reads; adds a second sample
 `merge.sh` removes originals by BED region (`main.rs:1130`), but extraction (`extract.rs:92-100, 176-196`) drops some pairs and pulls in out-of-region mates.

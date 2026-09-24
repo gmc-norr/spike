@@ -470,6 +470,8 @@ validate.rs      `spike validate` subcommand: automated spike-in quality checks
 
 All SV types share a common simulation framework: (1) build a linear variant haplotype from segments, (2) suppress original reads in the affected region at the VAF rate, (3) tile synthetic reads across the haplotype to replace the suppressed fraction. The details of what the haplotype looks like, how reads are suppressed, and what observable signals result differ by variant type.
 
+A segment whose flank runs off the end of a contig is truncated to what the reference actually holds: the haplotype is shorter there, its reference footprint stops at the contig end, and the count of synthetic reads follows the shorter haplotype.
+
 ### Deletion (DEL)
 
 **Haplotype structure** (2 segments):
