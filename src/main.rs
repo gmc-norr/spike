@@ -1174,17 +1174,20 @@ echo "Removing the replaced originals from $ORIGINAL..."
 
 # Sanity check: every name in replaced_reads.txt came from a read spike found
 # in ORIGINAL, so a correct ORIGINAL always yields at least one matching record
-# per name (usually two, for a pair). If far fewer matched, ORIGINAL is most
-# likely not the BAM spike was run on -- samtools does not error on read names
-# it cannot find, so without this check the merge below would silently combine
+# per name (usually two, for a pair, plus any secondary/supplementary records),
+# so ACTUAL should land well above NAMES. If ACTUAL comes in below NAMES --
+# even by a single record -- that floor is broken and ORIGINAL is most likely
+# not the BAM spike was run on -- samtools does not error on read names it
+# cannot find, so without this check the merge below would silently combine
 # sim.bam with (near) full original depth instead of the thinned original.
 NAMES=$(wc -l < "$DIR/replaced_reads.txt")
 ACTUAL=$("$SAMTOOLS" view -c "$DIR/removed.bam")
 rm -f "$DIR/removed.bam"
 if [ "$NAMES" -gt 0 ] && [ "$ACTUAL" -lt "$NAMES" ]; then
-    echo "Error: only $ACTUAL of $NAMES replaced read names had a matching record in $ORIGINAL." >&2
+    echo "Error: $ORIGINAL yielded only $ACTUAL matching record(s) for the $NAMES replaced read names listed in replaced_reads.txt." >&2
     echo "ORIGINAL must be the exact BAM spike was run on -- point merge.sh at a" >&2
     echo "different BAM only if it is that same BAM (e.g. moved to a new path)." >&2
+    rm -f "$DIR/outside.bam"
     exit 1
 fi
 
@@ -1501,8 +1504,10 @@ mod tests {
     /// shortfall guard, control flow, exit codes) without real BAM files or
     /// real samtools. It only understands the exact invocations
     /// `write_merge_script` emits:
-    /// - `view -c PATH`: echoes `$SAMTOOLS_FAKE_ACTUAL` (default 0) for a path
-    ///   ending in `removed.bam`, else `0`.
+    /// - `view -c PATH`: for a path ending in `removed.bam`, exits 1 if that
+    ///   file does not exist (pins merge.sh materialising it before counting),
+    ///   else echoes `$SAMTOOLS_FAKE_ACTUAL` (default 0); any other path
+    ///   echoes `0`.
     /// - `view ... -o OUT -U UN ... IN`: touches OUT and UN (no real filtering).
     /// - `merge -f -@ N OUT IN...` / `sort -@ N -o OUT IN`: touches OUT.
     /// - `index FILE`: no-op.
@@ -1517,7 +1522,7 @@ case "$1" in
   view)
     if [ "$2" = "-c" ]; then
       case "$3" in
-        */removed.bam) echo "${SAMTOOLS_FAKE_ACTUAL:-0}" ;;
+        */removed.bam) [ -f "$3" ] || exit 1; echo "${SAMTOOLS_FAKE_ACTUAL:-0}" ;;
         *) echo "0" ;;
       esac
       exit 0
