@@ -41,6 +41,17 @@ pub struct GeneTarget {
     pub exons: Vec<Exon>,
 }
 
+impl GeneTarget {
+    /// True when exon numbers run against genomic position (exon 1 last).
+    /// Exons are sorted by number, so compare the first and last.
+    fn is_minus_strand(&self) -> bool {
+        match (self.exons.first(), self.exons.last()) {
+            (Some(first), Some(last)) => first.start > last.start,
+            _ => false,
+        }
+    }
+}
+
 /// Parse an exon BED file into gene targets.
 ///
 /// Expected format: tab-separated, at least 4 columns:
@@ -50,7 +61,11 @@ pub struct GeneTarget {
 pub fn parse_exon_bed(path: &str) -> Result<Vec<GeneTarget>> {
     let content =
         std::fs::read_to_string(path).with_context(|| format!("failed to read BED: {}", path))?;
+    parse_exon_bed_str(&content)
+}
 
+/// Parse exon BED content (see [`parse_exon_bed`]).
+fn parse_exon_bed_str(content: &str) -> Result<Vec<GeneTarget>> {
     let mut gene_exons: HashMap<(String, String), Vec<Exon>> = HashMap::new();
 
     for (line_no, line) in content.lines().enumerate() {
@@ -97,10 +112,7 @@ pub fn parse_exon_bed(path: &str) -> Result<Vec<GeneTarget>> {
 
     let mut targets = Vec::new();
     for ((gene, _chrom), mut exons) in gene_exons {
-        exons.sort_by_key(|e| e.start);
-        for (i, exon) in exons.iter_mut().enumerate() {
-            exon.number = (i + 1) as u32;
-        }
+        number_exons(&gene, &mut exons)?;
         let chrom = exons[0].chrom.clone();
         let gene_start = exons.iter().map(|e| e.start).min().unwrap();
         let gene_end = exons.iter().map(|e| e.end).max().unwrap();
@@ -115,6 +127,73 @@ pub fn parse_exon_bed(path: &str) -> Result<Vec<GeneTarget>> {
 
     targets.sort_by(|a, b| a.chrom.cmp(&b.chrom).then(a.gene_start.cmp(&b.gene_start)));
     Ok(targets)
+}
+
+/// Number a gene's exons 1..n in transcript order, and sort them by number.
+///
+/// Numbers come from the exon names (`TP53_exon1` → 1), which follow
+/// transcript order on either strand. If no name carries a number, exons are
+/// numbered by genomic position, which is backwards for minus-strand genes.
+fn number_exons(gene: &str, exons: &mut [Exon]) -> Result<()> {
+    let from_names: Vec<Option<u32>> = exons
+        .iter()
+        .map(|e| exon_number_from_name(&e.name))
+        .collect();
+
+    if from_names.iter().all(Option::is_none) {
+        if exons.len() > 1 {
+            log::warn!(
+                "gene {}: exon names carry no exon number; numbering exons by genomic \
+                 position, which is reversed for minus-strand genes",
+                gene
+            );
+        }
+        exons.sort_by_key(|e| e.start);
+        for (i, exon) in exons.iter_mut().enumerate() {
+            exon.number = (i + 1) as u32;
+        }
+        return Ok(());
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for (exon, number) in exons.iter_mut().zip(from_names) {
+        let number = number.ok_or_else(|| {
+            anyhow::anyhow!(
+                "gene {}: exon '{}' has no exon number in its name, but other exons \
+                 of this gene do",
+                gene,
+                exon.name
+            )
+        })?;
+        if !seen.insert(number) {
+            bail!(
+                "gene {}: exon number {} appears more than once (several transcripts?); \
+                 keep one transcript per gene in the exon BED",
+                gene,
+                number
+            );
+        }
+        exon.number = number;
+    }
+    exons.sort_by_key(|e| e.number);
+    Ok(())
+}
+
+/// Exon number from a name such as `TP53_exon3` or `TP53.exon3_NM_000546`:
+/// the digits right after the last "exon", ended by the end of the name or
+/// by a non-alphanumeric character.
+fn exon_number_from_name(name: &str) -> Option<u32> {
+    let lower = name.to_ascii_lowercase();
+    let rest = &lower[lower.rfind("exon")? + 4..];
+    let n_digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let ends_cleanly = rest[n_digits..]
+        .bytes()
+        .next()
+        .is_none_or(|b| !b.is_ascii_alphanumeric());
+    if n_digits == 0 || !ends_cleanly {
+        return None;
+    }
+    rest[..n_digits].parse().ok()
 }
 
 /// Parse an event specification string into a SimEvent and optional AF spec.
@@ -287,31 +366,29 @@ fn parse_region_spec(parts: &[&str], sv_type: &str, genes: &[GeneTarget]) -> Res
         (end_num, start_num)
     };
 
-    let start_exon = gene
-        .exons
-        .iter()
-        .find(|e| e.number == start_num)
-        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", start_num, gene_name))?;
-    let end_exon = gene
-        .exons
-        .iter()
-        .find(|e| e.number == end_num)
-        .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", end_num, gene_name))?;
+    for num in [start_num, end_num] {
+        if !gene.exons.iter().any(|e| e.number == num) {
+            bail!("exon {} not found in {}", num, gene_name);
+        }
+    }
 
-    let affected_exons: Vec<String> = gene
+    // On the minus strand exon 1 has the highest coordinates, so the region
+    // spans the lowest to the highest coordinate of the affected exons.
+    let affected: Vec<&Exon> = gene
         .exons
         .iter()
         .filter(|e| e.number >= start_num && e.number <= end_num)
-        .map(|e| e.name.clone())
         .collect();
+    let region_start = affected.iter().map(|e| e.start).min().unwrap();
+    let region_end = affected.iter().map(|e| e.end).max().unwrap();
 
     make_region_event(
         sv_type,
         gene.chrom.clone(),
-        start_exon.start,
-        end_exon.end,
+        region_start,
+        region_end,
         gene.gene.clone(),
-        affected_exons,
+        affected.iter().map(|e| e.name.clone()).collect(),
     )
 }
 
@@ -388,17 +465,51 @@ fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
         .find(|e| e.number == exon_b_num)
         .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", exon_b_num, gene_b_name))?;
 
-    // Breakpoint: end of exon A (intron boundary) joined to start of exon B.
-    Ok(SimEvent::Fusion {
-        chrom_a: gene_a.chrom.clone(),
-        bp_a: exon_a.end, // first base NOT included from gene A
-        gene_a: gene_a.gene.clone(),
-        chrom_b: gene_b.chrom.clone(),
-        bp_b: exon_b.start, // first base included from gene B
-        gene_b: gene_b.gene.clone(),
-        allele_fraction: None,
-        inverted,
-    })
+    match (gene_a.is_minus_strand(), gene_b.is_minus_strand()) {
+        // Plus/plus: keep gene A left of the end of exon A, joined to gene B
+        // from the start of exon B.
+        (false, false) => Ok(SimEvent::Fusion {
+            chrom_a: gene_a.chrom.clone(),
+            bp_a: exon_a.end, // first base NOT included from gene A
+            gene_a: gene_a.gene.clone(),
+            chrom_b: gene_b.chrom.clone(),
+            bp_b: exon_b.start, // first base included from gene B
+            gene_b: gene_b.gene.clone(),
+            allele_fraction: None,
+            inverted,
+        }),
+        // Minus/minus: gene A keeps [exon_a.start, ...) and gene B keeps
+        // (..., exon_b.end). On the plus strand that is B-left then A-right, the
+        // same forward join as plus/plus with the genes swapped.
+        (true, true) => {
+            if inverted {
+                bail!(
+                    "':inv' fusion with minus-strand genes ({}, {}) is not supported",
+                    gene_a.gene,
+                    gene_b.gene
+                );
+            }
+            Ok(SimEvent::Fusion {
+                chrom_a: gene_b.chrom.clone(),
+                bp_a: exon_b.end,
+                gene_a: gene_b.gene.clone(),
+                chrom_b: gene_a.chrom.clone(),
+                bp_b: exon_a.start,
+                gene_b: gene_a.gene.clone(),
+                allele_fraction: None,
+                inverted: false,
+            })
+        }
+        // Opposite strands need an inverted join, which the fusion model
+        // doesn't build correctly yet (REVIEW.md H4).
+        _ => bail!(
+            "fusion of genes on opposite strands ({} {}, {} {}) is not supported yet",
+            gene_a.gene,
+            if gene_a.is_minus_strand() { "minus" } else { "plus" },
+            gene_b.gene,
+            if gene_b.is_minus_strand() { "minus" } else { "plus" },
+        ),
+    }
 }
 
 /// Parse an insertion spec.
@@ -937,5 +1048,124 @@ mod tests {
             }
             _ => panic!("expected Fusion"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Strand-aware exon numbering
+    // ---------------------------------------------------------------
+
+    /// GENEM: minus-strand gene on chr1. Exon 1 has the HIGHEST coordinates.
+    /// GENEP: plus-strand gene on chr2.
+    /// GENEN: minus-strand gene on chr3.
+    const STRANDED_BED: &str = "\
+chr1\t1000\t1100\tGENEM_exon3\tGENEM
+chr1\t2000\t2100\tGENEM_exon2\tGENEM
+chr1\t3000\t3100\tGENEM_exon1\tGENEM
+chr2\t5000\t5200\tGENEP_exon1\tGENEP
+chr2\t6000\t6200\tGENEP_exon2\tGENEP
+chr3\t7000\t7300\tGENEN_exon2\tGENEN
+chr3\t8000\t8300\tGENEN_exon1\tGENEN
+";
+
+    fn exon_start(genes: &[GeneTarget], gene: &str, number: u32) -> u64 {
+        genes
+            .iter()
+            .find(|g| g.gene == gene)
+            .unwrap()
+            .exons
+            .iter()
+            .find(|e| e.number == number)
+            .unwrap()
+            .start
+    }
+
+    #[test]
+    fn test_exon_numbers_come_from_names_on_minus_strand() {
+        let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
+        assert_eq!(exon_start(&genes, "GENEM", 1), 3000);
+        assert_eq!(exon_start(&genes, "GENEM", 3), 1000);
+        assert_eq!(exon_start(&genes, "GENEP", 1), 5000);
+    }
+
+    #[test]
+    fn test_exon_names_without_numbers_fall_back_to_genomic_order() {
+        let bed = "chr1\t3000\t3100\tfirst\tG\nchr1\t1000\t1100\tsecond\tG\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(exon_start(&genes, "G", 1), 1000);
+        assert_eq!(exon_start(&genes, "G", 2), 3000);
+    }
+
+    #[test]
+    fn test_inconsistent_exon_numbering_is_rejected() {
+        // Two transcripts both have an exon 1.
+        let duplicate = "chr1\t1000\t1100\tG_exon1\tG\nchr1\t5000\t5100\tG_exon1\tG\n";
+        let err = parse_exon_bed_str(duplicate).unwrap_err().to_string();
+        assert!(err.contains("G"), "error should name the gene: {}", err);
+
+        // Only some exon names carry a number.
+        let mixed = "chr1\t1000\t1100\tG_exon1\tG\nchr1\t5000\t5100\tG_utr\tG\n";
+        assert!(parse_exon_bed_str(mixed).is_err());
+    }
+
+    #[test]
+    fn test_exon_range_on_minus_strand_covers_named_exons() {
+        // GENEM exon1 = [3000,3100), exon2 = [2000,2100).
+        let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
+        let (event, _) = parse_event_spec("del:GENEM:exon1-exon2", &genes).unwrap();
+        match event {
+            SimEvent::Deletion {
+                del_start,
+                del_end,
+                exons,
+                ..
+            } => {
+                assert_eq!((del_start, del_end), (2000, 3100));
+                assert_eq!(exons, vec!["GENEM_exon1", "GENEM_exon2"]);
+            }
+            _ => panic!("expected Deletion"),
+        }
+    }
+
+    #[test]
+    fn test_fusion_of_two_minus_strand_genes() {
+        // 5' partner GENEM (chr1, minus) keeps exon 1 and everything upstream:
+        // genomic [3000, ...). 3' partner GENEN (chr3, minus) keeps exon 2 and
+        // everything downstream: genomic (..., 7300). On the plus strand that
+        // molecule reads GENEN-left then GENEM-right, a forward join.
+        let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
+        let (event, _) = parse_event_spec("fusion:GENEM:exon1:GENEN:exon2", &genes).unwrap();
+        match event {
+            SimEvent::Fusion {
+                chrom_a,
+                bp_a,
+                gene_a,
+                chrom_b,
+                bp_b,
+                gene_b,
+                inverted,
+                ..
+            } => {
+                assert_eq!((chrom_a.as_str(), bp_a, gene_a.as_str()), ("chr3", 7300, "GENEN"));
+                assert_eq!((chrom_b.as_str(), bp_b, gene_b.as_str()), ("chr1", 3000, "GENEM"));
+                assert!(!inverted);
+            }
+            _ => panic!("expected Fusion"),
+        }
+    }
+
+    #[test]
+    fn test_fusion_of_opposite_strand_genes_is_rejected() {
+        // Needs an inverted join, which the fusion model can't build correctly yet.
+        let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
+        let err = parse_event_spec("fusion:GENEP:exon1:GENEM:exon2", &genes)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("strand"), "error should mention strand: {}", err);
+    }
+
+    #[test]
+    fn test_inv_suffix_with_minus_strand_gene_is_rejected() {
+        let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
+        assert!(parse_event_spec("fusion:GENEM:exon1:GENEN:exon2:inv", &genes).is_err());
     }
 }

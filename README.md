@@ -139,21 +139,17 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 The exon BED file should be tab-separated with at least 4 columns: `chrom start end name [gene]`. If the 5th column (gene) is absent, the gene is parsed from the name (e.g., `LDLR_exon1` -> `LDLR`).
 
+Exon numbers are read from the names (`TP53_exon1` → exon 1), so they follow transcript order on both strands: on a minus-strand gene, exon 1 has the highest coordinates. The strand is inferred from this numbering. If no exon name of a gene carries a number, exons are numbered by genomic position (with a warning), which is backwards for minus-strand genes. Keep one transcript per gene: a gene whose exon numbers repeat, or where only some names carry a number, is rejected.
+
 ### Gene fusions
 
-Fusions join two breakpoints, potentially across different chromosomes. The `:inv` suffix creates an inverted fusion (reverse-complement join at gene B):
+Fusions join two breakpoints, potentially across different chromosomes. Exon-based fusions work when both genes are on the same strand. Fusions of genes on opposite strands (e.g. EML4-ALK) are rejected for now, because the inverted join is not yet built correctly. The `:inv` suffix (reverse-complement join at gene B) is only accepted for two plus-strand genes:
 
 ```bash
 # BCR-ABL1 fusion (forward)
 spike --bam sample.bam --reference GRCh38.fasta \
   --exon-bed gene_exons.bed \
   --event "fusion:BCR:exon14:ABL1:exon2" \
-  -o output/
-
-# EML4-ALK inverted fusion
-spike --bam sample.bam --reference GRCh38.fasta \
-  --exon-bed gene_exons.bed \
-  --event "fusion:EML4:exon13:ALK:exon20:inv" \
   -o output/
 
 # Fusion at low somatic VAF
