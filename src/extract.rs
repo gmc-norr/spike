@@ -268,7 +268,7 @@ fn select_crai_entries(
 /// reader was built with, so pruning that index to the slices that can overlap
 /// `region` is enough to skip the rest. Record-level filtering is unchanged:
 /// noodles still returns only the records intersecting the region.
-fn open_cram_reader_for_region(
+pub(crate) fn open_cram_reader_for_region(
     cram_path: &str,
     repository: &noodles::fasta::Repository,
     region: &noodles::core::Region,

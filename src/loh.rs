@@ -504,15 +504,12 @@ fn count_alleles_cram(
 
     let repository = crate::extract::build_fasta_repository(ref_path)?;
 
-    let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-        .set_reference_sequence_repository(repository)
-        .build_from_path(cram_path)
-        .with_context(|| format!("failed to open CRAM for pileup: {}", cram_path))?;
-    let header = reader.read_header()?;
-
     let start_pos = crate::extract::safe_noodles_position(region_start + 1);
     let end_pos = crate::extract::safe_noodles_position(region_end);
     let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+    let (mut reader, header) =
+        crate::extract::open_cram_reader_for_region(cram_path, &repository, &region)
+            .with_context(|| format!("failed to open CRAM for pileup: {}", cram_path))?;
     let query = reader.query(&header, &region)?;
 
     for rec_result in query {
@@ -907,20 +904,17 @@ fn collect_snp_alleles_cram(
 
     let repository = crate::extract::build_fasta_repository(ref_path)?;
 
-    let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-        .set_reference_sequence_repository(repository)
-        .build_from_path(cram_path)
-        .with_context(|| {
-            format!(
-                "failed to open CRAM for SNP allele collection: {}",
-                cram_path
-            )
-        })?;
-    let header = reader.read_header()?;
-
     let start_pos = crate::extract::safe_noodles_position(region_start + 1);
     let end_pos = crate::extract::safe_noodles_position(region_end);
     let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+    let (mut reader, header) =
+        crate::extract::open_cram_reader_for_region(cram_path, &repository, &region)
+            .with_context(|| {
+                format!(
+                    "failed to open CRAM for SNP allele collection: {}",
+                    cram_path
+                )
+            })?;
     let query = reader.query(&header, &region)?;
 
     for rec_result in query {

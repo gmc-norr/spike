@@ -53,7 +53,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
-| N3 | Medium | **Not fixed** (found during the fix run). Five more CRAM query sites still walk the whole chromosome's index; the two in the LOH pileup run on every event and cost 47.3 s of the 50.4 s a CRAM run takes after M15 | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
+| N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 
 ## High severity
 
@@ -280,7 +280,7 @@ give byte-identical FASTQ (M7).
 noodles-cram 0.74 `Query::read_next_container` checks only the reference id, never position, so every container on the chromosome is decoded (`extract.rs:240-243, 314-317`).
 - 30 kb region: 0.12 s from BAM, 39.97 s from a CRAM with only 10 Mb of chr20. `samtools view`: 0.015 s.
 - **Fix:** filter index entries by position and seek manually, or upgrade noodles after checking the fix.
-- **Fixed**, and measured: the CRAM reader is now built with a `.crai` pruned to the slices whose `alignment_start`/`alignment_span` can overlap the query interval, so noodles seeks only to containers the region needs; per-record filtering is untouched. Same 30 kb window (`del:chr20:38412500-38422500`, `--seed 1`) on a 10 Mb chr20 CRAM of 338 slices: extraction 42.79 s → 0.47 s (91x), against 0.04 s from the equivalent BAM and 0.016 s for `samtools view -c`; whole run 91.0 s → 49.4 s. Output is unchanged — R1/R2 FASTQ and truth VCF are byte-identical to the slow path on four windows, including two straddling a slice boundary and the first and last slices of the file. Two notes on the entry above: the "~300x" ratio came from a 0.12 s BAM floor, and measured here the CRAM/BAM ratio was 42.79/0.040 ≈ 1070x before and ≈12x after; and the 49 s that remain are two LOH pileup queries (`loh.rs:507, 910`), which open CRAM the same way and are outside M15's scope.
+- **Fixed**, and measured: the CRAM reader is now built with a `.crai` pruned to the slices whose `alignment_start`/`alignment_span` can overlap the query interval, so noodles seeks only to containers the region needs; per-record filtering is untouched. Same 30 kb window (`del:chr20:38412500-38422500`, `--seed 1`) on a 10 Mb chr20 CRAM of 338 slices: extraction 42.79 s → 0.47 s (91x), against 0.04 s from the equivalent BAM and 0.016 s for `samtools view -c`; whole run 91.0 s → 49.4 s. Output is unchanged — R1/R2 FASTQ and truth VCF are byte-identical to the slow path on four windows, including two straddling a slice boundary and the first and last slices of the file. Two notes on the entry above: the "~300x" ratio came from a 0.12 s BAM floor, and measured here the CRAM/BAM ratio was 42.79/0.040 ≈ 1070x before and ≈12x after; and the 49 s that remain are two LOH pileup queries (`loh.rs:507, 910`), which open CRAM the same way and are outside M15's scope (tracked and fixed as N3).
 - Caveat on that equality proof: it is **single-contig only** — all 338 slices of the test CRAM are chr20. On a multi-contig CRAM the output *can* change, because pruning decodes fewer foreign containers and so leaks fewer of their reads (L2). That direction is an improvement, but it is unproven here.
 
 ### M16 · LOH pileup memory ~1 GB per Mb
@@ -394,9 +394,26 @@ far slower than BAM — survives at most of its original cost.
 
 `validate.rs:708` (`count_depth_in_region`), `validate.rs:822`
 (`split_reads_to_partner`) and `validate.rs:950` (`pileup_region`) are the same
-defect in the `spike validate` subcommand; not timed.
+defect in the `spike validate` subcommand.
 
-- **Fix:** the same index pruning, through `extract::open_cram_reader_for_region`.
+- **Fix:** the same index pruning, through `extract::open_cram_reader_for_region`
+  (made `pub(crate)`; each site builds its `Region` before opening instead of after).
+- **Fixed**, and measured on the same 10 Mb chr20 CRAM (338 slices), `--seed 1`:
+  `del:chr20:38412500-38422500` whole run **50.4 s / 50.8 s → 3.1 s / 3.6 s**
+  (16×), against a BAM floor of 1.7 s / 2.1 s that the fix leaves untouched — a
+  CRAM run is now 1.7× a BAM run, not 28×. The two LOH pileup passes go
+  **23.67 s → 0.18 s** and **23.65 s → 0.17 s**. `spike validate` on the same
+  CRAM: **97.3 s / 99.0 s → 3.6 s / 3.6 s** with a DEL truth VCF
+  (`count_depth_in_region` + `split_reads_to_partner`), **40.6 s → 3.2 s** with a
+  SNP truth VCF (`pileup_region`). Output is byte-identical everywhere: R1, R2,
+  `truth.vcf` and `replaced_reads.txt` over seven windows, six of which put a
+  query edge exactly on a slice boundary (region end = a slice's first base;
+  end = first base − 1; region start = a slice's last base; and the same on the
+  file's first and last slices), plus `spike validate`'s stdout on both truth
+  VCFs, with the two `allele_freq` pileups aimed at single bases that are
+  themselves slice starts. The 1 bp windows discriminate: shifting the event by
+  one base changes the extraction (4561 vs 4560 pairs), and both match their own
+  unpruned run.
 
 ## Low severity
 

@@ -705,15 +705,12 @@ fn count_depth_in_region(
 
     if crate::extract::is_cram(bam_path) {
         let repository = crate::extract::build_fasta_repository(ref_path)?;
-        let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(bam_path)
-            .context("failed to open CRAM for depth counting")?;
-        let header = reader.read_header()?;
-
         let start_pos = crate::extract::safe_noodles_position(start + 1);
         let end_pos = crate::extract::safe_noodles_position(end);
         let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for depth counting")?;
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {
@@ -819,15 +816,12 @@ fn split_reads_to_partner(
 
     if crate::extract::is_cram(bam_path) {
         let repository = crate::extract::build_fasta_repository(ref_path)?;
-        let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(bam_path)
-            .context("failed to open CRAM for SA tag counting")?;
-        let header = reader.read_header()?;
-
         let start_pos = crate::extract::safe_noodles_position(start + 1);
         let end_pos = crate::extract::safe_noodles_position(end);
         let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for SA tag counting")?;
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {
@@ -947,15 +941,12 @@ fn pileup_region(
 ) -> Result<()> {
     if crate::extract::is_cram(bam_path) {
         let repository = crate::extract::build_fasta_repository(ref_path)?;
-        let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(bam_path)
-            .context("failed to open CRAM for pileup")?;
-        let header = reader.read_header()?;
-
         let start_pos = crate::extract::safe_noodles_position(region_start + 1);
         let end_pos = crate::extract::safe_noodles_position(region_end);
         let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for pileup")?;
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {

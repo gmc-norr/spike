@@ -2089,4 +2089,37 @@ done"#,
         let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
         assert!(validate_event_overlaps(&events, true).is_ok());
     }
+
+    /// Every region-bounded CRAM query must go through
+    /// [`extract::open_cram_reader_for_region`], which is the only place that
+    /// prunes the `.crai` to the region's slices (M15, N3). A reader built
+    /// straight from `indexed_reader::Builder` walks every container on the
+    /// chromosome instead — and no test on the records a query returns can see
+    /// that, because the unpruned path returns exactly the same records, only
+    /// slowly. So the check is on where the readers are built.
+    #[test]
+    fn test_cram_readers_are_built_only_by_the_pruning_opener() {
+        let builder = "cram::io::indexed_reader::Builder";
+
+        for (name, src) in [
+            ("loh.rs", include_str!("loh.rs")),
+            ("validate.rs", include_str!("validate.rs")),
+        ] {
+            assert_eq!(
+                src.matches(builder).count(),
+                0,
+                "{name} builds an indexed CRAM reader itself; it must call \
+                 extract::open_cram_reader_for_region so the index is pruned"
+            );
+        }
+
+        // The opener itself builds two: one to read the header (the region's
+        // name cannot be mapped to a reference id without it) and one with the
+        // pruned index. Nothing else in extract.rs may build one.
+        assert_eq!(
+            include_str!("extract.rs").matches(builder).count(),
+            2,
+            "extract.rs builds an indexed CRAM reader outside the pruning opener"
+        );
+    }
 }

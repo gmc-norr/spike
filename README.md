@@ -250,7 +250,7 @@ spike --bam sample.cram --reference GRCh38.fasta \
 
 The `--reference` FASTA is required for CRAM decoding (it is also required for haplotype construction, so there is no extra burden). The index must be the input's name with `.crai` appended (`sample.cram` → `sample.cram.crai`, what `samtools index` writes); the `sample.crai` spelling is not looked for.
 
-Read extraction seeks only the CRAM containers that can overlap the requested region. The LOH pileup that phases heterozygous SNPs still reads every container on the chromosome, so a CRAM run stays slower than the same run from a BAM.
+Every region query on a CRAM — read extraction, the LOH pileup that phases heterozygous SNPs, and the `spike validate` checks — seeks only the containers that can overlap the requested region. noodles otherwise decodes every container on the chromosome: on a 10 Mb chr20 CRAM, a 30 kb deletion took 50.4 s and now takes 3.1 s, against 1.9 s from the equivalent BAM.
 
 ### The sample's SNPs from a gVCF
 
