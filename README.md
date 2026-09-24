@@ -312,6 +312,14 @@ spike --bam sample.bam --reference GRCh38.fasta \
 # Produces output/sim.bam (sorted and indexed)
 ```
 
+`--align` passes `--reference` straight through to the aligner as its index
+prefix, and `align.sh` does not build that index itself — it expects one
+already present at that exact path. A bgzipped `--reference` now loads for
+simulation, but `--align` still fails unless a bwa-mem2 index was built
+under that same bgzipped name (`bwa-mem2 index ref.fa.bgz`); an index built
+from a differently-named, e.g. uncompressed, copy of the reference will not
+be found.
+
 Or run the generated script manually:
 
 ```bash

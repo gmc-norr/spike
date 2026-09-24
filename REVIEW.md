@@ -469,7 +469,7 @@ the leak here.
 | --- | --- | --- | --- |
 | L1 | **Fixed.** Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
 | L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs (the same hole at `loh.rs`/`validate.rs` is tracked as N4) |
-| L3 | **Fixed.** bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" (reproduced: real 791 MB bgzipped GRCh38 loaded as a 0-byte chromosome, then `DEL event start on chr20 is at or beyond chromosome length (38412500 >= 0)`) | `reference.rs:33-35` | Used `fasta::io::indexed_reader::Builder`, which picks a bgzf- or plain-file reader by extension; a missing `.gzi` now fails at open with a message naming the `.gzi` index instead of surfacing downstream as chromosome length. **Fixed** that way: same command against the same file now loads chr20 at 61 MB and produces a truth VCF and FASTQ pair byte-identical to the run against the uncompressed FASTA. |
+| L3 | **Fixed.** bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" (reproduced: real 791 MB bgzipped GRCh38 loaded as a 0-byte chromosome, then `DEL event start on chr20 is at or beyond chromosome length (38412500 >= 0)`) | `reference.rs:33-35` | Used `fasta::io::indexed_reader::Builder`, which picks a bgzf- or plain-file reader by extension; a missing `.gzi` now fails at open with a message naming the `.gzi` index instead of surfacing downstream as chromosome length. **Fixed** that way: same command against the same file now loads chr20 at 61 MB; the truth VCF matches the run against the uncompressed FASTA apart from the `##reference=` path line (`truth.rs:75`), and the FASTQ pair's decompressed content (`zcat \| md5sum`, the correct comparison for a `.gz` pair) matches exactly. See Fix pass 1 below: the detection was extension-only and so still missed a bgzip file under a non-`.gz`/`.bgz` name. |
 | L4 | Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`) | `fastq.rs:47-48` | `r1_gz.finish()?.flush()?` |
 | L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
 | L6 | **Fixed.** BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
@@ -641,6 +641,88 @@ mate reference id is not the queried contig's.
   pass-1 guard keeps every foreign record out of those maps. Measured —
   removing only the pass-2 guard leaves the new test green; removing the pass-1
   guard, or the comparison inside `record_is_on_queried_reference`, turns it red.
+
+### L3 · bgzipped FASTA read as raw bytes
+
+**Fix pass 1** (review of `7abf5ef` itself). noodles'
+`indexed_reader::Builder::build_from_path` picks bgzf vs. raw bytes by
+**extension alone** (`.gz`/`.bgz`; `noodles-fasta-0.47.0/src/io/indexed_reader/builder.rs:58-65`).
+A bgzip-compressed FASTA under any other name — `ref.fa`, `ref.fna`,
+`ref.bgzf` — still took the raw-bytes branch and still died with the exact
+"beyond chromosome length" message L3 exists to remove; htslib/samtools sniff
+the gzip magic instead of the extension, so spike diverged from the tool that
+produced the file. Closed by peeking the file's first two bytes ourselves: if
+they are the gzip magic (`1f 8b`) and the name isn't `.gz`/`.bgz`,
+`ReferenceReader::open` now fails immediately, naming gzip-compressed content
+as the cause. **Failed, not handled**: handling it would need a `.gzi` index,
+and one built for a `.gz`/`.bgz` name almost certainly isn't sitting next to a
+file that was never given that name.
+
+- **Measured** (`reference::tests::open_bgzip_compressed_fasta_under_a_fa_extension_fails_with_clear_message`,
+  a genuinely bgzf-compressed one-contig FASTA named `ref.fa`): before, `open`
+  returns `Ok` (silently reading compressed bytes as sequence); after, `open`
+  returns `Err` naming "gzip-compressed" and never mentions "beyond
+  chromosome length". Mutation check (drop the magic-byte guard): the test's
+  `Ok(_) => panic!(...)` arm fires again; restored, passes.
+- **The `.gzi` hint in the open-failure message was unconditional** — a
+  plain FASTA whose `.fai` is readable but whose FASTA is not (permissions,
+  moved file) got the irrelevant "if this is a bgzipped FASTA..." parenthetical
+  on the one path every existing run uses. Now gated on the same
+  `.gz`/`.bgz` extension check the magic-byte guard uses, so it only appears
+  when the file is actually named as bgzipped.
+- **Test 1's fixture never exercised the `.gzi` seek itself**: it wrote
+  `gzi::Index::default()` (empty), which is only correct because that
+  fixture's whole record fits in one bgzf block — for any file with more
+  than one block, an empty index gives the *wrong* answer past the first
+  block (`gzi::Index::query` degenerates to compressed offset 0 for every
+  position). Added
+  `reference::tests::fetch_sequence_seeks_correctly_past_a_real_block_boundary`:
+  a genuine two-block bgzf fixture with a real, non-empty `.gzi`, fetching
+  non-repeating bases (`ACGTACGTAC` / `TGCATGCATG`, not the original
+  all-A/all-C style, which would hide an off-by-N seek behind a repeated
+  character) from 2 bases into the second block. Verified this actually
+  discriminates a correct seek: swapping in an empty `.gzi` (the bug an
+  empty-index fixture would hide) makes the test read `TGCATGCA` (the
+  sequential-fallback answer — landing at block 2's start instead of 2 bases
+  in) instead of the correct `CATGCATG`; restored, passes. The misleading
+  "falls back to offset 0 for any position ... exactly right here" comment on
+  the original single-block fixture is corrected to say that's true only
+  because that fixture is single-block, not a general property.
+- **Real-data, re-measured** (previous run's outputs were deleted; redone and
+  kept under `scratch/work/task-12-L3-fixpass1/`): same command as the
+  original L3 entry (`del:chr20:38412500-38422500 --seed 1` on the chr20
+  slice BAM) against the real 791,434,568-byte
+  `reference.fna.bgz` (`.bgz`, same code branch as `.gz`) — **base `8d1beba`
+  binary**: `Loaded 1 chromosome(s) into shared reference (0 MB)` then `Error:
+  DEL event start on chr20 is at or beyond chromosome length (38412500 >=
+  0)`; **this branch's binary**: `Loaded 1 chromosome(s) into shared
+  reference (61 MB)`, completes, `3570 kept + 292 chimeric, 989 suppressed`.
+  Correctness against the same command on the uncompressed FASTA: `truth.vcf`
+  identical apart from the `##reference=` line; `R1.fq.gz`/`R2.fq.gz`
+  decompressed content (`zcat | md5sum`) matches exactly
+  (`dc4c533dfa701a00e81a4b1d713a41d0`, `f666dfa764babe3cf07fd2fcbe0b359a`) —
+  in this run the raw `.gz` bytes happened to match too
+  (`8cf7964f2f02df1e289cc9c44c195ccb`, `1bd652f8ab40e4d26aeb84f64da3b0fd`),
+  which is incidental (gzip's own metadata isn't guaranteed equal run to
+  run), not the claim being tested.
+- **README now notes the `--align` caveat** — a bgzipped `--reference` loads
+  fine but `--align`/`align.sh` never runs `bwa-mem2 index`, only `bwa-mem2
+  mem` against `--reference` as the index prefix, so it fails unless an
+  index already exists under that exact bgzipped name. The finding as
+  handed to this task said "bwa-mem2 cannot use a `.bgz`/`.gz` prefix" —
+  **measured and corrected**: `bwa-mem2 index ref.fa.gz` and `bwa-mem2 mem
+  ref.fa.gz ...` both succeed against a real bgzipped FASTA when the index
+  was built under that name; the actual failure (confirmed: `bwa-mem2 mem`
+  against a `.gz` path with no index built at that exact name exits 1,
+  `ERROR! Unable to open the file: ref.fa.gz.bwt.2bit.64`) is the missing
+  index at that path, not the compression itself.
+- **The uncompressed path is provably unchanged**: built `7abf5ef` (the
+  commit immediately before this fix pass) in an isolated `git worktree` (no
+  stash, nothing uncommitted touched) and ran it against the same BAM/event
+  and the real uncompressed GRCh38 FASTA. Against this branch's binary on the
+  same inputs: `truth.vcf`, `replaced_reads.txt` and the raw `.gz` bytes of
+  both `R1.fq.gz`/`R2.fq.gz` are byte-identical, not just the decompressed
+  content.
 
 ## Uncommitted changes
 
