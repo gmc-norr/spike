@@ -463,7 +463,7 @@ ref[start-F .. start]   ref[end .. end+F]
 ```
 where `F` = flank size (default 10kb). The deleted region `[start, end)` is absent from the haplotype; the left and right flanking segments are placed adjacent.
 
-**Simulation**: Original reads within the haplotype footprint `[start-F, end+F)` are suppressed at rate `P = VAF` (scaled by overlap fraction for reads straddling the boundary). Synthetic reads are tiled uniformly across the two-segment haplotype. Reads that span the junction between left_flank and right_flank are chimeric — when re-aligned to the reference, they produce split reads and discordant pairs that span the deletion breakpoint.
+**Simulation**: Original read pairs lying entirely within the haplotype footprint `[start-F, end+F)` are suppressed at rate `P = VAF`; pairs that stick out of it are kept. Synthetic reads are tiled uniformly across the two-segment haplotype. Reads that span the junction between left_flank and right_flank are chimeric — when re-aligned to the reference, they produce split reads and discordant pairs that span the deletion breakpoint.
 
 **Observable signals in the output BAM**:
 - Reduced depth in `[start, end)` proportional to VAF (e.g., ~0.5x for het)
@@ -598,14 +598,16 @@ The suppress-and-replace model classifies each original read pair relative to th
 |---|---|
 | **Outside** (both reads entirely outside footprint) | Always kept |
 | **Inside** (both reads entirely within footprint) | Suppressed at `P = VAF` |
-| **Overlapping** (fragment straddles footprint boundary) | Suppressed at `P = VAF * overlap_fraction` |
+| **Overlapping** (fragment straddles footprint boundary) | Always kept |
 
-The overlap-fraction scaling prevents boundary depth artifacts: a read pair with 20% of its fragment inside the SV region is suppressed at 20% of the VAF rate, not the full rate.
+Only pairs entirely inside the footprint are replaced, because synthetic fragments never extend past the haplotype ends either. Near an edge, both the suppressed and the synthetic depth taper off the same way, so total depth stays flat.
+
+Every event reports the names it suppressed, and a read suppressed by any event stays out of the output, even if a nearby event's pool also contains it.
 
 For haplotype-aware events (het DEL/DUP with VAF in [0.3, 0.7]), classified reads use LOH logic instead of random suppression:
-- **LOH-set reads** (deleted/duplicated haplotype): suppressed at `P = min(1, 2*VAF) * overlap_fraction`
-- **Other-haplotype reads**: suppressed at `P = max(0, 2*VAF - 1) * overlap_fraction`
-- **Unclassified reads** (no het SNP overlap): random at `P = VAF * overlap_fraction`
+- **LOH-set reads** (deleted/duplicated haplotype): suppressed at `P = min(1, 2*VAF)`
+- **Other-haplotype reads**: suppressed at `P = max(0, 2*VAF - 1)`
+- **Unclassified reads** (no het SNP overlap): random at `P = VAF`
 
 At VAF=0.5, this suppresses all reads from one haplotype (~50% of total) and none from the other — correct LOH behavior.
 
@@ -613,12 +615,10 @@ At VAF=0.5, this suppresses all reads from one haplotype (~50% of total) and non
 
 The number of synthetic reads to tile is:
 
-```
-n_reads = round(coverage * VAF * effective_length / mean_fragment_length)
-```
+- **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
+- **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95).
 
-- **Non-additive events**: `effective_length` = reference-mapped length of the haplotype (excludes novel insertion sequence to avoid inflating coverage near insertions)
-- **Additive events** (breakpoint-only tiling): `effective_length` = `2 * mean_fragment_length * n_breakpoints` (reads are placed only in zones around breakpoints)
+`mean_fragment_length` is the library's own mean.
 
 Fragment lengths are sampled from the empirical distribution of the donor reads. Each fragment is placed at a random position on the haplotype and a read pair (R1 forward from start, R2 reverse from end) is synthesized with quality scores from the learned Markov model.
 
