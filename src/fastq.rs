@@ -100,8 +100,28 @@ pub fn write_paired_fastq(pairs: &[ReadPair], output_dir: &str) -> Result<(Strin
     // write error (e.g. a full disk) surfaces only when the `BufWriter` is
     // dropped, where `Drop::flush` errors are silently discarded — so a
     // failed write would be reported as `Ok` (L4).
-    r1_gz.finish()?.flush()?;
-    r2_gz.finish()?.flush()?;
+    //
+    // Both streams are finished and flushed unconditionally, before either
+    // error is propagated: an early `?` on R1 would leave `r2_gz` to be
+    // dropped unfinished, and `GzEncoder::drop` discards its own error the
+    // same way — reproducing the exact defect above for R2, for every run
+    // where R1 fails first.
+    let r1_result = r1_gz
+        .finish()
+        .and_then(|mut w| w.flush())
+        .with_context(|| format!("failed to finish writing {}", r1_path.display()));
+    let r2_result = r2_gz
+        .finish()
+        .and_then(|mut w| w.flush())
+        .with_context(|| format!("failed to finish writing {}", r2_path.display()));
+
+    match (r1_result, r2_result) {
+        (Ok(()), Ok(())) => {}
+        (Err(e), Ok(())) | (Ok(()), Err(e)) => return Err(e),
+        // Both failed: report both, so R1 failing first never hides that
+        // R2 also failed.
+        (Err(e1), Err(e2)) => return Err(e1.context(format!("{:#}", e2))),
+    }
 
     let r1_str = r1_path.to_string_lossy().to_string();
     let r2_str = r2_path.to_string_lossy().to_string();
@@ -204,6 +224,7 @@ mod tests {
     // --- L4: a write error on the final flush must not be silently ignored ---
 
     #[test]
+    #[cfg(unix)]
     fn test_write_paired_fastq_reports_error_writing_to_dev_full() {
         let dir = scratch_dir("devfull");
 
@@ -221,6 +242,78 @@ mod tests {
             result.is_err(),
             "writing the final FASTQ to a full disk must be reported as an \
              error, not returned as Ok"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_paired_fastq_r2_flush_error_is_attributed_to_r2() {
+        let dir = scratch_dir("r2devfull");
+
+        // Only R2 is on /dev/full; R1 is a normal file. This is the path
+        // the original L4 test never exercised: nothing previously proved
+        // R2's own `.flush()?` actually runs and is attributed to R2 (not
+        // silently reported as a bare, unattributed I/O error).
+        std::os::unix::fs::symlink("/dev/full", dir.join("R2.fq.gz")).unwrap();
+
+        let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
+
+        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+
+        let err = format!(
+            "{:#}",
+            result.expect_err("writing R2's final FASTQ to a full disk must be reported as an error")
+        );
+        assert!(
+            err.contains("R2.fq.gz"),
+            "error must name R2 as the stream that failed: {}",
+            err
+        );
+        assert!(
+            !err.contains("R1.fq.gz"),
+            "R1 succeeded and must not be blamed for R2's failure: {}",
+            err
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_paired_fastq_r1_failure_does_not_swallow_r2_failure() {
+        let dir = scratch_dir("bothdevfull");
+
+        // Both streams are on /dev/full. `r1_gz.finish()?.flush()?;` would
+        // short-circuit on R1's error before `r2_gz` is ever finished,
+        // dropping it unfinished: `GzEncoder::drop` calls `try_finish()`
+        // and discards its error, and whatever it pushes into R2's
+        // `BufWriter` then hits `BufWriter::drop`'s own swallowed flush —
+        // silently losing R2's failure even though the function still
+        // (correctly, but only by accident) returns `Err` for R1's. Both
+        // streams' errors must be computed and both must be visible in the
+        // reported error, not just R1's.
+        std::os::unix::fs::symlink("/dev/full", dir.join("R1.fq.gz")).unwrap();
+        std::os::unix::fs::symlink("/dev/full", dir.join("R2.fq.gz")).unwrap();
+
+        let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
+
+        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+
+        let err = format!(
+            "{:#}",
+            result.expect_err("writing to a full disk must be reported as an error")
+        );
+        assert!(
+            err.contains("R1.fq.gz"),
+            "error must still name R1 as one of the streams that failed: {}",
+            err
+        );
+        assert!(
+            err.contains("R2.fq.gz"),
+            "R2's failure must not be swallowed just because R1 failed first: {}",
+            err
         );
 
         std::fs::remove_dir_all(&dir).ok();

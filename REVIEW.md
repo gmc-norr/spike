@@ -51,7 +51,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M15 | Medium | **Fixed.** CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
-| L1–L19 | Low | Parsing edge cases, robustness, minor I/O (L4 **fixed**) | see [Low](#low-severity) |
+| L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) for which are fixed |
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
@@ -470,7 +470,7 @@ the leak here.
 | L1 | **Fixed.** Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
 | L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs (the same hole at `loh.rs`/`validate.rs` is tracked as N4) |
 | L3 | **Fixed.** bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" (reproduced: real 791 MB bgzipped GRCh38 loaded as a 0-byte chromosome, then `DEL event start on chr20 is at or beyond chromosome length (38412500 >= 0)`) | `reference.rs:33-35` | Used `fasta::io::indexed_reader::Builder`, which picks a bgzf- or plain-file reader by extension; a missing `.gzi` now fails at open with a message naming the `.gzi` index instead of surfacing downstream as chromosome length. **Fixed** that way: same command against the same file now loads chr20 at 61 MB; the truth VCF matches the run against the uncompressed FASTA apart from the `##reference=` path line (`truth.rs:75`), and the FASTQ pair's decompressed content (`zcat \| md5sum`, the correct comparison for a `.gz` pair) matches exactly. See Fix pass 1 below: the detection was extension-only and so still missed a bgzip file under a non-`.gz`/`.bgz` name. |
-| L4 | **Fixed.** Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`). Reproduces only when the whole gzip output is small enough to sit unflushed inside the `BufWriter`'s own buffer after `finish()` (measured: a single-pair `write_paired_fastq` call with `R1.fq.gz` symlinked to `/dev/full` returned `Ok(...)`); a realistic end-to-end run (3862-pair `del:chr20:38412500-38422500`, HG002 chr20 slice, `--seed 1`) already failed correctly before this fix too — the loop's own writes overflow that buffer first and hit `/dev/full` mid-stream, so this fix closes a narrower window than the symptom description suggests | `fastq.rs:103-104` | `r1_gz.finish()?.flush()?` — now returns `Err("No space left on device (os error 28)")` for the single-pair case above |
+| L4 | **Fixed.** Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`). Reproduces when the whole gzip output is small enough to sit unflushed inside the `BufWriter`'s own buffer after `finish()` — under 8 KiB by default (measured: a single-pair `write_paired_fastq` call with `R1.fq.gz` symlinked to `/dev/full` returned `Ok(...)`). A large event-scale run (3862-pair `del:chr20:38412500-38422500`, HG002 chr20 slice, `--seed 1`) already failed correctly before this fix, because the loop's own writes overflow that buffer first and hit `/dev/full` mid-stream — but plenty of real spike runs are small enough to stay under that buffer: a single small SNP or short DEL with low local coverage, a tight `--region`, or a demo-scale run. This fix's window tracks the buffer size, not run size in general, so it still covers those. See Fix pass 1 below | `fastq.rs:97-124` | `.finish()?.flush()` on both streams, computed unconditionally so R1 failing first can't leave `r2_gz` to be dropped unfinished and discard its own error the same way — now returns `Err("No space left on device (os error 28)")` for the single-pair case above, and names both streams when both fail |
 | L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
 | L6 | **Fixed.** BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
 | L7 | DEL/DUP/INV with no END and no SVLEN silently becomes a 1 bp event | `vcf_input.rs:130-134, 150-154, 169-173` | Error, or derive from REF length |
@@ -723,6 +723,70 @@ file that was never given that name.
   same inputs: `truth.vcf`, `replaced_reads.txt` and the raw `.gz` bytes of
   both `R1.fq.gz`/`R2.fq.gz` are byte-identical, not just the decompressed
   content.
+
+### L4 · Final FASTQ flush error ignored
+
+**Fix pass 1** (review of `b2d4820` itself). `r1_gz.finish()?.flush()?;
+r2_gz.finish()?.flush()?;` still had the same "write error discarded" defect
+this task exists to remove, just moved one level up: the `?` on R1's line
+short-circuits before R2's ever runs, so a genuine R1 failure drops `r2_gz`
+unfinished. `GzEncoder::drop` (flate2 1.1.9, `src/gz/write.rs:161-167`) calls
+`try_finish()` and discards its error, and whatever that pushes into R2's
+`BufWriter` then hits `BufWriter::drop`'s own swallowed flush — R2's error
+(if it has one) never surfaces, even though the function still (correctly,
+but only by luck of ordering) returns `Err` because R1's own error already
+propagates. Closed by computing both `finish().and_then(flush)` results
+unconditionally before propagating either, each tagged with which output
+path it came from, and combining both messages when both fail
+(`fastq.rs:97-124`).
+
+- **Measured**, two new tests, both against the real (unmocked) `/dev/full`
+  device:
+  - `fastq::tests::test_write_paired_fastq_r2_flush_error_is_attributed_to_r2`
+    (only `R2.fq.gz` symlinked): before, `Err("No space left on device (os
+    error 28)")` with no indication of which stream failed; after, the same
+    call's `Err` names `R2.fq.gz` and not `R1.fq.gz`.
+  - `fastq::tests::test_write_paired_fastq_r1_failure_does_not_swallow_r2_failure`
+    (both `R1.fq.gz` and `R2.fq.gz` symlinked): before, `Err("No space left
+    on device (os error 28)")` naming neither stream — R1's error masks
+    R2's entirely, the defect above, reproduced; after, the same call's
+    `Err` names both `R1.fq.gz` and `R2.fq.gz`.
+  Both assert on the message content rather than `is_err()` alone: a bare
+  `is_err()` check already passes against the masking code in both cases
+  (R1's own error still propagates when R1 fails, and R2's own error still
+  propagates when only R2 fails), so it would prove nothing about the
+  masking defect. Both fail for the right reason (an assertion on that
+  content, not a compile error) against `b2d4820`, then pass. Mutation
+  check: reverted the whole block to the pre-fix-pass sequential
+  `r1_gz.finish()?.flush()?; r2_gz.finish()?.flush()?;`, reran both new
+  tests — both failed on the same assertions, for the same reason, against
+  the real device; restored from a `scratch/work` backup (never
+  `git checkout --`, since the work was uncommitted), reverified green
+  (6/6 in `fastq::tests`).
+- Regression: the existing `test_write_paired_fastq_reports_error_writing_to_dev_full`
+  (R1-only) and the ordinary-path real-data run below are both unaffected.
+- **Real-data**: reproducing the masking scenario itself through the CLI
+  isn't possible, for the same reason the original L4 real-data check
+  found — a real BAM-derived run's own writes overflow the `BufWriter`
+  well before the final flush, so `/dev/full` fails loudly mid-stream
+  regardless of how many streams are symlinked to it. The narrow
+  post-`finish()` window this fix (and this fix pass) target only exists
+  at unit/small-run scale, which is exactly why the unit tests above use
+  the real device rather than a mock. Confirmed the ordinary path is
+  unaffected at event scale instead: same command as the original L4 entry
+  (`del:chr20:38412500-38422500 --seed 1`, HG002 chr20 slice, this
+  fix pass's release binary) — exit 0, 3862 pairs, `R1.fq.gz`/`R2.fq.gz`
+  both 15448 lines decompressed, matching the original L4 measurement
+  exactly.
+- **Test-gap closed**: the original L4 test only symlinked `R1.fq.gz`;
+  nothing exercised R2's own flush or the masking case, so a regression
+  that dropped R2's `.flush()?` or reintroduced the short-circuit would
+  have passed silently. Closed by the two tests above.
+- **Style**: added `#[cfg(unix)]` to all three `/dev/full` tests (the
+  original L4 test included), matching the existing convention
+  (`main.rs:753, 1271, 1710`) for code using `std::os::unix::fs`. Moot in
+  practice — the crate shells out to `samtools`, which isn't available off
+  Unix either — but now consistent.
 
 ## Uncommitted changes
 
