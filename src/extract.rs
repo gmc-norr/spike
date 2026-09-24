@@ -370,10 +370,12 @@ fn extract_read_pairs_cram(
 
 /// Build a ReadPool from extracted read pairs.
 ///
-/// Sorts pairs by ref_start.
+/// Sorts pairs by ref_start, then name. The name tie-break makes the order
+/// independent of extraction order (HashMap order), so a fixed seed gives
+/// the same output on every run.
 pub fn build_read_pool(pairs: Vec<ReadPair>, frag_dist: FragmentDist) -> ReadPool {
     let mut pairs = pairs;
-    pairs.sort_by_key(|p| p.ref_start);
+    pairs.sort_by(|a, b| a.ref_start.cmp(&b.ref_start).then_with(|| a.name.cmp(&b.name)));
 
     log::info!("Built read pool: {} pairs", pairs.len());
 
@@ -605,6 +607,34 @@ pub fn reverse_complement(seq: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_read_pool_order_does_not_depend_on_input_order() {
+        // Extraction yields pairs in HashMap order, which changes between runs.
+        // Pairs with the same start must still end up in one fixed order, or
+        // the same --seed suppresses different reads.
+        let pair = |name: &str, start: u64| ReadPair {
+            name: name.to_string(),
+            seq1: vec![],
+            qual1: vec![],
+            seq2: vec![],
+            qual2: vec![],
+            ref_start: start,
+            ref_end: start + 400,
+            insert_size: 400,
+            chrom: "chr1".to_string(),
+        };
+        let names = |input: Vec<ReadPair>| -> Vec<String> {
+            let pool = build_read_pool(input, FragmentDist::from_stats(400.0, 80.0));
+            pool.pairs.into_iter().map(|p| p.name).collect()
+        };
+
+        let run1 = names(vec![pair("b", 10), pair("a", 10), pair("c", 5)]);
+        let run2 = names(vec![pair("a", 10), pair("c", 5), pair("b", 10)]);
+
+        assert_eq!(run1, vec!["c", "a", "b"]);
+        assert_eq!(run2, vec!["c", "a", "b"]);
+    }
 
     fn partial(pos: u64, len: usize, tlen: i32) -> PartialRead {
         PartialRead {
