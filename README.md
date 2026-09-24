@@ -432,28 +432,95 @@ The truth VCF contains one record per simulated event with:
 ```
 spike --help
 
+Haplotype-based read spike-in simulator for genomic variants
+
+Usage: spike [OPTIONS] --bam <BAM> --reference <REFERENCE>
+
 Options:
-  -b, --bam <BAM>                  Input BAM/CRAM file (coordinate-sorted, indexed)
-  -r, --reference <FASTA>          Reference FASTA (with .fai index)
-  -e, --event <SPEC>               Event specification(s), can be repeated
-      --vcf <VCF>                  Input VCF file with variant records
-      --exon-bed <BED>             Exon BED file (required for gene-based events)
-      --allele-fraction <AF>       Global target allele fraction [default: 0.5]
-  -o, --output <DIR>               Output directory [default: /tmp/spike]
-      --seed <SEED>                Random seed for reproducibility [default: 42]
-  -t, --threads <N>                Threads for BAM reading [default: 4]
-      --region <chr:start-end>     Extra read extraction region, merged with
-                                   event +/- flank when the two overlap
-      --flank <BP>                 Flanking region around events, at least 2000 [default: 10000]
-      --min-mapq <MAPQ>            Minimum mapping quality [default: 20]
-      --aligner <CMD>              Aligner for align script [default: bwa-mem2]
-                                   Presets: bwa-mem2, minimap2, bowtie2, or custom
-      --samtools <PATH>            Path to samtools binary [default: samtools]
-      --align                      Run alignment after FASTQ generation
-      --indel-error-rate <RATE>    Indel error fraction [default: 0.0]
-      --gvcf <VCF>                 gVCF/VCF with the sample's SNP calls (het, hom-alt, phase)
-      --allow-overlap              Allow overlapping events (default: reject overlaps)
-      --dup-model <MODEL>          Duplication model: "full" (default) or "junction"
+  -b, --bam <BAM>
+          Input BAM file (coordinate-sorted, indexed)
+
+  -r, --reference <REFERENCE>
+          Reference FASTA (with .fai index)
+
+  -e, --event <EVENT>
+          Event specification(s). Can be repeated. Formats: --event "del:chr20:30000000-30005000"           (coordinate-based) --event "del:GENE:exon4-exon8"                  (gene-based, requires --exon-bed) --event "dup:GENE:exon4-exon8"                  (gene-based duplication) --event "inv:GENE:exon4-exon8"                  (gene-based inversion) --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion, requires --exon-bed) --event "dup:chr20:30000000-30005000" --event "inv:chr20:30000000-30005000" --event "ins:chr20:30000000:500"                (random insertion sequence) --event "ins:chr20:30000000:ACGTACGT"           (explicit insertion sequence) --event "snp:chr20:30000000:A:T"                (SNP/small variant, POS is 1-based) --event "snp:chr20:30000000:A>T"                (alternate syntax, POS is 1-based) --event "snp:chr20:30000000:ACG:A"              (small deletion, POS is 1-based) --event "snp:chr20:30000000:A:ACGT"             (small insertion, POS is 1-based) Per-event AF (appended with ;): --event "del:GENE:exon4-exon8;af=0.15" --event "fusion:GENEA:exon14:GENEB:exon2;af=het" af=<number>: exact AF, af=het: Beta(40,40)~0.5, af=hom: 1.0
+
+      --vcf <VCF>
+          Input VCF file with variant records. Supports DEL, INS, DUP, INV, BND, and standard SNP/indel records (no SVTYPE, explicit REF/ALT alleles). Can be combined with --event. At least one of --event or --vcf required
+
+      --exon-bed <EXON_BED>
+          Exon BED file. Required when using gene-based --event specs (e.g. "del:GENE:exon4-exon8")
+
+      --allele-fraction <ALLELE_FRACTION>
+          Target allele fraction (0.0-1.0)
+          
+          [default: 0.5]
+
+  -o, --output <OUTPUT>
+          Output directory
+          
+          [default: /tmp/spike]
+
+      --seed <SEED>
+          Random seed for reproducibility
+          
+          [default: 42]
+
+  -t, --threads <THREADS>
+          Number of threads for BAM reading
+          
+          [default: 4]
+
+      --region <REGION>
+          Extra read extraction region (e.g. "chr19:11080000-11140000"), on top of event ± flank -- it does not replace the event window. Use this to ensure the output BAM covers the full gene/region of interest. For an event on the same chromosome, the region and the event ± flank are merged into one query when they overlap or touch, and kept as two queries when they do not, so a distant fusion partner costs one extra event-sized window rather than every read in between. A region on another chromosome than the event is ignored for that event
+
+      --flank <FLANK>
+          Flanking region (bp) to include around events. Always defines the event window; when --region is also set, the region adds another window alongside it (see --region) rather than replacing this one
+          
+          [default: 10000]
+
+      --min-mapq <MIN_MAPQ>
+          Minimum mapping quality for donor reads
+          
+          [default: 20]
+
+      --aligner <ALIGNER>
+          Aligner for alignment script. Presets: "bwa-mem2" (default), "minimap2", "bowtie2", or a custom command that accepts <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout
+          
+          [default: bwa-mem2]
+
+      --samtools <SAMTOOLS>
+          Path to samtools binary (used for sort/index in align script)
+          
+          [default: samtools]
+
+      --align
+          Automatically run alignment after FASTQ generation
+
+      --indel-error-rate <INDEL_ERROR_RATE>
+          Indel error rate per base in synthetic reads (fraction of total error that is indel rather than substitution). Default 0.0 means substitution-only. Typical Illumina: 0.0 to 0.05
+          
+          [default: 0]
+
+      --gvcf <GVCF>
+          Optional gVCF/VCF with SNP calls for LOH simulation. When provided, het SNP positions are extracted from this file to determine which reads belong to the deleted haplotype (more accurate than the default pileup-based approach). Supports .vcf and .vcf.gz (requires bcftools in PATH for .vcf.gz)
+
+      --allow-overlap
+          Allow overlapping events on the same chromosome.
+          
+          By default, overlapping events are rejected to keep event effects independent and truth interpretation unambiguous.
+
+      --dup-model <DUP_MODEL>
+          Duplication model: "full" (default) builds a full tandem haplotype with duplicated region appearing twice, producing both junction reads and correct depth increase from a single tiling pass. "junction" uses the legacy junction-only haplotype with separate depth copies
+          
+          [default: full]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 ## Architecture

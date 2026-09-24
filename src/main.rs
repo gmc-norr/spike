@@ -94,15 +94,20 @@ struct Args {
     #[arg(short, long, default_value_t = 4)]
     threads: usize,
 
-    /// Read extraction region (e.g. "chr19:11080000-11140000").
-    /// When specified, reads are extracted from this region instead of event ± flank.
-    /// Use this to ensure the output BAM covers the full gene/region of interest.
-    /// An event on the same chromosome but outside the region is extracted from
-    /// its own window as well; the gap between them is never read.
+    /// Extra read extraction region (e.g. "chr19:11080000-11140000"), on top of
+    /// event ± flank -- it does not replace the event window. Use this to ensure
+    /// the output BAM covers the full gene/region of interest. For an event on
+    /// the same chromosome, the region and the event ± flank are merged into one
+    /// query when they overlap or touch, and kept as two queries when they do
+    /// not, so a distant fusion partner costs one extra event-sized window
+    /// rather than every read in between. A region on another chromosome than
+    /// the event is ignored for that event.
     #[arg(long)]
     region: Option<String>,
 
-    /// Flanking region (bp) to include around events (used when --region is not set).
+    /// Flanking region (bp) to include around events. Always defines the event
+    /// window; when --region is also set, the region adds another window
+    /// alongside it (see --region) rather than replacing this one.
     #[arg(long, default_value_t = 10000)]
     flank: u64,
 
@@ -1136,11 +1141,14 @@ fn event_extraction_regions(event: &SimEvent, flank: u64) -> Vec<(String, u64, u
     }
 }
 
-/// Write events.bed: one line per extraction region (event ± flank), 0-based half-open.
+/// Write events.bed: one line per event ± flank window, 0-based half-open
+/// (a fusion writes one line per breakpoint).
 ///
-/// For inspection only: documents which regions events were extracted from.
-/// merge.sh does not read this file -- it selects originals to replace by read
-/// name (replaced_reads.txt), not by region.
+/// For inspection only, and incomplete as a record of what was extracted:
+/// it never reflects --region, and when --region adds an extra window that
+/// is actually extracted (see extraction_bounds), that window is not written
+/// here either. merge.sh does not read this file -- it selects originals to
+/// replace by read name (replaced_reads.txt), not by region.
 fn write_event_bed(output_dir: &str, events: &[SimEvent], flank: u64) -> Result<()> {
     use std::io::Write as IoWrite;
     let bed_path = Path::new(output_dir).join("events.bed");

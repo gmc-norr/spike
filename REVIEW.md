@@ -42,7 +42,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
 | M8 | Medium | **Fixed.** `--region` merged with distant events | `main.rs:172-180` |
-| M9 | Medium | Fusion read pools double-counted | `main.rs:906-911`; `simulate.rs:471-503` |
+| M9 | Medium | Fusion read pools double-counted. **Half landed** as a side effect of M8 (dedup) — see note below; chromosome-blind coverage is still open. | `main.rs:906-911` (superseded, see note); `simulate.rs:471-503` (now `564-596`, see note) |
 | M10 | Medium | **Fixed.** `validate` coverage check always passes on WGS | `validate.rs:753-756` |
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
 | M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
@@ -208,6 +208,25 @@ Pairs come out of a `HashMap` in random order (`extract.rs:124`, `285`). `build_
 - Intra-chromosomal breakpoints 3 kb apart: 106 chimeric pairs vs 53 when far apart.
 - Different chromosomes with close coordinates: coverage 85 vs 45.
 - **Fix:** dedup `pairs_a ∪ pairs_b` by name; filter coverage by chromosome.
+
+**Stale note (added while fixing M8, `92ad2bd`; this entry is still not marked Fixed):**
+this entry's first bullet and first `Fix:` clause — dedup `pairs_a ∪ pairs_b` by
+name — landed in `92ad2bd`, but only as a required consequence of the M8 fix
+(merge-on-overlap makes a same-chromosome fusion query `--region` once per
+side, so the dedup was not optional there), not as separate M9 work. The
+`main.rs:906-911` concatenation this entry cites no longer exists: M8 replaced
+it with accumulate-then-`extract::dedup_pairs_by_name`, called at `main.rs:968`.
+The "Intra-chromosomal breakpoints 3 kb apart: 106 vs 53" figures above no
+longer reproduce post-`92ad2bd` — measured on M9's own scenario (an
+intra-chromosomal fusion with close breakpoints, no `--region`), the dedup
+alone took chimeric pairs 133 → 67, estimated coverage 133.0 → 66.5, and the
+donor pool 6,051 → 3,835 (task-5 report, "Overlap with M9"). **Still open:**
+the second bullet and second `Fix:` clause only. `estimate_coverage_at` is
+chromosome-blind, at `simulate.rs:564-596` as of `92ad2bd` (not `471-503` —
+the file has grown since this entry was written; verify the current range
+before citing it again). Two breakpoints at similar coordinates on *different*
+chromosomes still pool their coverage; untouched, and next in the queue. Do
+not mark this entry **Fixed** until that lands.
 
 ### M10 · `validate` coverage check always passes on WGS
 `count_depth_in_region` returns reads per bp (`validate.rs:753-756`), ~0.23 at 35x. The guard `flank_depth < 1.0` then reports "no flanking coverage" with `pass: true` (`validate.rs:454-462`).
