@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 
-use crate::types::SimEvent;
+use crate::types::{FusionJoin, SimEvent};
 
 /// Load simulation events from a VCF file.
 ///
@@ -247,14 +247,10 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     continue;
                 }
 
-                let (partner_chrom, partner_pos_1based, inverted) = parse_bnd_alt(&record.alt)
-                    .with_context(|| {
-                        format!(
-                            "failed to parse BND ALT '{}' for record {}",
-                            record.alt, record.id
-                        )
-                    })?;
-                let partner_pos = partner_pos_1based.saturating_sub(1); // 1-based → 0-based
+                // record.pos is 0-based for BND; decode_bnd takes the VCF POS.
+                let bnd = decode_bnd(&record.chrom, record.pos + 1, &record.alt).with_context(|| {
+                    format!("failed to parse BND ALT '{}' for record {}", record.alt, record.id)
+                })?;
 
                 // Mark both this record and its mate as processed.
                 if has_real_id {
@@ -272,17 +268,23 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     .unwrap_or("unknown")
                     .to_string();
 
+                let (gene_a, gene_b) = if bnd.record_is_a {
+                    (gene_a, gene_b)
+                } else {
+                    (gene_b, gene_a)
+                };
+
                 let af = extract_af(&record.info);
 
                 events.push(SimEvent::Fusion {
-                    chrom_a: record.chrom.clone(),
-                    bp_a: record.pos,
+                    chrom_a: bnd.chrom_a,
+                    bp_a: bnd.bp_a,
                     gene_a,
-                    chrom_b: partner_chrom,
-                    bp_b: partner_pos,
+                    chrom_b: bnd.chrom_b,
+                    bp_b: bnd.bp_b,
                     gene_b,
                     allele_fraction: af,
-                    inverted,
+                    join: bnd.join,
                 });
             }
         }
@@ -291,42 +293,70 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     Ok(events)
 }
 
-/// Parse BND ALT allele to extract partner chromosome, position, and orientation.
+/// A BND record decoded into fusion coordinates (see [`FusionJoin`] for
+/// what `bp_a`, `bp_b` and `join` mean).
+#[derive(Debug, PartialEq)]
+struct BndFusion {
+    chrom_a: String,
+    bp_a: u64,
+    chrom_b: String,
+    bp_b: u64,
+    join: FusionJoin,
+    /// False when the record's own side became gene B.
+    record_is_a: bool,
+}
+
+/// Decode a BND record at `chrom`:`pos` (1-based VCF POS) with ALT `alt`.
 ///
-/// Handles all four VCF 4.3 BND orientations:
-///   N[chr:pos[   — forward join (partner on + strand)
-///   ]chr:pos]N   — forward join (reciprocal)
-///   N]chr:pos]   — inverted join (partner on - strand)
-///   [chr:pos[N   — inverted join (reciprocal)
-///
-/// Returns `(chrom, pos, inverted)`.
-fn parse_bnd_alt(alt: &str) -> Result<(String, u64, bool)> {
-    let open = alt.find('[').or_else(|| alt.find(']'));
-    let close = alt.rfind('[').or_else(|| alt.rfind(']'));
+/// The four VCF BND forms, with `t` the record's base and `p` the partner:
+///   `t[p[` — t, then the partner from p rightwards          → Forward
+///   `]p]t` — the partner up to p, then t rightwards          → Forward (record is B)
+///   `t]p]` — t, then the partner up to p, reverse-complemented → LeftLeft
+///   `[p[t` — the partner from p rightwards, reverse-complemented, then t
+///            rightwards; the same molecule as the record's right side
+///            reversed followed by the partner's right side     → RightRight
+fn decode_bnd(chrom: &str, pos: u64, alt: &str) -> Result<BndFusion> {
+    let bracket = alt
+        .chars()
+        .find(|c| *c == '[' || *c == ']')
+        .ok_or_else(|| anyhow::anyhow!("no bracket in BND ALT '{}'", alt))?;
+    let open = alt.find(bracket).unwrap();
+    let close = alt.rfind(bracket).unwrap();
+    if open == close {
+        bail!("no bracket pair found in BND ALT '{}'", alt);
+    }
 
-    let (open_idx, close_idx) = match (open, close) {
-        (Some(o), Some(c)) if o != c => (o, c),
-        _ => bail!("no bracket pair found in BND ALT '{}'", alt),
-    };
-
-    let inner = &alt[open_idx + 1..close_idx];
-
-    let (chrom, pos_str) = inner
-        .split_once(':')
+    let (partner_chrom, partner_pos) = alt[open + 1..close]
+        .rsplit_once(':')
         .ok_or_else(|| anyhow::anyhow!("no chr:pos found in BND ALT '{}'", alt))?;
-
-    let pos: u64 = pos_str
+    let partner_pos: u64 = partner_pos
         .parse()
-        .with_context(|| format!("invalid position in BND ALT '{}': '{}'", alt, pos_str))?;
+        .with_context(|| format!("invalid position in BND ALT '{}'", alt))?;
+    if partner_pos == 0 || pos == 0 {
+        bail!("BND positions must be >= 1 in '{}'", alt);
+    }
 
-    // Detect orientation from bracket characters:
-    //   `[` brackets → forward join (partner + strand)
-    //   `]` brackets → inverted join (partner - strand)
-    let open_char = alt.as_bytes()[open_idx];
-    let close_char = alt.as_bytes()[close_idx];
-    let inverted = open_char == b']' && close_char == b']';
-
-    Ok((chrom.to_string(), pos, inverted))
+    // A cut between 0-based bases bp-1 and bp. The 1-based base x is 0-based
+    // x-1, so keeping it as the last base of a left side means bp = x, and
+    // keeping it as the first base of a right side means bp = x - 1.
+    let (record, partner) = (chrom.to_string(), partner_chrom.to_string());
+    let t_first = open > 0;
+    let decoded = match (t_first, bracket) {
+        (true, '[') => (record, pos, partner, partner_pos - 1, FusionJoin::Forward, true),
+        (false, ']') => (partner, partner_pos, record, pos - 1, FusionJoin::Forward, false),
+        (true, ']') => (record, pos, partner, partner_pos, FusionJoin::LeftLeft, true),
+        (false, '[') => (record, pos - 1, partner, partner_pos - 1, FusionJoin::RightRight, true),
+        _ => unreachable!("bracket is '[' or ']'"),
+    };
+    let (chrom_a, bp_a, chrom_b, bp_b, join, record_is_a) = decoded;
+    Ok(BndFusion {
+        chrom_a,
+        bp_a,
+        chrom_b,
+        bp_b,
+        join,
+        record_is_a,
+    })
 }
 
 /// Extract allele fraction from INFO field.
@@ -381,36 +411,92 @@ fn is_dna_allele(allele: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_bnd_alt_n_bracket_open() {
-        let (chrom, pos, inv) = parse_bnd_alt("N[chr9:130854070[").unwrap();
-        assert_eq!(chrom, "chr9");
-        assert_eq!(pos, 130854070);
-        assert!(!inv, "N[chr:pos[ should be forward");
+    /// Decode one ALT form for a record at chr1 POS 100, partner chr2:200.
+    fn decode(alt: &str) -> BndFusion {
+        decode_bnd("chr1", 100, alt).unwrap()
+    }
+
+    fn bnd(a: &str, bp_a: u64, b: &str, bp_b: u64, join: FusionJoin, record_is_a: bool) -> BndFusion {
+        BndFusion {
+            chrom_a: a.to_string(),
+            bp_a,
+            chrom_b: b.to_string(),
+            bp_b,
+            join,
+            record_is_a,
+        }
     }
 
     #[test]
-    fn test_parse_bnd_alt_bracket_close_n() {
-        let (chrom, pos, inv) = parse_bnd_alt("]chr22:23285370]N").unwrap();
-        assert_eq!(chrom, "chr22");
-        assert_eq!(pos, 23285370);
-        assert!(inv, "]chr:pos]N should be inverted");
+    fn test_decode_bnd_t_open_p_open() {
+        // t[p[: chr1 up to and including base 100 (cut after it), then chr2
+        // from base 200 on (cut before it: 0-based 199).
+        assert_eq!(
+            decode("N[chr2:200["),
+            bnd("chr1", 100, "chr2", 199, FusionJoin::Forward, true)
+        );
     }
 
     #[test]
-    fn test_parse_bnd_alt_n_bracket_close() {
-        let (chrom, pos, inv) = parse_bnd_alt("N]chr9:130854070]").unwrap();
-        assert_eq!(chrom, "chr9");
-        assert_eq!(pos, 130854070);
-        assert!(inv, "N]chr:pos] should be inverted");
+    fn test_decode_bnd_close_p_close_t() {
+        // ]p]t: chr2 up to and including base 200, then chr1 from base 100 on.
+        assert_eq!(
+            decode("]chr2:200]N"),
+            bnd("chr2", 200, "chr1", 99, FusionJoin::Forward, false)
+        );
     }
 
     #[test]
-    fn test_parse_bnd_alt_bracket_open_n() {
-        let (chrom, pos, inv) = parse_bnd_alt("[chr22:23285370[N").unwrap();
-        assert_eq!(chrom, "chr22");
-        assert_eq!(pos, 23285370);
-        assert!(!inv, "[chr:pos[N should be forward");
+    fn test_decode_bnd_t_close_p_close() {
+        // t]p]: chr1 up to base 100, then chr2 up to base 200, reversed.
+        assert_eq!(
+            decode("N]chr2:200]"),
+            bnd("chr1", 100, "chr2", 200, FusionJoin::LeftLeft, true)
+        );
+    }
+
+    #[test]
+    fn test_decode_bnd_open_p_open_t() {
+        // [p[t: chr2 from base 200 on, reversed, then chr1 from base 100 on.
+        // Same molecule as chr1-right reversed + chr2-right.
+        assert_eq!(
+            decode("[chr2:200[N"),
+            bnd("chr1", 99, "chr2", 199, FusionJoin::RightRight, true)
+        );
+    }
+
+    #[test]
+    fn test_decode_bnd_mates_give_the_same_forward_fusion() {
+        let a = decode_bnd("chr1", 100, "N[chr2:200[").unwrap();
+        let b = decode_bnd("chr2", 200, "]chr1:100]N").unwrap();
+        assert_eq!((a.chrom_a, a.bp_a, a.chrom_b, a.bp_b), (b.chrom_a, b.bp_a, b.chrom_b, b.bp_b));
+    }
+
+    #[test]
+    fn test_truth_bnd_records_decode_to_the_written_fusion() {
+        // Each record of a pair written by truth.rs must read back as the same
+        // molecule. Symmetric joins may come back with A and B swapped.
+        let cases = [
+            (100, 199, FusionJoin::Forward),
+            (100, 200, FusionJoin::LeftLeft),
+            (99, 199, FusionJoin::RightRight),
+        ];
+        for (bp_a, bp_b, join) in cases {
+            let written = ("chr1".to_string(), bp_a, "chr2".to_string(), bp_b);
+            let swapped = ("chr2".to_string(), bp_b, "chr1".to_string(), bp_a);
+            let [(pos_a, alt_a), (pos_b, alt_b)] =
+                crate::truth::bnd_records("chr1", bp_a, "chr2", bp_b, join);
+            for (chrom, pos, alt) in [("chr1", pos_a, alt_a), ("chr2", pos_b, alt_b)] {
+                let d = decode_bnd(chrom, pos, &alt).unwrap();
+                let got = (d.chrom_a, d.bp_a, d.chrom_b, d.bp_b);
+                assert_eq!(d.join, join, "{:?}: {} {} {}", join, chrom, pos, alt);
+                assert!(
+                    got == written || (join != FusionJoin::Forward && got == swapped),
+                    "{:?}: {} {} {} decoded to {:?}",
+                    join, chrom, pos, alt, got
+                );
+            }
+        }
     }
 
     #[test]
@@ -578,7 +664,7 @@ mod tests {
             _ => panic!("expected Duplication"),
         }
 
-        // BND: POS=100 (1-based breakpoint) → 0-based bp = 99
+        // BND: t[p[ at POS=100 keeps base 100 of chr1, then chr2 from base 200
         let vcf = "chr1\t100\ttest_bnd\tN\tN[chr2:200[\t.\t.\tSVTYPE=BND\n";
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
@@ -586,12 +672,12 @@ mod tests {
             SimEvent::Fusion {
                 bp_a,
                 bp_b,
-                inverted,
+                join,
                 ..
             } => {
-                assert_eq!(*bp_a, 99); // POS 100 → 0-based 99
+                assert_eq!(*bp_a, 100); // t[p[ keeps base 100: cut after it
                 assert_eq!(*bp_b, 199); // ALT pos 200 → 0-based 199
-                assert!(!inverted, "N[chr:pos[ should be forward");
+                assert_eq!(*join, FusionJoin::Forward, "N[chr:pos[ should be forward");
             }
             _ => panic!("expected Fusion"),
         }

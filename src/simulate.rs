@@ -551,6 +551,7 @@ fn estimate_coverage_at(pool: &ReadPool, pos: u64, window: u64) -> f64 {
 mod tests {
     use super::*;
     use crate::haplotype::{HaplotypeSegment, SegmentOrigin};
+    use crate::types::FusionJoin;
     use crate::stats::FragmentDist;
 
     fn make_pair(name: &str, start: u64, end: u64) -> ReadPair {
@@ -1511,7 +1512,7 @@ mod tests {
             chrom_b: "chr1".to_string(),
             bp_b: 20000,
             gene_b: "GENE_B".to_string(),
-            inverted: false,
+            join: FusionJoin::Forward,
             allele_fraction: Some(0.05),
         };
 

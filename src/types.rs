@@ -1,5 +1,22 @@
 //! Core types for spike.
 
+/// How the two sides of a fusion are joined.
+///
+/// Each breakpoint `bp` is a cut between 0-based bases `bp - 1` and `bp`.
+/// The join says which side of each cut is kept, and which piece is
+/// reverse-complemented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionJoin {
+    /// A left of `bp_a`, then B right of `bp_b` (same strand). BND `t[p[`.
+    Forward,
+    /// A left of `bp_a`, then the reverse complement of B left of `bp_b`.
+    /// BND `t]p]`.
+    LeftLeft,
+    /// The reverse complement of A right of `bp_a`, then B right of `bp_b`.
+    /// BND `[p[t`.
+    RightRight,
+}
+
 /// A simulated event specification.
 #[derive(Debug, Clone)]
 pub enum SimEvent {
@@ -15,13 +32,13 @@ pub enum SimEvent {
     /// Gene fusion: two breakpoints on potentially different chromosomes joined.
     Fusion {
         chrom_a: String,
-        bp_a: u64, // 0-based breakpoint in gene A (first base NOT included)
+        bp_a: u64, // cut in gene A, between 0-based bases bp_a-1 and bp_a
         gene_a: String,
         chrom_b: String,
-        bp_b: u64, // 0-based breakpoint in gene B (first base included on right side)
+        bp_b: u64, // cut in gene B; `join` says which side of each cut is kept
         gene_b: String,
         allele_fraction: Option<f64>, // per-event AF override (None = use global)
-        inverted: bool,               // true for reverse-complement join at gene B
+        join: FusionJoin,
     },
     /// Tandem duplication: region is duplicated in place.
     Duplication {

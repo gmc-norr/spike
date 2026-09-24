@@ -10,6 +10,7 @@ use anyhow::Result;
 
 use crate::extract::reverse_complement;
 use crate::reference::SharedReference;
+use crate::types::FusionJoin;
 
 /// Origin of a haplotype segment in the reference genome.
 #[derive(Debug, Clone)]
@@ -319,8 +320,10 @@ impl VariantHaplotype {
 
     /// Build a fusion haplotype.
     ///
-    /// Normal: `ref_A[bp_a-flank..bp_a] | ref_B[bp_b..bp_b+flank]`
-    /// Inverted: `ref_A[bp_a-flank..bp_a] | revcomp(ref_B[bp_b..bp_b+flank])`
+    /// `bp_a` and `bp_b` are cuts between 0-based bases `bp - 1` and `bp`:
+    /// - Forward:    `ref_A[bp_a-flank..bp_a] | ref_B[bp_b..bp_b+flank]`
+    /// - LeftLeft:   `ref_A[bp_a-flank..bp_a] | revcomp(ref_B[bp_b-flank..bp_b])`
+    /// - RightRight: `revcomp(ref_A[bp_a..bp_a+flank]) | ref_B[bp_b..bp_b+flank]`
     pub fn from_fusion(
         reference: &SharedReference,
         chrom_a: &str,
@@ -328,40 +331,46 @@ impl VariantHaplotype {
         chrom_b: &str,
         bp_b: u64,
         flank: u64,
-        inverted: bool,
+        join: FusionJoin,
     ) -> Result<Self> {
-        let left_start = bp_a.saturating_sub(flank);
-        let right_end = bp_b.saturating_add(flank);
-
-        let left_seq = fetch_upper(reference, chrom_a, left_start, bp_a)?;
-        let mut right_seq = fetch_upper(reference, chrom_b, bp_b, right_end)?;
-
-        if inverted {
-            reverse_complement(&mut right_seq);
-        }
-
-        Ok(Self::from_segments(vec![
-            HaplotypeSegment {
-                sequence: left_seq,
+        // One piece of each gene: the side of its cut that the join keeps.
+        let piece = |chrom: &str, bp: u64, keep_left: bool, reverse: bool| -> Result<_> {
+            let (start, end) = if keep_left {
+                (bp.saturating_sub(flank), bp)
+            } else {
+                (bp, bp.saturating_add(flank))
+            };
+            let mut sequence = fetch_upper(reference, chrom, start, end)?;
+            if reverse {
+                reverse_complement(&mut sequence);
+            }
+            Ok(HaplotypeSegment {
+                sequence,
                 origin: Some(SegmentOrigin {
-                    chrom: chrom_a.to_string(),
-                    ref_start: left_start,
-                    ref_end: bp_a,
-                    is_reverse: false,
+                    chrom: chrom.to_string(),
+                    ref_start: start,
+                    ref_end: end,
+                    is_reverse: reverse,
                 }),
                 hap_offset: 0,
-            },
-            HaplotypeSegment {
-                sequence: right_seq,
-                origin: Some(SegmentOrigin {
-                    chrom: chrom_b.to_string(),
-                    ref_start: bp_b,
-                    ref_end: right_end,
-                    is_reverse: inverted,
-                }),
-                hap_offset: 0,
-            },
-        ]))
+            })
+        };
+
+        let segments = match join {
+            FusionJoin::Forward => vec![
+                piece(chrom_a, bp_a, true, false)?,
+                piece(chrom_b, bp_b, false, false)?,
+            ],
+            FusionJoin::LeftLeft => vec![
+                piece(chrom_a, bp_a, true, false)?,
+                piece(chrom_b, bp_b, true, true)?,
+            ],
+            FusionJoin::RightRight => vec![
+                piece(chrom_a, bp_a, false, true)?,
+                piece(chrom_b, bp_b, false, false)?,
+            ],
+        };
+        Ok(Self::from_segments(segments))
     }
 
     /// Build a small variant haplotype (SNP, MNV, or small indel).
@@ -1209,5 +1218,61 @@ mod tests {
         let start_copy2 = hap.get_sequence(1500, 10);
         let expected_start: Vec<u8> = (1000u64..1010).map(|i| pattern[(i % 4) as usize]).collect();
         assert_eq!(start_copy2, &expected_start[..]);
+    }
+
+    // ---------------------------------------------------------------
+    // from_fusion geometry, built from a real (in-memory) reference
+    // ---------------------------------------------------------------
+
+    /// chrA and chrB are distinct, non-palindromic 16 bp sequences.
+    fn fusion_ref() -> SharedReference {
+        let mut seqs = std::collections::HashMap::new();
+        seqs.insert("chrA".to_string(), b"TTTTAAAACAGGTTTT".to_vec());
+        seqs.insert("chrB".to_string(), b"GATTACACATGGCCAT".to_vec());
+        SharedReference::from_sequences(seqs)
+    }
+
+    fn ref_pos(hap: &VariantHaplotype, hap_pos: u64) -> (String, u64) {
+        hap.hap_to_ref(hap_pos).unwrap()
+    }
+
+    #[test]
+    fn test_fusion_forward_joins_a_left_to_b_right() {
+        // A[4..8) = AAAA, then B[8..12) = ATGG.
+        let hap = VariantHaplotype::from_fusion(
+            &fusion_ref(), "chrA", 8, "chrB", 8, 4, FusionJoin::Forward,
+        )
+        .unwrap();
+        assert_eq!(hap.sequence, b"AAAAATGG");
+        assert_eq!(ref_pos(&hap, 3), ("chrA".to_string(), 7));
+        assert_eq!(ref_pos(&hap, 4), ("chrB".to_string(), 8));
+    }
+
+    #[test]
+    fn test_fusion_left_left_joins_a_left_to_revcomp_of_b_left() {
+        // A[4..8) = AAAA, then revcomp(B[4..8) = ACAC) = GTGT.
+        // The base right after the junction is B's base just left of the cut.
+        let hap = VariantHaplotype::from_fusion(
+            &fusion_ref(), "chrA", 8, "chrB", 8, 4, FusionJoin::LeftLeft,
+        )
+        .unwrap();
+        assert_eq!(hap.sequence, b"AAAAGTGT");
+        assert_eq!(ref_pos(&hap, 3), ("chrA".to_string(), 7));
+        assert_eq!(ref_pos(&hap, 4), ("chrB".to_string(), 7));
+        assert_eq!(ref_pos(&hap, 7), ("chrB".to_string(), 4));
+    }
+
+    #[test]
+    fn test_fusion_right_right_joins_revcomp_of_a_right_to_b_right() {
+        // revcomp(A[8..12) = CAGG) = CCTG, then B[8..12) = ATGG.
+        // The base right before the junction is A's base just right of the cut.
+        let hap = VariantHaplotype::from_fusion(
+            &fusion_ref(), "chrA", 8, "chrB", 8, 4, FusionJoin::RightRight,
+        )
+        .unwrap();
+        assert_eq!(hap.sequence, b"CCTGATGG");
+        assert_eq!(ref_pos(&hap, 0), ("chrA".to_string(), 11));
+        assert_eq!(ref_pos(&hap, 3), ("chrA".to_string(), 8));
+        assert_eq!(ref_pos(&hap, 4), ("chrB".to_string(), 8));
     }
 }

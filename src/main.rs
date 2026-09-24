@@ -28,7 +28,7 @@ use std::path::Path;
 
 use exon::AfSpec;
 use haplotype::VariantHaplotype;
-use types::{ReadPool, SimConfig, SimEvent};
+use types::{FusionJoin, ReadPool, SimConfig, SimEvent};
 
 #[derive(Parser)]
 #[command(
@@ -52,7 +52,6 @@ struct Args {
     ///   --event "dup:GENE:exon4-exon8"                  (gene-based duplication)
     ///   --event "inv:GENE:exon4-exon8"                  (gene-based inversion)
     ///   --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion, requires --exon-bed)
-    ///   --event "fusion:GENEA:exon14:GENEB:exon2:inv"   (inverted fusion)
     ///   --event "dup:chr20:30000000-30005000"
     ///   --event "inv:chr20:30000000-30005000"
     ///   --event "ins:chr20:30000000:500"                (random insertion sequence)
@@ -955,10 +954,10 @@ fn build_haplotype(
             bp_a,
             chrom_b,
             bp_b,
-            inverted,
+            join,
             ..
         } => VariantHaplotype::from_fusion(
-            reference, chrom_a, *bp_a, chrom_b, *bp_b, flank, *inverted,
+            reference, chrom_a, *bp_a, chrom_b, *bp_b, flank, *join,
         ),
         SimEvent::SmallVariant {
             chrom,
@@ -1188,7 +1187,7 @@ fn event_label(event: &SimEvent) -> String {
             bp_a,
             chrom_b,
             bp_b,
-            inverted,
+            join,
             ..
         } => format!(
             "FUSION  {}:{}>>{}:{}{}",
@@ -1196,7 +1195,11 @@ fn event_label(event: &SimEvent) -> String {
             bp_a + 1,
             chrom_b,
             bp_b + 1,
-            if *inverted { " (inv)" } else { "" }
+            match join {
+                FusionJoin::Forward => "",
+                FusionJoin::LeftLeft => " (left-left, B reversed)",
+                FusionJoin::RightRight => " (right-right, A reversed)",
+            }
         ),
     }
 }
@@ -1361,7 +1364,7 @@ mod tests {
             bp_b,
             gene_b: "B".to_string(),
             allele_fraction: None,
-            inverted: false,
+            join: FusionJoin::Forward,
         }
     }
 

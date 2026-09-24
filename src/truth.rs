@@ -7,7 +7,39 @@
 use anyhow::{Context, Result};
 use std::io::Write;
 
-use crate::types::SimEvent;
+use crate::types::{FusionJoin, SimEvent};
+
+/// POS and ALT of the two BND records of a fusion: gene A's record, then
+/// gene B's (mate) record.
+pub(crate) fn bnd_records(
+    chrom_a: &str,
+    bp_a: u64,
+    chrom_b: &str,
+    bp_b: u64,
+    join: FusionJoin,
+) -> [(u64, String); 2] {
+    // POS is the 1-based base next to the junction on each side. For a cut
+    // `bp` (between 0-based bases bp-1 and bp) that is the last kept base, bp,
+    // when the left side is kept, and the first kept base, bp+1, when the
+    // right side is kept.
+    match join {
+        // A-left then B-right: t[p[ on A, ]p]t on B.
+        FusionJoin::Forward => [
+            (bp_a, format!("N[{}:{}[", chrom_b, bp_b + 1)),
+            (bp_b + 1, format!("]{}:{}]N", chrom_a, bp_a)),
+        ],
+        // A-left then B-left reversed: t]p] on both.
+        FusionJoin::LeftLeft => [
+            (bp_a, format!("N]{}:{}]", chrom_b, bp_b)),
+            (bp_b, format!("N]{}:{}]", chrom_a, bp_a)),
+        ],
+        // A-right reversed then B-right: [p[t on both.
+        FusionJoin::RightRight => [
+            (bp_a + 1, format!("[{}:{}[N", chrom_b, bp_b + 1)),
+            (bp_b + 1, format!("[{}:{}[N", chrom_a, bp_a + 1)),
+        ],
+    }
+}
 
 /// Write a truth VCF describing the simulated events.
 ///
@@ -110,41 +142,24 @@ pub fn write_truth_vcf(
                 chrom_b,
                 bp_b,
                 gene_b,
-                inverted,
+                join,
                 ..
             } => {
                 let id_a = format!("sim_fus_{}", i + 1);
                 let id_b = format!("sim_fus_{}_mate", i + 1);
 
-                // BND POS is 1-based breakpoint position (unlike DEL/DUP/INV/INS
-                // where POS is 1-based preceding base == 0-based start).
-                let bp_a_1based = bp_a + 1;
-                let bp_b_1based = bp_b + 1;
-
-                // BND bracket notation encodes orientation:
-                //   Forward:  N[chr:pos[  and  ]chr:pos]N
-                //   Inverted: N]chr:pos]  and  [chr:pos[N
-                let (alt_a, alt_b) = if *inverted {
-                    (
-                        format!("N]{}:{}]", chrom_b, bp_b_1based),
-                        format!("[{}:{}[N", chrom_a, bp_a_1based),
-                    )
-                } else {
-                    (
-                        format!("N[{}:{}[", chrom_b, bp_b_1based),
-                        format!("]{}:{}]N", chrom_a, bp_a_1based),
-                    )
-                };
+                let [(pos_a, alt_a), (pos_b, alt_b)] =
+                    bnd_records(chrom_a, *bp_a, chrom_b, *bp_b, *join);
                 writeln!(
                     f,
                     "{}\t{}\t{}\tN\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
-                    chrom_a, bp_a_1based, id_a, alt_a, id_b, event_af, gene_a, gt,
+                    chrom_a, pos_a, id_a, alt_a, id_b, event_af, gene_a, gt,
                 )?;
 
                 writeln!(
                     f,
                     "{}\t{}\t{}\tN\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
-                    chrom_b, bp_b_1based, id_b, alt_b, id_a, event_af, gene_b, gt,
+                    chrom_b, pos_b, id_b, alt_b, id_a, event_af, gene_b, gt,
                 )?;
             }
             SimEvent::Duplication {
@@ -278,4 +293,40 @@ fn chrono_date() -> String {
     }
 
     format!("{}{:02}{:02}", year, month + 1, days + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn records(bp_a: u64, bp_b: u64, join: FusionJoin) -> [(u64, String); 2] {
+        bnd_records("chr1", bp_a, "chr2", bp_b, join)
+    }
+
+    #[test]
+    fn test_bnd_records_forward() {
+        // chr1 up to and including base 100, then chr2 from base 200.
+        assert_eq!(
+            records(100, 199, FusionJoin::Forward),
+            [(100, "N[chr2:200[".to_string()), (200, "]chr1:100]N".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_bnd_records_left_left() {
+        // chr1 up to base 100, then chr2 up to base 200, reversed.
+        assert_eq!(
+            records(100, 200, FusionJoin::LeftLeft),
+            [(100, "N]chr2:200]".to_string()), (200, "N]chr1:100]".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_bnd_records_right_right() {
+        // chr1 from base 100, reversed, then chr2 from base 200.
+        assert_eq!(
+            records(99, 199, FusionJoin::RightRight),
+            [(100, "[chr2:200[N".to_string()), (200, "[chr1:100[N".to_string())]
+        );
+    }
 }

@@ -43,8 +43,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 | Duplication | `dup:chr:start-end` or `dup:GENE:exon4-exon8` | DUP | Tandem duplication in place |
 | Inversion | `inv:chr:start-end` or `inv:GENE:exon4-exon8` | INV | Region reversed in place |
 | Insertion | `ins:chr:pos:length` or `ins:chr:pos:ACGT` | INS | Novel sequence inserted at position |
-| Fusion | `fusion:GENEA:exonN:GENEB:exonM` | BND | Two breakpoints joined across genes/chromosomes |
-| Inverted Fusion | `fusion:GENEA:exonN:GENEB:exonM:inv` | BND | Fusion with reverse-complement join |
+| Fusion | `fusion:GENEA:exonN:GENEB:exonM` | BND | Two breakpoints joined across genes/chromosomes; orientation follows the gene strands |
 | SNP/Indel | `snp:chr:pos:REF:ALT` | Standard REF/ALT | SNPs, MNVs, small insertions/deletions |
 
 All types support per-event allele fraction control.
@@ -143,13 +142,19 @@ Exon numbers are read from the names (`TP53_exon1` → exon 1), so they follow t
 
 ### Gene fusions
 
-Fusions join two breakpoints, potentially across different chromosomes. Exon-based fusions work when both genes are on the same strand. Fusions of genes on opposite strands (e.g. EML4-ALK) are rejected for now, because the inverted join is not yet built correctly. The `:inv` suffix (reverse-complement join at gene B) is only accepted for two plus-strand genes:
+Fusions join two breakpoints, potentially across different chromosomes. Gene A keeps exon N and everything upstream; gene B keeps exon M and everything downstream. The join orientation follows the gene strands from the exon BED, so genes on opposite strands (e.g. EML4-ALK) get a reverse-complement join automatically. The old `:inv` suffix is no longer accepted:
 
 ```bash
 # BCR-ABL1 fusion (forward)
 spike --bam sample.bam --reference GRCh38.fasta \
   --exon-bed gene_exons.bed \
   --event "fusion:BCR:exon14:ABL1:exon2" \
+  -o output/
+
+# EML4-ALK (genes on opposite strands)
+spike --bam sample.bam --reference GRCh38.fasta \
+  --exon-bed gene_exons.bed \
+  --event "fusion:EML4:exon13:ALK:exon20" \
   -o output/
 
 # Fusion at low somatic VAF
@@ -226,7 +231,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 Supported VCF records:
 - **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN
-- **BND** — breakend notation, paired by MATEID into Fusion events (detects inverted orientation from bracket pattern)
+- **BND** — breakend notation, paired by MATEID into Fusion events. All four forms are read (`t[p[`, `]p]t`, `t]p]`, `[p[t`); either record of a mate pair gives the same fusion
 - **SNP/indel** — standard REF/ALT records without SVTYPE
 - **AF from INFO** — reads `SIM_VAF`, `VAF`, or `AF` fields (checked in that order)
 
@@ -549,12 +554,13 @@ The inserted sequence is either user-specified or randomly generated. It has no 
 
 ### Gene fusion (BND)
 
-**Haplotype structure** (2 segments):
+**Haplotype structure** (2 segments; `bpA`, `bpB` are cuts between two bases):
 ```
-Normal:   ref_A[bpA-F .. bpA]  |  ref_B[bpB .. bpB+F]
-Inverted: ref_A[bpA-F .. bpA]  |  revcomp(ref_B[bpB .. bpB+F])
+Forward     (t[p[):  ref_A[bpA-F .. bpA]           |  ref_B[bpB .. bpB+F]
+Left-left   (t]p]):  ref_A[bpA-F .. bpA]           |  revcomp(ref_B[bpB-F .. bpB])
+Right-right ([p[t):  revcomp(ref_A[bpA .. bpA+F])  |  ref_B[bpB .. bpB+F]
 ```
-Two breakpoints on potentially different chromosomes are joined. For inverted fusions, the gene B side is reverse-complemented before joining.
+Two breakpoints on potentially different chromosomes are joined. Left-left and right-right are the two junctions of an inversion-type rearrangement; each keeps the side of both cuts named, with one piece reverse-complemented. The truth VCF writes the matching BND form for each, with POS on the base next to the junction.
 
 **Simulation**: Fusions are additive — all original reads are kept. Synthetic reads are tiled near the breakpoint (breakpoint-only mode) so that they cross the junction. This avoids inflating coverage in the flanking regions where real reads already provide normal depth.
 

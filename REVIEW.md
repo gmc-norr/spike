@@ -27,9 +27,9 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | ID | Severity | Problem | Where |
 | --- | --- | --- | --- |
 | H1 | High | **Fixed.** Nearby events undo each other's read suppression | `main.rs:431-437`, `main.rs:517-530` |
-| H2 | High | **Fixed** (opposite-strand fusions now rejected until H4). Exon numbers ignore strand | `exon.rs:99-103` |
-| H3 | High | BND orientation misread from VCF input | `vcf_input.rs:325-327` |
-| H4 | High | Inverted fusion simulated ~flank bp from truth position | `haplotype.rs:337-341`, `truth.rs:127-131` |
+| H2 | High | **Fixed.** Exon numbers ignore strand | `exon.rs:99-103` |
+| H3 | High | **Fixed.** BND orientation misread from VCF input | `vcf_input.rs:325-327` |
+| H4 | High | **Fixed.** Inverted fusion simulated ~flank bp from truth position | `haplotype.rs:337-341`, `truth.rs:127-131` |
 | H5 | High | Fusion / junction-DUP get 2× junction reads | `simulate.rs:337-341` |
 | H6 | High | LOH allele chosen at random per SNP | `loh.rs:112-121` |
 | H7 | High | Insertions ≥ ~500 bp yield almost no insert-carrying reads | `synth.rs:745-746` |
@@ -250,7 +250,7 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 | L3 | bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" | `reference.rs:33-35` | Use `fasta::io::indexed_reader::Builder` |
 | L4 | Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`) | `fastq.rs:47-48` | `r1_gz.finish()?.flush()?` |
 | L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
-| L6 | BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
+| L6 | **Fixed.** BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
 | L7 | DEL/DUP/INV with no END and no SVLEN silently becomes a 1 bp event | `vcf_input.rs:130-134, 150-154, 169-173` | Error, or derive from REF length |
 | L8 | `af=nan` / `--allele-fraction NaN` accepted; suppresses all reads, truth says `SIM_VAF=NaN` | `exon.rs:202`, `main.rs:241` | `if !(v > 0.0 && v <= 1.0)` |
 | L9 | REF == ALT checked before uppercasing, so `A:a` passes; VCF path has no check at all | `exon.rs:508`, `vcf_input.rs:226-239` | Uppercase first; add check to VCF path |

@@ -5,7 +5,7 @@
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 
-use crate::types::SimEvent;
+use crate::types::{FusionJoin, SimEvent};
 
 /// Allele fraction specification from event syntax.
 #[derive(Debug, Clone, PartialEq)]
@@ -429,9 +429,9 @@ fn make_region_event(
 }
 
 fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
-    // "fusion:GENEA:exonN:GENEB:exonM" or "fusion:GENEA:exonN:GENEB:exonM:inv"
+    // "fusion:GENEA:exonN:GENEB:exonM"
     if parts.len() < 4 {
-        bail!("fusion spec requires at least 4 parts: 'fusion:GENEA:exonN:GENEB:exonM[:inv]'");
+        bail!("fusion spec requires 4 parts: 'fusion:GENEA:exonN:GENEB:exonM'");
     }
 
     let gene_a_name = parts[0];
@@ -439,8 +439,15 @@ fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
     let gene_b_name = parts[2];
     let exon_b_str = parts[3];
 
-    // Check for optional ":inv" suffix.
-    let inverted = parts.len() >= 5 && parts[4].eq_ignore_ascii_case("inv");
+    // The join orientation follows the gene strands; the old ':inv' suffix
+    // built the wrong junction and is no longer accepted.
+    if parts.len() >= 5 {
+        bail!(
+            "unexpected fusion suffix ':{}': the join orientation now follows the \
+             gene strands in the exon BED",
+            parts[4]
+        );
+    }
 
     let gene_a = genes
         .iter()
@@ -465,51 +472,34 @@ fn parse_fusion_spec(parts: &[&str], genes: &[GeneTarget]) -> Result<SimEvent> {
         .find(|e| e.number == exon_b_num)
         .ok_or_else(|| anyhow::anyhow!("exon {} not found in {}", exon_b_num, gene_b_name))?;
 
-    match (gene_a.is_minus_strand(), gene_b.is_minus_strand()) {
-        // Plus/plus: keep gene A left of the end of exon A, joined to gene B
-        // from the start of exon B.
-        (false, false) => Ok(SimEvent::Fusion {
-            chrom_a: gene_a.chrom.clone(),
-            bp_a: exon_a.end, // first base NOT included from gene A
-            gene_a: gene_a.gene.clone(),
-            chrom_b: gene_b.chrom.clone(),
-            bp_b: exon_b.start, // first base included from gene B
-            gene_b: gene_b.gene.clone(),
+    // Gene A keeps exon A and everything upstream (5'); gene B keeps exon B
+    // and everything downstream (3'). On the plus strand a gene's 5' side is
+    // left of an exon; on the minus strand it is to the right.
+    let fusion = |a: &GeneTarget, bp_a: u64, b: &GeneTarget, bp_b: u64, join: FusionJoin| {
+        SimEvent::Fusion {
+            chrom_a: a.chrom.clone(),
+            bp_a,
+            gene_a: a.gene.clone(),
+            chrom_b: b.chrom.clone(),
+            bp_b,
+            gene_b: b.gene.clone(),
             allele_fraction: None,
-            inverted,
-        }),
-        // Minus/minus: gene A keeps [exon_a.start, ...) and gene B keeps
-        // (..., exon_b.end). On the plus strand that is B-left then A-right, the
-        // same forward join as plus/plus with the genes swapped.
-        (true, true) => {
-            if inverted {
-                bail!(
-                    "':inv' fusion with minus-strand genes ({}, {}) is not supported",
-                    gene_a.gene,
-                    gene_b.gene
-                );
-            }
-            Ok(SimEvent::Fusion {
-                chrom_a: gene_b.chrom.clone(),
-                bp_a: exon_b.end,
-                gene_a: gene_b.gene.clone(),
-                chrom_b: gene_a.chrom.clone(),
-                bp_b: exon_a.start,
-                gene_b: gene_a.gene.clone(),
-                allele_fraction: None,
-                inverted: false,
-            })
+            join,
         }
-        // Opposite strands need an inverted join, which the fusion model
-        // doesn't build correctly yet (REVIEW.md H4).
-        _ => bail!(
-            "fusion of genes on opposite strands ({} {}, {} {}) is not supported yet",
-            gene_a.gene,
-            if gene_a.is_minus_strand() { "minus" } else { "plus" },
-            gene_b.gene,
-            if gene_b.is_minus_strand() { "minus" } else { "plus" },
-        ),
-    }
+    };
+    Ok(match (gene_a.is_minus_strand(), gene_b.is_minus_strand()) {
+        // A left of exon A's end, then B right of exon B's start.
+        (false, false) => fusion(gene_a, exon_a.end, gene_b, exon_b.start, FusionJoin::Forward),
+        // A keeps [exon_a.start, ...) and B keeps (..., exon_b.end). On the plus
+        // strand that reads B-left then A-right: a forward join, genes swapped.
+        (true, true) => fusion(gene_b, exon_b.end, gene_a, exon_a.start, FusionJoin::Forward),
+        // A left of exon A's end, then B left of exon B's end, reversed.
+        (false, true) => fusion(gene_a, exon_a.end, gene_b, exon_b.end, FusionJoin::LeftLeft),
+        // A right of exon A's start, reversed, then B right of exon B's start.
+        (true, false) => {
+            fusion(gene_a, exon_a.start, gene_b, exon_b.start, FusionJoin::RightRight)
+        }
+    })
 }
 
 /// Parse an insertion spec.
@@ -1027,15 +1017,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_inverted_fusion() {
+    fn test_inv_suffix_is_rejected() {
+        // Join orientation now follows the gene strands.
         let genes = test_genes();
-        let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2:inv", &genes).unwrap();
-        match event {
-            SimEvent::Fusion { inverted, .. } => {
-                assert!(inverted, "fusion with :inv suffix should be inverted");
-            }
-            _ => panic!("expected Fusion"),
-        }
+        assert!(parse_event_spec("fusion:GENEA:exon3:GENEB:exon2:inv", &genes).is_err());
     }
 
     #[test]
@@ -1043,8 +1028,8 @@ mod tests {
         let genes = test_genes();
         let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes).unwrap();
         match event {
-            SimEvent::Fusion { inverted, .. } => {
-                assert!(!inverted, "fusion without :inv suffix should be forward");
+            SimEvent::Fusion { join, .. } => {
+                assert_eq!(join, FusionJoin::Forward, "fusion without :inv suffix should be forward");
             }
             _ => panic!("expected Fusion"),
         }
@@ -1142,25 +1127,62 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
                 chrom_b,
                 bp_b,
                 gene_b,
-                inverted,
+                join,
                 ..
             } => {
                 assert_eq!((chrom_a.as_str(), bp_a, gene_a.as_str()), ("chr3", 7300, "GENEN"));
                 assert_eq!((chrom_b.as_str(), bp_b, gene_b.as_str()), ("chr1", 3000, "GENEM"));
-                assert!(!inverted);
+                assert_eq!(join, FusionJoin::Forward);
             }
             _ => panic!("expected Fusion"),
         }
     }
 
-    #[test]
-    fn test_fusion_of_opposite_strand_genes_is_rejected() {
-        // Needs an inverted join, which the fusion model can't build correctly yet.
+    fn fusion_parts(spec: &str) -> (String, u64, String, String, u64, String, FusionJoin) {
         let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
-        let err = parse_event_spec("fusion:GENEP:exon1:GENEM:exon2", &genes)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("strand"), "error should mention strand: {}", err);
+        match parse_event_spec(spec, &genes).unwrap().0 {
+            SimEvent::Fusion {
+                chrom_a,
+                bp_a,
+                gene_a,
+                chrom_b,
+                bp_b,
+                gene_b,
+                join,
+                ..
+            } => (chrom_a, bp_a, gene_a, chrom_b, bp_b, gene_b, join),
+            other => panic!("expected Fusion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fusion_plus_to_minus_strand_gene_joins_left_sides() {
+        // GENEP (plus) keeps exon 1 and upstream: genomic left of 5200.
+        // GENEM (minus) keeps exon 2 and downstream: genomic left of 2100,
+        // read reverse-complemented.
+        assert_eq!(
+            fusion_parts("fusion:GENEP:exon1:GENEM:exon2"),
+            (
+                "chr2".to_string(), 5200, "GENEP".to_string(),
+                "chr1".to_string(), 2100, "GENEM".to_string(),
+                FusionJoin::LeftLeft,
+            )
+        );
+    }
+
+    #[test]
+    fn test_fusion_minus_to_plus_strand_gene_joins_right_sides() {
+        // GENEM (minus) keeps exon 2 and upstream: genomic right of 2000,
+        // read reverse-complemented. GENEP (plus) keeps exon 2 and downstream:
+        // genomic right of 6000.
+        assert_eq!(
+            fusion_parts("fusion:GENEM:exon2:GENEP:exon2"),
+            (
+                "chr1".to_string(), 2000, "GENEM".to_string(),
+                "chr2".to_string(), 6000, "GENEP".to_string(),
+                FusionJoin::RightRight,
+            )
+        );
     }
 
     #[test]
