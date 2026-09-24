@@ -381,6 +381,15 @@ spike --bam sample.bam --reference GRCh38.fasta \
   -o output/
 ```
 
+`--region` does not replace the event window. For each event on the same
+chromosome, spike extracts the region and the event +/- `--flank`, merged into
+one query when they overlap or touch and kept as two queries when they do not.
+The gap between a region and a distant event on the same chromosome is never
+read, so a fusion partner megabases away costs one extra event-sized window
+rather than every read in between. A region on another chromosome than the
+event is ignored for that event. Reads shared by two windows enter the donor
+pool once.
+
 ### Indel error model
 
 By default, synthetic read errors are substitution-only. To include realistic indel errors:
@@ -433,7 +442,8 @@ Options:
   -o, --output <DIR>               Output directory [default: /tmp/spike]
       --seed <SEED>                Random seed for reproducibility [default: 42]
   -t, --threads <N>                Threads for BAM reading [default: 4]
-      --region <chr:start-end>     Read extraction region (overrides event +/- flank)
+      --region <chr:start-end>     Extra read extraction region, merged with
+                                   event +/- flank when the two overlap
       --flank <BP>                 Flanking region around events, at least 2000 [default: 10000]
       --min-mapq <MAPQ>            Minimum mapping quality [default: 20]
       --aligner <CMD>              Aligner for align script [default: bwa-mem2]

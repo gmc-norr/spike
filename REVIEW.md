@@ -41,7 +41,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M5 | Medium | **Fixed.** `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
 | M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
-| M8 | Medium | `--region` merged with distant events | `main.rs:172-180` |
+| M8 | Medium | **Fixed.** `--region` merged with distant events | `main.rs:172-180` |
 | M9 | Medium | Fusion read pools double-counted | `main.rs:906-911`; `simulate.rs:471-503` |
 | M10 | Medium | **Fixed.** `validate` coverage check always passes on WGS | `validate.rs:753-756` |
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
@@ -200,6 +200,8 @@ Pairs come out of a `HashMap` in random order (`extract.rs:124`, `285`). `build_
 `extraction_bounds` (`main.rs:172-180`) takes the min/max of region and event window.
 - `--region chr20:30490000-30510000` + fusion partner at chr20:35000001: window 30.49–35.01 Mb, 514,980 pairs written instead of ~4.5k.
 - **Fix:** merge only when they overlap.
+
+**Fixed:** `extraction_bounds` returns a list of windows and merges the region with event ± flank only when the two overlap or touch; `extract_pool_for_event` extracts every window and `extract::dedup_pairs_by_name` keeps each fragment once. HG002, `--region chr20:30490000-30510000` with a fusion partner at chr20:35000001 (exon BED, seed 1): one 30,489,999–35,010,000 window, 710,997 donor pairs, **711,130 pairs written → 6,237 donor pairs from two windows (30,489,999–30,510,000 and 34,990,000–35,010,000), 6,304 pairs written** (113×; the review's 514,980/~4.5k used its own breakpoints). A region that genuinely overlaps its event is byte-identical before and after (`del:chr20:38412500-38422500` with `--region chr20:38400000-38440000`, seed 1: same 6,117-pair pool, same R1 md5). The dedup also covers the first half of **M9**: an intra-chromosomal fusion 5 kb across (no `--region`) had its overlapping windows double-counted into a 6,051-pair pool, inflating local coverage and tiling 133 chimeric pairs — now 3,835 pairs and 67 chimeric. M9's chromosome-aware `estimate_coverage_at` is untouched.
 
 ### M9 · Fusion read pools double-counted
 `main.rs:906-911` concatenates A and B pools without removing shared reads. `estimate_coverage_at` (`simulate.rs:471-503`) ignores chromosome.

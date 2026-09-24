@@ -29,7 +29,7 @@ use std::path::Path;
 
 use exon::AfSpec;
 use haplotype::VariantHaplotype;
-use types::{FusionJoin, ReadPool, SimConfig, SimEvent};
+use types::{FusionJoin, ReadPair, ReadPool, SimConfig, SimEvent};
 
 #[derive(Parser)]
 #[command(
@@ -97,6 +97,8 @@ struct Args {
     /// Read extraction region (e.g. "chr19:11080000-11140000").
     /// When specified, reads are extracted from this region instead of event ± flank.
     /// Use this to ensure the output BAM covers the full gene/region of interest.
+    /// An event on the same chromosome but outside the region is extracted from
+    /// its own window as well; the gap between them is never read.
     #[arg(long)]
     region: Option<String>,
 
@@ -177,10 +179,13 @@ struct ExtractionRegion {
     end: u64,
 }
 
-/// Compute read extraction bounds for an event.
+/// Compute read extraction windows for an event, in ascending order.
 ///
-/// If `--region` is set and the event is on the same chromosome, use the region bounds
-/// (expanded to also include event ± flank if the event extends beyond the region).
+/// If `--region` is set and the event is on the same chromosome, the region and
+/// event ± flank are merged into one window only when they overlap or touch;
+/// otherwise both are returned and the gap between them is never read. Taking
+/// the min/max instead turns a region far from the event into one span over
+/// everything in between (M8).
 /// Otherwise, fall back to event ± flank.
 fn extraction_bounds(
     event_chrom: &str,
@@ -188,20 +193,27 @@ fn extraction_bounds(
     event_end: u64,
     flank: u64,
     region: &Option<ExtractionRegion>,
-) -> (u64, u64) {
+) -> Vec<(u64, u64)> {
+    let event_window = (
+        event_start.saturating_sub(flank),
+        event_end.saturating_add(flank),
+    );
     if let Some(r) = region {
         if r.chrom == event_chrom {
-            // Union of region and event+flank to ensure we cover both.
-            let start = r.start.min(event_start.saturating_sub(flank));
-            let end = r.end.max(event_end.saturating_add(flank));
-            return (start, end);
+            // Half-open windows that touch (r.end == event_window.0) cover a
+            // gapless span, so they merge too -- one window keeps each pair in
+            // a single extraction.
+            if r.start <= event_window.1 && event_window.0 <= r.end {
+                return vec![(r.start.min(event_window.0), r.end.max(event_window.1))];
+            }
+            if r.start < event_window.0 {
+                return vec![(r.start, r.end), event_window];
+            }
+            return vec![event_window, (r.start, r.end)];
         }
     }
     // Fallback: event ± flank.
-    (
-        event_start.saturating_sub(flank),
-        event_end.saturating_add(flank),
-    )
+    vec![event_window]
 }
 
 /// Parse a region string like "chr19:11080000-11140000" into (chrom, start, end).
@@ -906,6 +918,9 @@ fn extract_pool_for_event(
     extraction_region: &Option<ExtractionRegion>,
     unusable_qual_names: &mut BTreeSet<String>,
 ) -> Result<(ReadPool, String)> {
+    let mut all_pairs: Vec<ReadPair> = Vec::new();
+    let pool_chrom;
+
     if let SimEvent::Fusion {
         chrom_a,
         bp_a,
@@ -915,53 +930,63 @@ fn extract_pool_for_event(
     } = event
     {
         // Fusion: extract from both gene regions and merge pools.
-        let (region_a_start, region_a_end) =
+        let windows_a =
             extraction_bounds(chrom_a, *bp_a, *bp_a, config.flank_bp, extraction_region);
-        let (region_b_start, region_b_end) =
+        let windows_b =
             extraction_bounds(chrom_b, *bp_b, *bp_b, config.flank_bp, extraction_region);
 
-        let extracted_a = extract::extract_read_pairs(
-            &config.bam_path,
+        extract_windows(
+            config,
             chrom_a,
-            region_a_start,
-            region_a_end,
-            config.min_mapq,
-            Some(config.ref_path.as_str()),
+            &windows_a,
+            &mut all_pairs,
+            unusable_qual_names,
         )?;
-        let extracted_b = extract::extract_read_pairs(
-            &config.bam_path,
+        extract_windows(
+            config,
             chrom_b,
-            region_b_start,
-            region_b_end,
-            config.min_mapq,
-            Some(config.ref_path.as_str()),
+            &windows_b,
+            &mut all_pairs,
+            unusable_qual_names,
         )?;
-        unusable_qual_names.extend(extracted_a.unusable_qual_names);
-        unusable_qual_names.extend(extracted_b.unusable_qual_names);
-
-        let mut all_pairs = extracted_a.pairs;
-        all_pairs.extend(extracted_b.pairs);
-        let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
-        let pool = extract::build_read_pool(all_pairs, frag_dist);
-        return Ok((pool, chrom_a.clone()));
+        pool_chrom = chrom_a.clone();
+    } else {
+        // Single-region events (DEL, DUP, INV, INS).
+        let (chrom, start, end) = event.primary_region().unwrap();
+        let windows = extraction_bounds(chrom, start, end, config.flank_bp, extraction_region);
+        extract_windows(config, chrom, &windows, &mut all_pairs, unusable_qual_names)?;
+        pool_chrom = chrom.to_string();
     }
 
-    // Single-region events (DEL, DUP, INV, INS).
-    let (chrom, start, end) = event.primary_region().unwrap();
-    let (region_start, region_end) =
-        extraction_bounds(chrom, start, end, config.flank_bp, extraction_region);
-    let extracted = extract::extract_read_pairs(
-        &config.bam_path,
-        chrom,
-        region_start,
-        region_end,
-        config.min_mapq,
-        Some(config.ref_path.as_str()),
-    )?;
-    unusable_qual_names.extend(extracted.unusable_qual_names);
-    let frag_dist = stats::FragmentDist::from_read_pairs(&extracted.pairs);
-    let pool = extract::build_read_pool(extracted.pairs, frag_dist);
-    Ok((pool, chrom.to_string()))
+    // Windows can share reads, and the same fragment must not enter the pool
+    // -- or the fragment distribution -- twice.
+    extract::dedup_pairs_by_name(&mut all_pairs);
+    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
+    let pool = extract::build_read_pool(all_pairs, frag_dist);
+    Ok((pool, pool_chrom))
+}
+
+/// Extract read pairs from every window of one event side into `pairs`.
+fn extract_windows(
+    config: &SimConfig,
+    chrom: &str,
+    windows: &[(u64, u64)],
+    pairs: &mut Vec<ReadPair>,
+    unusable_qual_names: &mut BTreeSet<String>,
+) -> Result<()> {
+    for &(start, end) in windows {
+        let extracted = extract::extract_read_pairs(
+            &config.bam_path,
+            chrom,
+            start,
+            end,
+            config.min_mapq,
+            Some(config.ref_path.as_str()),
+        )?;
+        unusable_qual_names.extend(extracted.unusable_qual_names);
+        pairs.extend(extracted.pairs);
+    }
+    Ok(())
 }
 
 /// Build a VariantHaplotype for a given event.
@@ -1484,6 +1509,74 @@ mod tests {
             allele_fraction: None,
             join: FusionJoin::Forward,
         }
+    }
+
+    fn region(chrom: &str, start: u64, end: u64) -> Option<ExtractionRegion> {
+        Some(ExtractionRegion {
+            chrom: chrom.to_string(),
+            start,
+            end,
+        })
+    }
+
+    #[test]
+    fn test_extraction_bounds_keeps_distant_region_and_event_apart() {
+        // M8: --region chr20:30490000-30510000 with a fusion partner at 35 Mb
+        // used to take the min/max, extracting every read in the 4.5 Mb
+        // between them.
+        let r = region("chr20", 30_489_999, 30_510_000);
+
+        let windows = extraction_bounds("chr20", 35_000_000, 35_000_000, 10_000, &r);
+
+        assert_eq!(
+            windows,
+            vec![(30_489_999, 30_510_000), (34_990_000, 35_010_000)],
+        );
+    }
+
+    #[test]
+    fn test_extraction_bounds_merges_overlapping_region_and_event() {
+        // Event window runs past both ends of the region: one window covering
+        // the union, so no pair is extracted twice.
+        let r = region("chr20", 30_489_999, 30_510_000);
+
+        let windows = extraction_bounds("chr20", 30_495_000, 30_520_000, 10_000, &r);
+
+        assert_eq!(windows, vec![(30_485_000, 30_530_000)]);
+    }
+
+    #[test]
+    fn test_extraction_bounds_merges_windows_that_only_touch() {
+        // Region ends exactly where the event window starts. Half-open windows
+        // that touch cover a gapless span, so merging them extracts the same
+        // reads while keeping each pair in one window.
+        let r = region("chr20", 30_000_000, 30_490_000);
+
+        let windows = extraction_bounds("chr20", 30_500_000, 30_500_000, 10_000, &r);
+
+        assert_eq!(windows, vec![(30_000_000, 30_510_000)]);
+    }
+
+    #[test]
+    fn test_extraction_bounds_splits_windows_one_bp_apart() {
+        // One base of gap is still a gap: two queries, not one span.
+        let r = region("chr20", 30_000_000, 30_489_999);
+
+        let windows = extraction_bounds("chr20", 30_500_000, 30_500_000, 10_000, &r);
+
+        assert_eq!(
+            windows,
+            vec![(30_000_000, 30_489_999), (30_490_000, 30_510_000)],
+        );
+    }
+
+    #[test]
+    fn test_extraction_bounds_ignores_region_on_another_chromosome() {
+        let r = region("chr19", 11_080_000, 11_140_000);
+
+        let windows = extraction_bounds("chr20", 30_500_000, 30_500_000, 10_000, &r);
+
+        assert_eq!(windows, vec![(30_490_000, 30_510_000)]);
     }
 
     fn scratch_dir(name: &str) -> std::path::PathBuf {

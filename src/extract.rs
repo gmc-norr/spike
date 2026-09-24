@@ -410,6 +410,16 @@ pub fn build_read_pool(pairs: Vec<ReadPair>, frag_dist: FragmentDist) -> ReadPoo
     ReadPool { pairs, frag_dist }
 }
 
+/// Drop read pairs already seen under the same name, keeping the first.
+///
+/// Extraction windows can share reads -- a `--region` used by both sides of a
+/// fusion, or a fragment whose mate lands in a neighbouring window -- and the
+/// same fragment must not enter the pool twice.
+pub fn dedup_pairs_by_name(pairs: &mut Vec<ReadPair>) {
+    let mut seen: HashSet<String> = HashSet::with_capacity(pairs.len());
+    pairs.retain(|p| seen.insert(p.name.clone()));
+}
+
 // --- Internal helpers ---
 
 struct PartialRead {
@@ -784,6 +794,31 @@ mod tests {
 
         assert_eq!(run1, vec!["c", "a", "b"]);
         assert_eq!(run2, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn test_dedup_pairs_by_name_keeps_one_copy_of_a_pair_in_two_windows() {
+        // A pair that sits in two extraction windows -- the --region shared by
+        // both sides of a fusion (M8), or a fragment straddling the boundary
+        // between neighbouring windows -- is extracted once per window and
+        // must still enter the pool once.
+        let pair = |name: &str, start: u64| ReadPair {
+            name: name.to_string(),
+            seq1: vec![],
+            qual1: vec![],
+            seq2: vec![],
+            qual2: vec![],
+            ref_start: start,
+            ref_end: start + 400,
+            insert_size: 400,
+            chrom: "chr1".to_string(),
+        };
+
+        let mut pairs = vec![pair("a", 10), pair("b", 20), pair("a", 10)];
+        dedup_pairs_by_name(&mut pairs);
+
+        let names: Vec<String> = pairs.into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["a", "b"]);
     }
 
     fn partial(pos: u64, len: usize, tlen: i32) -> PartialRead {
