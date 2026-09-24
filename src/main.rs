@@ -163,6 +163,26 @@ struct Args {
 /// complete pairs.
 const HAP_FLANK: u64 = 2000;
 
+/// Check the input BAM's mean read length against spike's max supported
+/// fragment length (L5). spike's tiling and depth-copy generation both
+/// sample a fragment length in `[read_length, MAX_FRAGMENT_LEN]`; if the
+/// read length itself exceeds that max, no valid fragment exists and
+/// `FragmentDist::sample_in_range` panics deep inside per-event processing.
+/// Reject it here instead, before any work starts, with a message that
+/// explains why: spike simulates fixed-length paired-end reads and does not
+/// support long-read (PacBio/ONT) libraries.
+fn validate_read_length(read_length: usize) -> Result<()> {
+    let max = crate::stats::MAX_FRAGMENT_LEN;
+    if read_length as i64 > max {
+        bail!(
+            "input BAM's mean read length ({read_length}bp) exceeds spike's max \
+             supported fragment length ({max}bp); spike simulates fixed-length \
+             paired-end reads and does not support long-read (PacBio/ONT) libraries",
+        );
+    }
+    Ok(())
+}
+
 /// Check `--flank`: originals are only suppressed inside the extracted
 /// window (event ± flank), but synthetic reads cover event ± HAP_FLANK.
 fn validate_flank(flank: u64) -> Result<()> {
@@ -325,6 +345,7 @@ fn main() -> Result<()> {
     let bam_stats =
         crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
     let read_length = bam_stats.read_length.round() as usize;
+    validate_read_length(read_length)?;
 
     // The simulated read group reuses the original sample, so merged.bam stays
     // single-sample. Read here, not in align.sh: align.sh never sees the BAM.
@@ -1528,6 +1549,23 @@ mod tests {
             start,
             end,
         })
+    }
+
+    #[test]
+    fn test_validate_read_length_rejects_long_read_length() {
+        // L5: a long-read (PacBio/ONT) BAM's mean read length can exceed
+        // spike's max supported fragment length (1500bp), which used to
+        // reach an unguarded `clamp` panic deep in tiling. Reject it here,
+        // early and with a clear message, instead.
+        let err = validate_read_length(2000).expect_err("2000bp should be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("2000"), "message should cite the read length: {msg}");
+        assert!(msg.contains("1500"), "message should cite the max: {msg}");
+    }
+
+    #[test]
+    fn test_validate_read_length_accepts_normal_illumina_length() {
+        assert!(validate_read_length(151).is_ok());
     }
 
     #[test]

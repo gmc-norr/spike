@@ -471,7 +471,7 @@ the leak here.
 | L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs (the same hole at `loh.rs`/`validate.rs` is tracked as N4) |
 | L3 | **Fixed.** bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" (reproduced: real 791 MB bgzipped GRCh38 loaded as a 0-byte chromosome, then `DEL event start on chr20 is at or beyond chromosome length (38412500 >= 0)`) | `reference.rs:33-35` | Used `fasta::io::indexed_reader::Builder`, which picks a bgzf- or plain-file reader by extension; a missing `.gzi` now fails at open with a message naming the `.gzi` index instead of surfacing downstream as chromosome length. **Fixed** that way: same command against the same file now loads chr20 at 61 MB; the truth VCF matches the run against the uncompressed FASTA apart from the `##reference=` path line (`truth.rs:75`), and the FASTQ pair's decompressed content (`zcat \| md5sum`, the correct comparison for a `.gz` pair) matches exactly. See Fix pass 1 below: the detection was extension-only and so still missed a bgzip file under a non-`.gz`/`.bgz` name. |
 | L4 | **Fixed.** Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`). Reproduces when the whole gzip output is small enough to sit unflushed inside the `BufWriter`'s own buffer after `finish()` — under 8 KiB by default (measured: a single-pair `write_paired_fastq` call with `R1.fq.gz` symlinked to `/dev/full` returned `Ok(...)`). A large event-scale run (3862-pair `del:chr20:38412500-38422500`, HG002 chr20 slice, `--seed 1`) already failed correctly before this fix, because the loop's own writes overflow that buffer first and hit `/dev/full` mid-stream — but plenty of real spike runs are small enough to stay under that buffer: a single small SNP or short DEL with low local coverage, a tight `--region`, or a demo-scale run. This fix's window tracks the buffer size, not run size in general, so it still covers those. See Fix pass 1 below | `fastq.rs:97-124` | `.finish()?.flush()` on both streams, computed unconditionally so R1 failing first can't leave `r2_gz` to be dropped unfinished and discard its own error the same way — now returns `Err("No space left on device (os error 28)")` for the single-pair case above, and names both streams when both fail |
-| L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
+| L5 | **Fixed.** Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103` (now ~110 after the task 10 rewrite); callers `simulate.rs:413` (now 500), `synth.rs:534` (now 594) | Guard min ≤ max |
 | L6 | **Fixed.** BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
 | L7 | DEL/DUP/INV with no END and no SVLEN silently becomes a 1 bp event | `vcf_input.rs:130-134, 150-154, 169-173` | Error, or derive from REF length |
 | L8 | `af=nan` / `--allele-fraction NaN` accepted; suppresses all reads, truth says `SIM_VAF=NaN` | `exon.rs:202`, `main.rs:241` | `if !(v > 0.0 && v <= 1.0)` |
@@ -787,6 +787,70 @@ path it came from, and combining both messages when both fail
   (`main.rs:753, 1271, 1710`) for code using `std::os::unix::fs`. Moot in
   practice — the crate shells out to `samtools`, which isn't available off
   Unix either — but now consistent.
+
+### L5 · Panic when mean read length > 1500
+
+`FragmentDist::sample_in_range(rng, min, max)` (`stats.rs`) rejection-samples a
+fragment length in `[min, max]`; after 1000 failures it falls back to
+`self.sample(rng).clamp(min, max)`. Both call sites pass the input BAM's mean
+read length as `min` and a hard-coded `1500` as `max` (`simulate.rs`'s
+per-event tiling, `synth.rs`'s per-duplicate-copy fragment draw). If the BAM's
+mean read length exceeds 1500bp — a long-read (PacBio/ONT) library — `min >
+max`, every one of the 1000 attempts fails by construction, and the fallback's
+`.clamp()` panics with Rust's own "min > max" assertion. The line numbers in
+the REVIEW.md row above are stale: `synth.rs` was rewritten by task 10
+(commits `e69af5d` + `3a782cb`) after this row was written; the defect and its
+fix are unchanged, only the surrounding code moved (`sample_in_range` is now
+called from `synth.rs:594`, inside `generate_depth_pair`, not `synth.rs:534`).
+
+**Decision**: fail loudly, don't silently clamp. A long-read library can't
+produce the fixed-length paired-end reads this tool generates at all — there
+is no "close enough" fragment length to substitute — so clamping `min` down
+to `max` (or any other silent adjustment) would produce reads shorter than
+the mean of the real library and mislabel that as a spike-in run. Instead:
+- `main.rs`'s new `validate_read_length` rejects a read length above
+  `stats::MAX_FRAGMENT_LEN` (1500, the same constant both callers now use)
+  right after it's computed from the BAM, before any per-event extraction,
+  quality learning, or haplotype work starts — so the user gets one clear
+  `bail!` naming the measured read length and the max, instead of a panic
+  raised deep inside whichever event happens to hit the tiling loop first.
+- `sample_in_range` itself also gained an `assert!(min <= max, ...)` with a
+  message naming both values, replacing std's opaque `clamp` panic, as a
+  second line of defense for any future caller that doesn't go through
+  `validate_read_length` first.
+- Both call sites (`simulate.rs:500`, `synth.rs:594`) were checked
+  individually: they hit the identical failure (same `min`, same hard-coded
+  `max = 1500`), so one upstream guard in `main.rs` covers both; no
+  caller-specific handling was needed.
+
+- **Measured**, three new tests:
+  - `stats::tests::test_sample_in_range_min_gt_max_panics_with_clear_message`
+    (`#[should_panic(expected = "sample_in_range: min (2000) > max (1500)")]`):
+    before the fix, panics with std's own message,
+    `"min > max. min = 2000, max = 1500"`, which doesn't contain the expected
+    string, so the test fails (not a compile error); after, panics with the
+    new message and passes.
+  - `tests::test_validate_read_length_rejects_long_read_length` (main.rs):
+    `validate_read_length(2000)` — before the fix existed (stub returning
+    `Ok(())`), `.expect_err(...)` panics because the call succeeded; after,
+    returns an `Err` whose message contains both `"2000"` and `"1500"`.
+  - `tests::test_validate_read_length_accepts_normal_illumina_length`:
+    `validate_read_length(151)` stays `Ok(())`.
+  Mutation check on both fixes: reverted `sample_in_range`'s `assert!` and
+  separately `validate_read_length`'s body (each backed up to
+  `scratch/work/task-14-L5/` first, restored with `cat`, never
+  `git checkout --`) — both new tests failed the same way as the original
+  "before" runs above; restored, reverified green.
+- **Real-data**: not possible with the resources available. The only BAM on
+  hand (`HG002.novaseq.pcr-free.35x...bam`) is 151bp Illumina — checked
+  directly (`samtools view | awk '{print length($10)}' | sort -u` over the
+  chr20 slice: every read is 151bp) — so no real BAM here can drive the mean
+  read length over 1500 to reproduce the panic, and fabricating a synthetic
+  long-read BAM was out of scope for this fix. Confirmed instead that the
+  ordinary short-read path is unaffected: `del:chr20:38412500-38422500
+  --seed 1` against the HG002 chr20 slice (`read_len=151` in the log) runs to
+  completion (exit 0, 3862 pairs written), identical in shape to the L4
+  real-data run.
 
 ## Uncommitted changes
 

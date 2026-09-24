@@ -4,6 +4,13 @@ use rand::Rng;
 
 use crate::types::ReadPair;
 
+/// Max fragment length `sample_in_range` will return. Synthetic tiling and
+/// depth-copy generation both cap the sampled fragment length here, so a
+/// read length above this (e.g. a long-read library) can never fit and must
+/// be rejected before generation starts — see `validate_read_length` in
+/// main.rs, which uses this same constant.
+pub const MAX_FRAGMENT_LEN: i64 = 1500;
+
 /// Empirical fragment length distribution for sampling.
 pub struct FragmentDist {
     pub mean: f64,
@@ -92,7 +99,20 @@ impl FragmentDist {
     /// Sample with rejection: only accept lengths in [min, max].
     ///
     /// After 1000 failed attempts, clamps to the nearest valid value.
+    ///
+    /// Panics if `min > max`: callers pass a read length as `min`, so an
+    /// empty range means the read length exceeds the max fragment length
+    /// this function can return (e.g. a long-read library's reads can't fit
+    /// in a short-read-sized fragment). Failing loudly with a clear message
+    /// here is better than std's opaque `clamp` panic, and callers are
+    /// expected to reject that read length before generation starts (see
+    /// `validate_read_length` in main.rs).
     pub fn sample_in_range<R: Rng>(&self, rng: &mut R, min: i64, max: i64) -> i64 {
+        assert!(
+            min <= max,
+            "sample_in_range: min ({min}) > max ({max}); the read length is longer \
+             than the max supported fragment length",
+        );
         for _ in 0..1000 {
             let len = self.sample(rng);
             if len >= min && len <= max {
@@ -137,5 +157,16 @@ mod tests {
             let v = dist.sample_in_range(&mut rng, 300, 500);
             assert!(v >= 300 && v <= 500, "got {}", v);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_in_range: min (2000) > max (1500)")]
+    fn test_sample_in_range_min_gt_max_panics_with_clear_message() {
+        // L5: a long-read library's read length (min) can exceed the max
+        // supported fragment length (max). This must fail loudly with a
+        // clear message, not with std's opaque `clamp` panic.
+        let dist = FragmentDist::from_stats(400.0, 80.0);
+        let mut rng = StdRng::seed_from_u64(42);
+        dist.sample_in_range(&mut rng, 2000, 1500);
     }
 }

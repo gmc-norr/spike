@@ -591,7 +591,7 @@ impl<'a> SynthReadGenerator<'a> {
         let rl = self.read_length as i64;
 
         // Sample new fragment length.
-        let new_frag = frag_dist.sample_in_range(rng, rl, 1500) as u64;
+        let new_frag = frag_dist.sample_in_range(rng, rl, crate::stats::MAX_FRAGMENT_LEN) as u64;
 
         // Position jitter: ±20bp to avoid exact positional duplicates.
         let jitter = rng.gen_range(-20i64..=20);

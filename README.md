@@ -564,6 +564,8 @@ All SV types share a common simulation framework: (1) build a linear variant hap
 
 A segment whose flank runs off the end of a contig is truncated to what the reference actually holds: the haplotype is shorter there, its reference footprint stops at the contig end, and the count of synthetic reads follows the shorter haplotype.
 
+spike generates fixed-length paired-end reads and needs a fragment at least as long as one read; it caps the fragment lengths it draws at 1500bp, so it does not support long-read (PacBio/ONT) libraries. If the input BAM/CRAM's mean read length exceeds 1500bp, spike exits with an error before doing any work rather than generating reads that don't match the library.
+
 ### Deletion (DEL)
 
 **Haplotype structure** (2 segments):

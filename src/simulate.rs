@@ -497,7 +497,7 @@ fn tile_haplotype_reads(
         // Sample fragment length from empirical distribution.
         let frag_len = pool
             .frag_dist
-            .sample_in_range(rng, read_length as i64, 1500) as u64;
+            .sample_in_range(rng, read_length as i64, crate::stats::MAX_FRAGMENT_LEN) as u64;
 
         if frag_len > hap_len {
             continue;
