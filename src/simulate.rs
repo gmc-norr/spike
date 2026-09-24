@@ -92,7 +92,7 @@ pub fn simulate_event(
     let (hap_ref_start, hap_ref_end) = haplotype.ref_range().unwrap_or((sv_start, sv_end));
 
     let mut kept = Vec::new();
-    let mut suppressed = 0usize;
+    let mut suppressed: Vec<String> = Vec::new();
 
     for pair in &pool.pairs {
         if is_additive {
@@ -143,7 +143,7 @@ pub fn simulate_event(
                 if loh_set.contains(&pair.name) {
                     let hap_prob = (2.0 * vaf).min(1.0) * overlap_frac;
                     if rng.gen::<f64>() < hap_prob {
-                        suppressed += 1;
+                        suppressed.push(pair.name.clone());
                     } else {
                         kept.push(pair.clone());
                     }
@@ -151,7 +151,7 @@ pub fn simulate_event(
                     // Non-variant haplotype: only suppress when VAF > 0.5.
                     let other_prob = (2.0 * vaf - 1.0).max(0.0) * overlap_frac;
                     if rng.gen::<f64>() < other_prob {
-                        suppressed += 1;
+                        suppressed.push(pair.name.clone());
                     } else {
                         kept.push(pair.clone());
                     }
@@ -162,13 +162,13 @@ pub fn simulate_event(
                 if rng.gen::<f64>() > effective_vaf {
                     kept.push(pair.clone());
                 } else {
-                    suppressed += 1;
+                    suppressed.push(pair.name.clone());
                 }
             }
         } else if rng.gen::<f64>() > effective_vaf {
             kept.push(pair.clone());
         } else {
-            suppressed += 1;
+            suppressed.push(pair.name.clone());
         }
     }
 
@@ -222,7 +222,7 @@ pub fn simulate_event(
     log::info!(
         "simulate_event: {} kept, {} suppressed, {} chimeric (haplotype-tiled), {} depth copies",
         kept.len(),
-        suppressed,
+        suppressed.len(),
         chimeric.len(),
         depth_copies.len(),
     );
@@ -233,8 +233,53 @@ pub fn simulate_event(
     Ok(SplicedOutput {
         chimeric_pairs: all_chimeric,
         kept_originals: kept,
-        suppressed_count: suppressed,
+        suppressed_count: suppressed.len(),
+        suppressed_names: suppressed,
     })
+}
+
+/// Combine the outputs of all simulated events into the final set of pairs.
+///
+/// Each event's pool spans event ± flank, so nearby events extract the same
+/// originals. An original suppressed by any event is dropped, even if another
+/// event passed it through as kept. Otherwise the second event would undo the
+/// first event's suppression.
+pub fn combine_event_outputs(outputs: Vec<SplicedOutput>) -> Vec<ReadPair> {
+    let suppressed: HashSet<String> = outputs
+        .iter()
+        .flat_map(|o| o.suppressed_names.iter().cloned())
+        .collect();
+
+    let mut all_pairs = Vec::new();
+    for output in outputs {
+        all_pairs.extend(
+            output
+                .kept_originals
+                .into_iter()
+                .filter(|p| !suppressed.contains(&p.name)),
+        );
+        all_pairs.extend(output.chimeric_pairs);
+    }
+    dedup_by_name(&mut all_pairs);
+    all_pairs
+}
+
+/// Deduplicate read pairs by name, keeping the last occurrence.
+///
+/// Keeping the last occurrence makes event-order behavior explicit when
+/// multiple simulated events touch the same original read name.
+fn dedup_by_name(pairs: &mut Vec<ReadPair>) {
+    let mut last_idx: HashMap<String, usize> = HashMap::with_capacity(pairs.len());
+    for (i, p) in pairs.iter().enumerate() {
+        last_idx.insert(p.name.clone(), i);
+    }
+    let mut out = Vec::with_capacity(last_idx.len());
+    for (i, p) in pairs.drain(..).enumerate() {
+        if last_idx.get(&p.name).copied() == Some(i) {
+            out.push(p);
+        }
+    }
+    *pairs = out;
 }
 
 /// Get LOH haplotype set, classified set, and variant map for the event.
@@ -1491,6 +1536,118 @@ mod tests {
         assert!(
             !out.chimeric_pairs.is_empty(),
             "Fusion should produce chimeric reads spanning the breakpoint"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // combine_event_outputs tests
+    // ---------------------------------------------------------------
+
+    fn spliced(kept: &[&str], chimeric: &[&str], suppressed: &[&str]) -> SplicedOutput {
+        SplicedOutput {
+            kept_originals: kept.iter().map(|n| make_pair(n, 0, 400)).collect(),
+            chimeric_pairs: chimeric.iter().map(|n| make_pair(n, 0, 400)).collect(),
+            suppressed_count: suppressed.len(),
+            suppressed_names: suppressed.iter().map(|n| n.to_string()).collect(),
+        }
+    }
+
+    fn sorted_names(pairs: &[ReadPair]) -> Vec<String> {
+        let mut names: Vec<String> = pairs.iter().map(|p| p.name.clone()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn test_dedup_by_name_keeps_last_occurrence() {
+        let mut pairs = vec![
+            make_pair("dup", 10, 30),
+            make_pair("keep", 50, 70),
+            make_pair("dup", 90, 110),
+        ];
+        dedup_by_name(&mut pairs);
+
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].name, "keep");
+        assert_eq!(pairs[1].name, "dup");
+        assert_eq!(pairs[1].ref_start, 90);
+    }
+
+    #[test]
+    fn test_combine_drops_pairs_suppressed_by_any_event() {
+        // Both events extracted the same originals r1..r3 (nearby events share
+        // a pool). Event 1 suppressed r1; event 2 left r1 alone because r1 lies
+        // outside its own footprint. r1 must still be gone from the output.
+        let outputs = vec![
+            spliced(&["r2", "r3"], &["ev0001_a"], &["r1"]),
+            spliced(&["r1", "r2"], &["ev0002_a"], &["r3"]),
+        ];
+
+        let combined = combine_event_outputs(outputs);
+
+        assert_eq!(sorted_names(&combined), vec!["ev0001_a", "ev0002_a", "r2"]);
+    }
+
+    #[test]
+    fn test_nearby_event_does_not_undo_deletion() {
+        // Two het DELs 4 kb apart, simulated over one shared pool:
+        //   A deletes [1000,3000), haplotype footprint [0,4000)
+        //   B deletes [7000,9000), haplotype footprint [6000,10000)
+        // Pairs inside A's deletion are outside B's footprint, so B keeps them.
+        // After combining, about half of them (VAF 0.5) must still be gone.
+        let pool = make_covering_pool(0, 12000, 240); // 400 bp fragments every 50 bp
+        let config = make_config();
+        let mut gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let del = |start: u64, end: u64| SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: start,
+            del_end: end,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        };
+        let flank = |start: u64, end: u64| HaplotypeSegment {
+            sequence: vec![b'A'; (end - start) as usize],
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: start,
+                ref_end: end,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        };
+
+        let mut hap_a = make_haplotype(vec![flank(0, 1000), flank(3000, 4000)]);
+        let mut hap_b = make_haplotype(vec![flank(6000, 7000), flank(9000, 10000)]);
+
+        let out_a = simulate_event(
+            1, &del(1000, 3000), &pool, &mut hap_a, &config, &mut gen, 0.5, &mut rng,
+        )
+        .unwrap();
+        let out_b = simulate_event(
+            2, &del(7000, 9000), &pool, &mut hap_b, &config, &mut gen, 0.5, &mut rng,
+        )
+        .unwrap();
+
+        let combined = combine_event_outputs(vec![out_a, out_b]);
+
+        // Originals fully inside A's deletion: starts 1000, 1050, ..., 2600.
+        let inside_a = |p: &ReadPair| p.ref_start >= 1000 && p.ref_end <= 3000;
+        let total = pool.pairs.iter().filter(|p| inside_a(p)).count();
+        let surviving = combined
+            .iter()
+            .filter(|p| p.name.starts_with("read_") && inside_a(p))
+            .count();
+        assert_eq!(total, 33);
+        let frac = surviving as f64 / total as f64;
+        assert!(
+            (0.2..=0.8).contains(&frac),
+            "expected ~50% of originals inside A's deletion to survive, got {}/{} ({:.2})",
+            surviving,
+            total,
+            frac
         );
     }
 }

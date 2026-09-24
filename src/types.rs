@@ -197,4 +197,8 @@ pub struct SplicedOutput {
     pub kept_originals: Vec<ReadPair>,
     /// Count of original pairs suppressed (replaced or removed).
     pub suppressed_count: usize,
+    /// Names of the original pairs suppressed by this event. Needed when
+    /// combining events: another event's pool may contain the same pair and
+    /// would otherwise pass it through as a kept original.
+    pub suppressed_names: Vec<String>,
 }

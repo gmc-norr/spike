@@ -28,7 +28,7 @@ use std::path::Path;
 
 use exon::AfSpec;
 use haplotype::VariantHaplotype;
-use types::{ReadPair, ReadPool, SimConfig, SimEvent};
+use types::{ReadPool, SimConfig, SimEvent};
 
 #[derive(Parser)]
 #[command(
@@ -363,7 +363,7 @@ fn main() -> Result<()> {
     validate_event_coordinates(&events, &shared_ref)?;
     validate_event_overlaps(&events, args.allow_overlap)?;
 
-    let mut all_output_pairs: Vec<ReadPair> = Vec::new();
+    let mut event_outputs = Vec::with_capacity(events.len());
 
     // Per-event stats collected for README/log output.
     struct EventStat {
@@ -428,20 +428,10 @@ fn main() -> Result<()> {
             suppressed: output.suppressed_count,
         });
 
-        all_output_pairs.extend(output.kept_originals);
-        all_output_pairs.extend(output.chimeric_pairs);
+        event_outputs.push(output);
     }
 
-    // Deduplicate by read name (in case of overlapping regions).
-    let before_dedup = all_output_pairs.len();
-    dedup_by_name(&mut all_output_pairs);
-    if all_output_pairs.len() < before_dedup {
-        log::info!(
-            "Deduplicated: {} -> {} pairs",
-            before_dedup,
-            all_output_pairs.len(),
-        );
-    }
+    let all_output_pairs = simulate::combine_event_outputs(event_outputs);
 
     // Write FASTQ.
     let (r1_path, r2_path) = fastq::write_paired_fastq(&all_output_pairs, &args.output)?;
@@ -508,25 +498,6 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Deduplicate read pairs by name, keeping the last occurrence.
-///
-/// Keeping the last occurrence makes event-order behavior explicit when
-/// multiple simulated events touch the same original read name.
-fn dedup_by_name(pairs: &mut Vec<ReadPair>) {
-    let mut last_idx: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::with_capacity(pairs.len());
-    for (i, p) in pairs.iter().enumerate() {
-        last_idx.insert(p.name.clone(), i);
-    }
-    let mut out = Vec::with_capacity(last_idx.len());
-    for (i, p) in pairs.drain(..).enumerate() {
-        if last_idx.get(&p.name).copied() == Some(i) {
-            out.push(p);
-        }
-    }
-    *pairs = out;
 }
 
 /// Validate overlap relationships between single-region events.
@@ -1394,20 +1365,6 @@ mod tests {
         }
     }
 
-    fn pair(name: &str, ref_start: u64) -> ReadPair {
-        ReadPair {
-            name: name.to_string(),
-            seq1: vec![b'A'; 10],
-            qual1: vec![b'!' + 30; 10],
-            seq2: vec![b'T'; 10],
-            qual2: vec![b'!' + 30; 10],
-            ref_start,
-            ref_end: ref_start + 20,
-            insert_size: 20,
-            chrom: "chr1".to_string(),
-        }
-    }
-
     #[test]
     fn test_overlap_policy_rejects_range_overlap() {
         let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
@@ -1435,16 +1392,5 @@ mod tests {
     fn test_overlap_policy_allow_flag() {
         let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
         assert!(validate_event_overlaps(&events, true).is_ok());
-    }
-
-    #[test]
-    fn test_dedup_by_name_keeps_last_occurrence() {
-        let mut pairs = vec![pair("dup", 10), pair("keep", 50), pair("dup", 90)];
-        dedup_by_name(&mut pairs);
-
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0].name, "keep");
-        assert_eq!(pairs[1].name, "dup");
-        assert_eq!(pairs[1].ref_start, 90);
     }
 }
