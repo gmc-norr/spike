@@ -445,8 +445,10 @@ defect in the `spike validate` subcommand.
 | --- | --- | --- |
 | `extract.rs` | `safe_noodles_position` no longer `expect`s | Correct, no behaviour change. All call sites pass `start + 1`, `end` for 0-based half-open input. |
 | `synth.rs` | Clamp sampled quality to Phred+33 range | Correct in itself, but it hides M14 (missing qualities) instead of fixing it. |
-| `loh.rs` | Warn when gVCF chromosome names don't match | Wrong in both paths. For `.vcf.gz` it never fires (`bcftools view -r chr17:…` on a `17` file returns nothing, exit 0). For plain VCF it fires whenever the region has no het SNPs and other chromosomes exist. "Falling back to pileup" is only true when the result is empty; if bcftools errors (e.g. unindexed `.gz`), LOH is skipped. |
+| `loh.rs` | Warn when gVCF chromosome names don't match | **Fixed.** Was wrong in both paths. For `.vcf.gz` it never fired (`bcftools view -r chr17:…` on a `17` file returns nothing, exit 0). For plain VCF it fired whenever the region had no het SNPs and other chromosomes existed. "Falling back to pileup" was only true when the result was empty; if bcftools errors (e.g. unindexed `.gz`), LOH is skipped. |
 | `simulate.rs` | `unreachable!` → `bail!`; two new `simulate_event` tests | `bail!` is fine. The tests only assert `> 0` / non-empty and would pass with H5, 100% suppression, or 2 tiled reads. |
+
+- `loh.rs` mismatch warning **Fixed**, and measured: the verdict now comes from the gVCF's own `##contig` names, read straight from the header (plain or bgzipped, no index and no bcftools call), instead of from an empty result, and every outcome names what spike does next. Measured on `1d61e99` + fix, `del:chr20:38412500-38422500 --seed 1`, chr20 37.5–41.5 Mb HG002 slice: a `.vcf.gz` naming the chromosome `20` while `chr20` is asked for gave **0 warnings before, 1 after** ("names chromosome '20', not 'chr20' … Falling back to pileup-based het SNP detection", and it does fall back — 15 het SNPs from pileup); a matching plain VCF whose queried window simply holds no SNPs while `chr21` records exist gave **1 spurious warning before, 0 after**; an unindexed `.vcf.gz` said `bcftools exited with status exit status: 255` before and now says `… 'noindex.vcf.gz': Failed to open …: could not load index. LOH is skipped for this region: original reads are suppressed at random.` On the working path (matching, indexed HG002 chr20 gVCF) R1/R2 FASTQ and `truth.vcf` are byte-identical to `1d61e99`.
 
 ## Test gaps
 
@@ -454,7 +456,7 @@ defect in the `spike validate` subcommand.
 - `test_suppression_*` re-implements the suppression loop instead of calling `simulate_event`. The LOH branch has no test.
 - `haplotype.rs` tests never call a real `VariantHaplotype::from_*` constructor (so H4 and M4 went unnoticed), though `SharedReference::from_sequences` exists for this.
 - BND parser tests encode the wrong orientation (H3).
-- No tests for: `loh.rs`, `truth.rs`, main-level orchestration with several events or `--region`, minus-strand BEDs, script generation, R1/R2 geometry in `generate_read_pair`, `indel_error_rate > 0`, extraction from a real BAM/CRAM, FASTQ round trip.
+- No tests for: `truth.rs`, main-level orchestration with several events or `--region`, minus-strand BEDs, script generation, R1/R2 geometry in `generate_read_pair`, `indel_error_rate > 0`, extraction from a real BAM/CRAM, FASTQ round trip.
 - A good first regression test for most of H1–H8: simulate on a small synthetic reference and assert the realized VAF / depth / breakpoint position within a tolerance.
 
 ## Design notes

@@ -741,6 +741,8 @@ A second pass records each fragment's bases at the het SNPs only, so memory grow
 
 SNPs are loaded from a pre-called VCF (e.g., DeepVariant gVCF): het (`0/1`, `1/0`) and hom-alt (`1/1`) biallelic SNPs. A het SNP whose base a deletion on the other haplotype removes (a carried deletion allele, or ALT `*`) has no copy carrying REF, so it counts as hom-alt. A BAM pass then records which allele each read carries at the het SNPs. Phased genotypes (`0|1`, `1|0`, with an optional `PS` phase set) are used for phasing (below); a phased VCF such as a GIAB/T2T benchmark gives the most realistic result. If the gVCF has no het SNPs in the region, spike falls back to pileup.
 
+Whether the gVCF can hold SNPs for the chromosome at all is read from its own `##contig` names, not guessed from an empty result: `bcftools view -r chr20:...` on a file that calls that chromosome `20` prints nothing and exits 0, exactly like a region that genuinely has no SNPs. spike reads the header itself (plain or bgzipped, no index needed) and warns only when the names cannot match — the other convention (`20` for `chr20`) or no such chromosome at all. A region that simply has no SNPs in it is not warned about. Each message says what happens next: a fallback to pileup when the file was read, and — when it could not be read at all, e.g. an unindexed `.vcf.gz` that bcftools refuses, with bcftools' own reason quoted — that LOH is skipped for that region and its original reads are suppressed at random instead.
+
 ### Phasing
 
 A deletion or duplication affects one whole haplotype, so every het SNP in it must lose (or gain) the allele of the same haplotype. spike phases the het SNPs into blocks:

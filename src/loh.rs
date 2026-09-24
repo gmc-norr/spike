@@ -224,6 +224,124 @@ pub fn sample_copies(
     Ok(copies_from_snps(&snps.het, &snps.hom_alt, &read_alleles, rng))
 }
 
+/// What a gVCF's chromosome names say about the one being asked for.
+#[derive(Debug, PartialEq)]
+enum ContigMatch {
+    /// It names this chromosome, or names nothing that contradicts it.
+    Match,
+    /// It names the other convention instead: 'chr20' vs '20'.
+    Renamed(String),
+    /// Its header names contigs, but no spelling of this one.
+    Absent,
+}
+
+/// What spike does with a region the gVCF gave no SNPs for.
+#[derive(Clone, Copy)]
+enum NextStep {
+    /// The gVCF was read and had none here: the pileup calls them instead.
+    Pileup,
+    /// The gVCF could not be read, so the region gets no copies at all.
+    SkipLoh,
+}
+
+impl NextStep {
+    fn describe(self) -> &'static str {
+        match self {
+            NextStep::Pileup => "Falling back to pileup-based het SNP detection.",
+            NextStep::SkipLoh => {
+                "LOH is skipped for this region: original reads are suppressed at random."
+            }
+        }
+    }
+}
+
+/// The `##contig=<ID=...>` names in a VCF header, plain or bgzipped.
+///
+/// Only the header is decompressed: the loop stops at the first record.
+/// Best-effort: a file that cannot be read here reads as no contigs, and the
+/// read below reports the failure.
+fn header_contigs(gvcf_path: &str) -> Vec<String> {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(gvcf_path) else {
+        return Vec::new();
+    };
+    let reader: Box<dyn BufRead> = if gvcf_path.ends_with(".gz") {
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+    } else {
+        Box::new(std::io::BufReader::new(file))
+    };
+
+    let mut contigs = Vec::new();
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        if !line.starts_with('#') {
+            break;
+        }
+        if let Some(fields) = line.strip_prefix("##contig=<") {
+            if let Some(id) = fields.split(',').next().and_then(|f| f.strip_prefix("ID=")) {
+                contigs.push(id.trim_end_matches('>').to_string());
+            }
+        }
+    }
+    contigs
+}
+
+/// The same chromosome under the other naming convention: 'chr20' <-> '20'.
+fn other_spelling(chrom: &str) -> String {
+    match chrom.strip_prefix("chr") {
+        Some(bare) => bare.to_string(),
+        None => format!("chr{}", chrom),
+    }
+}
+
+/// Compare `chrom` against the names the gVCF uses. `seen_other` is a
+/// chromosome seen in its records, for a header that lists no contigs.
+fn match_contig(contigs: &[String], seen_other: Option<&str>, chrom: &str) -> ContigMatch {
+    let other = other_spelling(chrom);
+    if contigs.is_empty() {
+        // Nothing to compare against. A record on another chromosome only
+        // tells us something when it is this chromosome, spelled the other way.
+        return match seen_other {
+            Some(seen) if seen == other => ContigMatch::Renamed(seen.to_string()),
+            _ => ContigMatch::Match,
+        };
+    }
+    if contigs.iter().any(|c| c == chrom) {
+        ContigMatch::Match
+    } else if contigs.contains(&other) {
+        ContigMatch::Renamed(other)
+    } else {
+        ContigMatch::Absent
+    }
+}
+
+/// The warning for a gVCF that cannot hold SNPs for `chrom`, or None when
+/// its names are fine. `next` says what spike does with the region instead.
+fn contig_warning(
+    matched: &ContigMatch,
+    gvcf_path: &str,
+    chrom: &str,
+    next: NextStep,
+) -> Option<String> {
+    match matched {
+        ContigMatch::Match => None,
+        ContigMatch::Renamed(other) => Some(format!(
+            "gVCF '{}' names chromosome '{}', not '{}': its chromosome naming does not \
+             match the one asked for (e.g. 'chr1' vs '1'), so it has no SNPs here. {}",
+            gvcf_path,
+            other,
+            chrom,
+            next.describe(),
+        )),
+        ContigMatch::Absent => Some(format!(
+            "gVCF '{}' has no chromosome '{}', so it has no SNPs here. {}",
+            gvcf_path,
+            chrom,
+            next.describe(),
+        )),
+    }
+}
+
 /// Load het and hom-alt SNPs from a VCF/gVCF file.
 ///
 /// For `.vcf.gz` files, uses `bcftools view -H -r region` for efficient
@@ -238,6 +356,11 @@ fn load_snps_from_gvcf(
     let sample_col: usize = 9;
     let mut snps = RegionSnps::default();
     let mut first_other_chrom: Option<String> = None;
+    // The gVCF's own names tell whether it can hold SNPs here at all. An
+    // empty result cannot: `bcftools view -r chr20:...` on a file naming
+    // that chromosome '20' prints nothing and exits 0, exactly like a
+    // region that genuinely has no SNPs.
+    let contigs = header_contigs(gvcf_path);
 
     if gvcf_path.ends_with(".gz") {
         // Use bcftools for indexed access to bgzipped VCF.
@@ -248,9 +371,15 @@ fn load_snps_from_gvcf(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .context("failed to run bcftools for gVCF reading (is bcftools in PATH?)")?;
+            .with_context(|| {
+                format!(
+                    "failed to run bcftools for gVCF reading (is bcftools in PATH?). {}",
+                    NextStep::SkipLoh.describe()
+                )
+            })?;
 
         let stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
         let reader = std::io::BufReader::new(stdout);
         use std::io::BufRead;
         for line_result in reader.lines() {
@@ -266,9 +395,30 @@ fn load_snps_from_gvcf(
             );
         }
 
+        // bcftools says why it failed (no index, not bgzipped): pass it on.
+        let mut bcftools_error = String::new();
+        use std::io::Read;
+        let _ = stderr.read_to_string(&mut bcftools_error);
+
         let status = child.wait().context("failed to wait for bcftools")?;
         if !status.success() {
-            anyhow::bail!("bcftools exited with status {}", status);
+            // A failed read is not an empty region: the names may be wrong
+            // as well, and neither is repaired by the pileup pass below.
+            if let Some(warning) = contig_warning(
+                &match_contig(&contigs, None, chrom),
+                gvcf_path,
+                chrom,
+                NextStep::SkipLoh,
+            ) {
+                log::warn!("{}", warning);
+            }
+            anyhow::bail!(
+                "bcftools exited with status {} on gVCF '{}': {}. {}",
+                status,
+                gvcf_path,
+                bcftools_error.trim(),
+                NextStep::SkipLoh.describe(),
+            );
         }
     } else {
         // Plain text VCF: stream line-by-line to avoid loading entire file into memory.
@@ -291,17 +441,12 @@ fn load_snps_from_gvcf(
         }
     }
 
+    // Warn only about a chromosome the gVCF cannot name, never about a
+    // region that simply has no SNPs in it.
     if snps.het.is_empty() && snps.hom_alt.is_empty() {
-        if let Some(other) = &first_other_chrom {
-            log::warn!(
-                "gVCF '{}': no records found for chromosome '{}', \
-                 but found records for '{}'. \
-                 Chromosome names may not match (e.g. 'chr1' vs '1'). \
-                 Falling back to pileup-based het SNP detection.",
-                gvcf_path,
-                chrom,
-                other,
-            );
+        let matched = match_contig(&contigs, first_other_chrom.as_deref(), chrom);
+        if let Some(warning) = contig_warning(&matched, gvcf_path, chrom, NextStep::Pileup) {
+            log::warn!("{}", warning);
         }
     }
 
@@ -1073,6 +1218,203 @@ mod tests {
         snps.fold_spanning_deletions();
         assert_eq!(snps.het.iter().map(|s| s.pos).collect::<Vec<_>>(), vec![200]);
         assert_eq!(snps.hom_alt, [(100, b'C'), (300, b'T')].into());
+    }
+
+    /// Collects `log::warn!` messages so a test can assert which branch a
+    /// call took. The logger is global, so tests filter by their own path.
+    mod capture {
+        use std::sync::{Mutex, OnceLock};
+
+        static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+
+        struct Collector;
+
+        impl log::Log for Collector {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.level() <= log::Level::Warn
+            }
+            fn log(&self, record: &log::Record) {
+                if self.enabled(record.metadata()) {
+                    LINES.lock().unwrap().push(record.args().to_string());
+                }
+            }
+            fn flush(&self) {}
+        }
+
+        /// Install the collector once; every test may call this.
+        pub fn install() {
+            INSTALLED.get_or_init(|| {
+                let _ = log::set_boxed_logger(Box::new(Collector));
+                log::set_max_level(log::LevelFilter::Warn);
+            });
+        }
+
+        /// The warnings logged so far that mention `needle`.
+        pub fn warnings_matching(needle: &str) -> Vec<String> {
+            LINES.lock().unwrap().iter().filter(|l| l.contains(needle)).cloned().collect()
+        }
+    }
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("spike_test_{}_{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Gzipped, not bgzipped, and unindexed: bcftools cannot query it.
+    fn write_gzip(path: &std::path::Path, text: &str) {
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(path).unwrap(),
+            flate2::Compression::default(),
+        );
+        std::io::Write::write_all(&mut encoder, text.as_bytes()).unwrap();
+        encoder.finish().unwrap();
+    }
+
+    #[test]
+    fn test_a_gvcf_naming_the_chromosome_warns_about_nothing() {
+        // A region with no SNPs in it is normal: only the names decide.
+        let contigs = ["chr20".to_string(), "chr21".to_string()];
+        assert_eq!(match_contig(&contigs, Some("chr21"), "chr20"), ContigMatch::Match);
+        assert_eq!(contig_warning(&ContigMatch::Match, "g.vcf", "chr20", NextStep::Pileup), None);
+    }
+
+    #[test]
+    fn test_the_other_naming_convention_is_read_from_the_header() {
+        let contigs = ["19".to_string(), "20".to_string()];
+        assert_eq!(match_contig(&contigs, None, "chr20"), ContigMatch::Renamed("20".to_string()));
+        let warning =
+            contig_warning(&ContigMatch::Renamed("20".into()), "g.vcf.gz", "chr20", NextStep::Pileup)
+                .unwrap();
+        assert!(warning.contains("names chromosome '20', not 'chr20'"), "{}", warning);
+        assert!(warning.contains("Falling back to pileup"), "{}", warning);
+    }
+
+    #[test]
+    fn test_a_chromosome_the_gvcf_lacks_is_told_apart_from_a_renamed_one() {
+        let contigs = ["chr20".to_string()];
+        assert_eq!(match_contig(&contigs, None, "chrM"), ContigMatch::Absent);
+        let warning =
+            contig_warning(&ContigMatch::Absent, "g.vcf", "chrM", NextStep::Pileup).unwrap();
+        assert!(warning.contains("has no chromosome 'chrM'"), "{}", warning);
+    }
+
+    #[test]
+    fn test_a_header_without_contigs_warns_only_for_the_other_spelling() {
+        // Nothing to compare against: a record on another chromosome says
+        // nothing unless it is this chromosome under the other spelling.
+        assert_eq!(match_contig(&[], Some("chr21"), "chr20"), ContigMatch::Match);
+        assert_eq!(match_contig(&[], Some("20"), "chr20"), ContigMatch::Renamed("20".to_string()));
+    }
+
+    #[test]
+    fn test_a_failed_gvcf_read_says_loh_is_skipped_not_pileup() {
+        let warning = contig_warning(
+            &ContigMatch::Renamed("20".into()),
+            "g.vcf.gz",
+            "chr20",
+            NextStep::SkipLoh,
+        )
+        .unwrap();
+        assert!(warning.contains("LOH is skipped for this region"), "{}", warning);
+        assert!(!warning.contains("pileup"), "{}", warning);
+    }
+
+    #[test]
+    fn test_contigs_are_read_from_plain_and_gzipped_headers() {
+        // The .vcf.gz path must not need a bcftools query to learn the
+        // names: a region query on a renamed file returns nothing, exit 0.
+        let dir = test_dir("loh_contigs");
+        let header = "##fileformat=VCFv4.2\n\
+                      ##contig=<ID=20,length=64444167>\n\
+                      ##contig=<ID=21,length=46709983>\n\
+                      #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG002\n\
+                      20\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1\n";
+
+        let plain = dir.join("plain.vcf");
+        std::fs::write(&plain, header).unwrap();
+        assert_eq!(header_contigs(plain.to_str().unwrap()), ["20", "21"]);
+
+        let gzipped = dir.join("gzipped.vcf.gz");
+        write_gzip(&gzipped, header);
+        assert_eq!(header_contigs(gzipped.to_str().unwrap()), ["20", "21"]);
+    }
+
+    #[test]
+    fn test_a_renamed_plain_gvcf_warns() {
+        capture::install();
+        let dir = test_dir("loh_warn_renamed");
+
+        // '20' naming: this file can hold no 'chr20' SNP at all.
+        let renamed = dir.join("renamed.vcf");
+        std::fs::write(
+            &renamed,
+            "##fileformat=VCFv4.2\n\
+             ##contig=<ID=20,length=64444167>\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG002\n\
+             20\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1\n",
+        )
+        .unwrap();
+        let snps = load_snps_from_gvcf(renamed.to_str().unwrap(), "chr20", 0, 1000).unwrap();
+        assert!(snps.het.is_empty());
+        let warnings = capture::warnings_matching(renamed.to_str().unwrap());
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(warnings[0].contains("names chromosome '20', not 'chr20'"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn test_an_empty_region_of_a_matching_gvcf_stays_silent() {
+        capture::install();
+        let dir = test_dir("loh_warn_matching");
+
+        // Matching names, no record in the region, records on another
+        // chromosome: an ordinary quiet region.
+        let matching = dir.join("matching.vcf");
+        std::fs::write(
+            &matching,
+            "##fileformat=VCFv4.2\n\
+             ##contig=<ID=chr20,length=64444167>\n\
+             ##contig=<ID=chr21,length=46709983>\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG002\n\
+             chr20\t5001\t.\tA\tG\t50\tPASS\t.\tGT\t0|1\n\
+             chr21\t101\t.\tA\tG\t50\tPASS\t.\tGT\t0|1\n",
+        )
+        .unwrap();
+        let snps = load_snps_from_gvcf(matching.to_str().unwrap(), "chr20", 0, 1000).unwrap();
+        assert!(snps.het.is_empty());
+        assert!(
+            capture::warnings_matching(matching.to_str().unwrap()).is_empty(),
+            "{:?}",
+            capture::warnings_matching(matching.to_str().unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_a_gvcf_read_that_fails_says_loh_is_skipped() {
+        // An error is not an empty result: there is no pileup pass after it.
+        let dir = test_dir("loh_read_error");
+        let path = dir.join("unindexed.vcf.gz");
+        write_gzip(&path, "##fileformat=VCFv4.2\n##contig=<ID=chr20,length=64444167>\n");
+
+        let err = load_snps_from_gvcf(path.to_str().unwrap(), "chr20", 0, 1000).unwrap_err();
+        let message = format!("{}", err);
+        assert!(message.contains("LOH is skipped for this region"), "{}", message);
+        assert!(!message.contains("Falling back to pileup"), "{}", message);
+    }
+
+    #[test]
+    fn test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup() {
+        capture::install();
+        let dir = test_dir("loh_read_error_renamed");
+        let path = dir.join("renamed_unindexed.vcf.gz");
+        write_gzip(&path, "##fileformat=VCFv4.2\n##contig=<ID=20,length=64444167>\n");
+
+        load_snps_from_gvcf(path.to_str().unwrap(), "chr20", 0, 1000).unwrap_err();
+        let warnings = capture::warnings_matching(path.to_str().unwrap());
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(warnings[0].contains("names chromosome '20', not 'chr20'"), "{}", warnings[0]);
+        assert!(warnings[0].contains("LOH is skipped for this region"), "{}", warnings[0]);
     }
 
     #[test]
