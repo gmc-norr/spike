@@ -462,7 +462,7 @@ impl<'a> SynthReadGenerator<'a> {
     ///   in FASTQ orientation — the caller must not reverse it again. A
     ///   forward read is returned in reference orientation, which is the same
     ///   thing. Reads are `read_length` long either way.
-    pub fn generate_read(
+    fn generate_read(
         &self,
         chrom: &str,
         ref_start: u64,
@@ -496,9 +496,16 @@ impl<'a> SynthReadGenerator<'a> {
                 .to_ascii_uppercase()
         };
         // Put the template in sequencing order: a reverse-strand read runs
-        // right to left along the reference, complemented.
+        // right to left along the reference, complemented. `fetch_sequence`
+        // clamps to the contig length, so a fetch that runs off the contig
+        // end comes back short at its high end — which for a reverse read is
+        // its 5' start. Represent that shortfall as `N` there, not as a
+        // window shifted onto real bases from past the read's other end.
         let template: Vec<u8> = if is_reverse {
-            (0..ref_seq.len()).rev().map(|i| complement(base_at(i))).collect()
+            let missing = (fetch_end - fetch_start).saturating_sub(ref_seq.len() as u64) as usize;
+            std::iter::repeat_n(b'N', missing)
+                .chain((0..ref_seq.len()).rev().map(|i| complement(base_at(i))))
+                .collect()
         } else {
             (0..ref_seq.len()).map(base_at).collect()
         };
@@ -678,7 +685,7 @@ impl<'a> SynthReadGenerator<'a> {
     /// `is_reverse`: when true the read comes off the reverse strand — `seq`
     ///   is reverse-complemented first and the read is returned in FASTQ
     ///   orientation (see `generate_read` docs).
-    pub fn generate_read_from_seq(
+    fn generate_read_from_seq(
         &self,
         seq: &[u8],
         read_num: u8,
@@ -1436,7 +1443,10 @@ mod tests {
         // R2 forward off the left end.
         let rl = 150usize;
         let seq = scrambled_seq(50_000, 7);
-        let gen = mock_gen_over(seq.clone(), rl, 93, 93); // Q93: no sequencing errors
+        // Q93: no sequencing errors, but indel_error_rate > 0 turns on slack
+        // (INDEL_SLACK past the 3' end) so the assertions below actually
+        // depend on the slack landing on the correct side of the read.
+        let gen = mock_gen_over_with_indels(seq.clone(), rl, 93, 93, 1.0);
         let no_alleles = HashMap::new();
         let mut rng = StdRng::seed_from_u64(2);
         let (mut fwd, mut rev) = (0usize, 0usize);
@@ -1526,8 +1536,10 @@ mod tests {
             }),
             hap_offset: 0,
         }]);
-        // This path reads the haplotype, not the reference; Q93: no errors.
-        let gen = mock_gen_over(vec![b'A'; 1000], rl, 93, 93);
+        // This path reads the haplotype, not the reference; Q93: no
+        // sequencing errors, but indel_error_rate > 0 turns on slack so the
+        // assertions below depend on it landing on the correct side.
+        let gen = mock_gen_over_with_indels(vec![b'A'; 1000], rl, 93, 93, 1.0);
         let mut rng = StdRng::seed_from_u64(4);
         let (mut fwd, mut rev) = (0usize, 0usize);
         for i in 0..100u64 {
@@ -1611,6 +1623,71 @@ mod tests {
             }
         }
         assert_eq!(padded, 0, "{} of 400 synthetic reads carry padded `N` bases", padded);
+    }
+
+    #[test]
+    fn test_reverse_read_n_pads_past_the_contig_end_instead_of_shifting() {
+        // SharedReference::fetch_sequence clamps `fetch_end` to the contig
+        // length, so a reverse read whose claimed span overhangs the contig
+        // end gets back a window shorter than requested. Reversing that
+        // clamped-short window (instead of clamping the intended window
+        // *before* reversing) put the contig's real last bases at the read's
+        // 5' end — a full-length, N-free read silently shifted left of its
+        // claimed coordinates, while ref_end still points past the contig.
+        let rl = 150usize;
+        let ref_start = 1000u64;
+        let overhang = 5usize; // within 1..INDEL_SLACK
+        let contig_len = ref_start as usize + rl - overhang;
+        let seq = scrambled_seq(contig_len, 23);
+        let gen = mock_gen_over_with_indels(seq.clone(), rl, 93, 93, 1.0); // Q93, slack on
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(17);
+
+        let (read_seq, _qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, &mut rng);
+
+        assert_eq!(read_seq.len(), rl, "a synthetic read came out short");
+        let n_count = read_seq.iter().filter(|&&b| b == b'N').count();
+        assert_eq!(
+            n_count, overhang,
+            "expected {} N bases for the part of the read past the contig end, got {}",
+            overhang, n_count
+        );
+        assert!(
+            read_seq[..overhang].iter().all(|&b| b == b'N'),
+            "the missing bases belong at the read's 5' start (past the contig end), not scattered: {:?}",
+            read_seq
+        );
+
+        // The rest of the read must be the real revcomp of the reference span
+        // actually covered, not bases pulled from a window shifted to make up
+        // the length.
+        let mut expected_rc = seq[ref_start as usize..contig_len].to_vec();
+        reverse_complement(&mut expected_rc);
+        assert_eq!(
+            &read_seq[overhang..],
+            expected_rc.as_slice(),
+            "real bases must come from the actually-covered span, not a shifted window"
+        );
+    }
+
+    #[test]
+    fn test_reverse_read_from_seq_complements_lowercase_before_uppercasing() {
+        // A reference FASTA's lowercase bases mark soft-masked repeats, a
+        // legitimate input. `generate_read_from_seq` must complement first
+        // and uppercase after (like `generate_read`), not the other way
+        // round: complementing an un-uppercased 'a' the wrong way round
+        // would silently turn it into 'A' instead of 'T'.
+        let rl = 10usize;
+        let gen = mock_gen_over(vec![b'A'; 1000], rl, 93, 93); // Q93: no errors
+        let mut rng = StdRng::seed_from_u64(99);
+        let seq = b"acgtacgtac".to_vec();
+
+        let (read_seq, _qual) = gen.generate_read_from_seq(&seq, 1, true, &mut rng);
+
+        // Hand-computed revcomp (not via `reverse_complement`, so the test
+        // doesn't just check the function against itself): "acgtacgtac"
+        // reversed is "catgcatgca", complemented is "GTACGTACGT".
+        assert_eq!(read_seq, b"GTACGTACGT", "lowercase input must be complemented, not passed through unchanged");
     }
 
     #[test]

@@ -476,6 +476,65 @@ is R1 half the time.
   the donor reads it was learned from falls 0.0555 → 0.0501 Q (R1) and
   0.0700 → 0.0651 Q (R2).
 
+**Fix pass 1** (review of `e69af5d` itself). Two real issues in the fix, plus
+one claimed issue that did not reproduce:
+
+- **The slack side was pinned by no test.** `generate_read` and
+  `generate_haplotype_read_pair` put `INDEL_SLACK` on the correct side (past
+  the 3' end — left for a reverse read), but every test that could tell used
+  `indel_error_rate = 0.0`, so `slack == 0` on both the correct and a
+  wrong-side build and the assertions couldn't distinguish them.
+  `test_reversed_read_pair_covers_the_same_fragment` and
+  `test_reversed_haplotype_pair_covers_the_same_fragment` now use
+  `mock_gen_over_with_indels(..., 93, 93, 1.0)` (Q93: still no sequencing
+  errors, but slack is on). **Measured**: flipping the slack side in both
+  `generate_read` (`fetch_start`/`fetch_end`) and
+  `generate_haplotype_read_pair` (`right_seq`'s start) now fails both tests
+  ("F1R2 pair at 1000 has the wrong R2", "R1 at hap 100 matches neither end of
+  the fragment"); reverted, both pass again.
+- **Contig-end reverse read was shifted instead of `N`-padded** —
+  `synth.rs:504-511`. `SharedReference::fetch_sequence` clamps `fetch_end` to
+  the contig length, and the reverse template was built by reversing that
+  clamped-short window, so its 5' end landed on the contig's last real base
+  instead of on the claimed `ref_start + rl - 1` — a full-length, `N`-free
+  read silently shifted left of its claimed span, while `ref_end` still
+  pointed past the contig. This is a regression from the pre-`e69af5d` code,
+  which N-padded the same case at the correct coordinates. **Fixed**: the
+  is-reverse branch now computes how many bases the clamp dropped and
+  prepends that many `N`s to the template before reversing, so the shortfall
+  lands at the read's 5' start (the same "N in template" path already used
+  for real reference `N`s), not a shifted window of real bases. **Measured**
+  (new test `test_reverse_read_n_pads_past_the_contig_end_instead_of_shifting`,
+  rl=150, slack 10, a 5 bp contig-end overhang): before, 0 `N`s and the read
+  equals `revcomp(ref[contig_len-150..contig_len])`; after, exactly 5 `N`s at
+  the read's start and the remaining 145 bases equal
+  `revcomp(ref[ref_start..contig_len])`. Mutation check (drop the `N`-prepend):
+  test fails with "expected 5 N bases ... got 0"; restored, passes.
+- **Claimed: lowercase survives uncomplemented in `generate_read_from_seq`.**
+  Did not reproduce. The claim was that `extract::reverse_complement` relies
+  on `complement_base` (whose fallback arm is `other => other`, so it would
+  leave lowercase alone), but `reverse_complement` has its own independent
+  match arms that already handle `a/c/g/t` (`extract.rs:820-833`) — it never
+  calls `complement_base`. A hand-verified test (revcomp of `"acgtacgtac"` is
+  the literal `"GTACGTACGT"`, not derived by calling `reverse_complement`
+  again) passes on the unmodified code; mutating `reverse_complement` to drop
+  its lowercase arms — the literal bug as described — turns it red
+  (`left: [67, 65, 84, ...]` i.e. `CATG...` vs expected `GTAC...`), then green
+  again once restored. No code change made for this one; kept the test as a
+  regression guard. `generate_read`'s own is-reverse path was never at risk —
+  it uppercases before calling `complement()`.
+- **Tightened the contract**: `generate_read` and `generate_read_from_seq` had
+  no caller outside `synth.rs` (checked with `grep -rn` across `src/`), so
+  both are now private (`fn`, not `pub fn`) instead of relying on a doc
+  comment to keep a caller from reversing the reverse mate a second time.
+- Determinism (M7) still holds: two `--seed 1` runs of
+  `dup:chr20:38423496-38427196 --indel-error-rate 0.05` (the slack path) on
+  the real HG002 chr20 slice give byte-identical `R1.fq.gz`, `R2.fq.gz`,
+  `truth.vcf` and `replaced_reads.txt`.
+- Full suite: 241 passed, 0 failed (was 239; +2 tests — the third new test
+  passed against unmodified code, so it added coverage without pinning a
+  fix). Clippy unchanged: 13 (bin) / 14 (test target, 12 duplicates).
+
 ## Uncommitted changes
 
 | File | Change | Assessment |
