@@ -252,6 +252,8 @@ The `--reference` FASTA is required for CRAM decoding (it is also required for h
 
 Every region query on a CRAM — read extraction, the LOH pileup that phases heterozygous SNPs, and the `spike validate` checks — seeks only the containers that can overlap the requested region. noodles otherwise decodes every container on the chromosome: on a 10 Mb chr20 CRAM, a 30 kb deletion took 50.4 s and now takes 3.1 s, against 1.9 s from the equivalent BAM.
 
+A CRAM container can hold several contigs at once (`samtools view -C --output-fmt-option multi_seq_per_slice=1` writes them that way, and htslib does it by itself on files with many short contigs). Such a container is decoded as a whole, and noodles then returns every record in it whose *position* falls in the queried window, whatever contig the record is on. Read extraction now drops those foreign records, so only the queried contig's reads become donor material: on a chr20+chr21 CRAM of that shape, a 30 kb chr20 window yielded 7875 read pairs before and yields 4132 now — the same 4132 the identical reads yield from a chr20-only CRAM.
+
 ### The sample's SNPs from a gVCF
 
 For more accurate haplotype-aware simulation, provide a pre-called VCF (e.g., from DeepVariant) with SNP genotypes:

@@ -282,6 +282,7 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 - **Fix:** filter index entries by position and seek manually, or upgrade noodles after checking the fix.
 - **Fixed**, and measured: the CRAM reader is now built with a `.crai` pruned to the slices whose `alignment_start`/`alignment_span` can overlap the query interval, so noodles seeks only to containers the region needs; per-record filtering is untouched. Same 30 kb window (`del:chr20:38412500-38422500`, `--seed 1`) on a 10 Mb chr20 CRAM of 338 slices: extraction 42.79 s → 0.47 s (91x), against 0.04 s from the equivalent BAM and 0.016 s for `samtools view -c`; whole run 91.0 s → 49.4 s. Output is unchanged — R1/R2 FASTQ and truth VCF are byte-identical to the slow path on four windows, including two straddling a slice boundary and the first and last slices of the file. Two notes on the entry above: the "~300x" ratio came from a 0.12 s BAM floor, and measured here the CRAM/BAM ratio was 42.79/0.040 ≈ 1070x before and ≈12x after; and the 49 s that remain are two LOH pileup queries (`loh.rs:507, 910`), which open CRAM the same way and are outside M15's scope (tracked and fixed as N3).
 - Caveat on that equality proof: it is **single-contig only** — all 338 slices of the test CRAM are chr20. On a multi-contig CRAM the output *can* change, because pruning decodes fewer foreign containers and so leaks fewer of their reads (L2). That direction is an improvement, but it is unproven here.
+- **That last sentence is now measured, and it was wrong** (see L2). Pruning changes the leak by nothing at all: htslib writes one `.crai` line per contig for a multi-reference container, all at the same offset, so the queried contig's own entry survives pruning and drags the whole container in with it. Real chr20+chr21 CRAM (`multi_seq_per_slice=1`), `del:chr20:38412500-38422500 --seed 1`: 7875 pairs extracted at `8d1beba`, **7875** at `3a782cb` with pruning in place, 4132 after L2.
 
 ### M16 · LOH pileup memory ~1 GB per Mb
 `loh.rs:580-583` stores one `(u64, u8)` per aligned base per read.
@@ -420,7 +421,7 @@ defect in the `spike validate` subcommand.
 | ID | Problem | Where | Fix |
 | --- | --- | --- | --- |
 | L1 | **Fixed.** Indel error model pads deletions with `N` (Q2): 0.69% of R1 end in N, 1.01% of R2 start with N at rate 0.05 | `synth.rs:697-700, 729-730` | Pass `read_length + 10` bases; generate R2 in sequencing order |
-| L2 | CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs |
+| L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs |
 | L3 | bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" | `reference.rs:33-35` | Use `fasta::io::indexed_reader::Builder` |
 | L4 | Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`) | `fastq.rs:47-48` | `r1_gz.finish()?.flush()?` |
 | L5 | Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103`; callers `simulate.rs:413`, `synth.rs:534` | Guard min ≤ max |
@@ -534,6 +535,54 @@ one claimed issue that did not reproduce:
 - Full suite: 241 passed, 0 failed (was 239; +2 tests — the third new test
   passed against unmodified code, so it added coverage without pinning a
   fix). Clippy unchanged: 13 (bin) / 14 (test target, 12 duplicates).
+
+### L2 · A multi-contig CRAM container leaks its other contigs' reads
+
+noodles-cram 0.74's `Query` filters returned records on **coordinates only** —
+it never compares a record's reference id with the queried one
+(`noodles-cram-0.74.0/src/io/reader/query.rs`, `Iterator::next`). A container
+written with several contigs in one slice (htslib's `multi_seq_per_slice=1`) is
+therefore decoded whole, and every record in it whose position happens to fall
+in the queried window is handed to spike. `extract_read_pairs_cram` took them,
+paired them and labelled the pairs with the queried contig's name, so another
+chromosome's reads entered the donor pool as if they were the event's own
+background. noodles-**bam** has no such hole: its `Query` compares
+`id == reference_sequence_id` before the interval
+(`noodles-bam-0.73.0/src/io/reader/query.rs:72`), which is why only the CRAM
+path needed a fix. Both CRAM passes now skip a record whose reference id or
+mate reference id is not the queried contig's.
+
+- **Measured, synthetic** (the review's own shape: a 2-contig CRAM built by
+  `samtools view -C --output-fmt-option multi_seq_per_slice=1`, 40 chrA pairs +
+  5 chrB pairs at chrA-overlapping coordinates, one container, two `.crai`
+  lines at the same offset): **45 pairs extracted → 40**, i.e. exactly the 5
+  chrB pairs the row names. At `--seed 2` three of those chrB pairs were
+  written into the chrA spike-in FASTQ as kept originals (**3 → 0**); at
+  `--seed 1` all five were suppressed instead, which is worse in a different
+  way — a suppressed foreign read is donor material spike then re-tiles.
+- **Measured, real reads**: HG002 chr20:38.40–38.43 Mb + chr21:38.40–38.43 Mb
+  merged and written as one multi-reference CRAM,
+  `del:chr20:38412500-38422500 --region chr20:38405000-38425000 --seed 1`:
+  **7875 pairs → 4132**, i.e. 3743 chr21 pairs removed. 4132 is exactly what
+  the same window yields from a **chr20-only** CRAM of the same reads, before
+  and after the fix — so the filter removes the foreign reads and nothing else.
+- **Task 8's index pruning (M15) does not help here**, measured rather than
+  assumed: base `8d1beba` 7875, branch HEAD `3a782cb` (pruning in place) 7875.
+  The queried contig's own `.crai` entry points at the shared container, so
+  pruning keeps it and the container's other contigs come along. The M15 entry
+  above is corrected accordingly.
+- Scope note: `open_cram_reader_for_region` has five more callers that iterate
+  a CRAM `Query` the same way and have the same hole — `loh.rs:656`
+  (`count_alleles_cram`), `loh.rs:1056`, and `validate.rs:712, 823, 948`. On a
+  multi-contig CRAM a foreign contig's bases would enter the LOH pileup and
+  `validate`'s depth/pileup checks. Left alone here: L2's row names `extract.rs`
+  only, and each of those deserves its own test. Not a regression — they behave
+  today exactly as they did at `8d1beba`.
+- The pass-2 guard is defence in depth and is **not** independently observable:
+  pass 2 only completes a pair whose other mate pass 1 already stored, and the
+  pass-1 guard keeps every foreign record out of those maps. Measured —
+  removing only the pass-2 guard leaves the new test green; removing the pass-1
+  guard, or the comparison inside `record_is_on_queried_reference`, turns it red.
 
 ## Uncommitted changes
 
