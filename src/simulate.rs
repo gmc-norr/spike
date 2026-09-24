@@ -382,13 +382,21 @@ fn compute_tiling_count(
         return n.max(2); // at least 2 chimeric reads
     }
 
-    // Use reference-mapped length (excludes novel insertion sequence).
-    // Fragment starts are uniform over [0, L - f], so interior depth is
-    // n * f / (L - f); matching the suppressed v * coverage needs
-    // n = coverage * v * (L - f) / f.
-    let ref_len = haplotype.ref_mapped_len();
-    let len = if ref_len > 0 { ref_len } else { haplotype.total_len } as f64;
-    let effective_len = (len - mean_frag).max(0.0);
+    // Fragment starts are uniform over the starts whose fragment overlaps
+    // reference sequence: [0, L - f] minus starts lying wholly inside inserted
+    // sequence (tiling redraws those). Interior depth is then n * f / starts;
+    // matching the suppressed v * coverage needs n = coverage * v * starts / f.
+    let novel_only: f64 = haplotype
+        .segments
+        .iter()
+        .filter(|seg| seg.origin.is_none())
+        .map(|seg| (seg.sequence.len() as f64 - mean_frag).max(0.0))
+        .sum();
+    let effective_len = if haplotype.ref_mapped_len() > 0 {
+        (haplotype.total_len as f64 - mean_frag - novel_only).max(0.0)
+    } else {
+        0.0
+    };
 
     let n = ((coverage * vaf * effective_len) / mean_frag).round() as usize;
     n.max(2) // at least 2 chimeric reads
@@ -675,9 +683,19 @@ mod tests {
         assert_eq!(hap.total_len, 4500);
         assert_eq!(hap.ref_mapped_len(), 4000);
 
+        // Fragment starts that overlap reference: (4500 - 400) minus the
+        // 500 - 400 = 100 starts that would lie wholly in the insertion.
+        // n = 30 * 0.5 * 4000 / 400 = 150.
         let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
-        // Expected: 30 * 0.5 * (4000 - 400) / 400 = 135.
-        assert_eq!(count, 135);
+        assert_eq!(count, 150);
+
+        // 1000 bp insertion: (5000 - 400) - (1000 - 400) = 4000 starts -> 150.
+        let long = make_haplotype(vec![
+            ref_segment(0, 2000),
+            novel_segment(1000),
+            ref_segment(2000, 2000),
+        ]);
+        assert_eq!(compute_tiling_count(&long, 30.0, 0.5, 400.0, false), 150);
     }
 
     #[test]
@@ -1445,6 +1463,47 @@ mod tests {
 
         // n = cov * v * (L - f) / f = 20 * 0.2 * (4000 - 220) / 220 = 68.7 -> 69
         assert_eq!(out.chimeric_pairs.len(), 69);
+    }
+
+    #[test]
+    fn test_long_insertion_yields_reads_carrying_inserted_sequence() {
+        // ref (A) [0,2000) | 1000 bp insertion (T) | ref (A) [2000,4000).
+        let mut hap = make_haplotype(vec![
+            ref_segment(0, 2000),
+            novel_segment(1000),
+            ref_segment(2000, 2000),
+        ]);
+        let pool = make_covering_pool(0, 6000, 1200); // 400 bp every 5 bp: cov 80
+        let event = SimEvent::Insertion {
+            chrom: "chr1".to_string(),
+            pos: 2000,
+            ins_seq: Some(vec![b'T'; 1000]),
+            ins_len: 1000,
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.2),
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+
+        let out = simulate_event(
+            1, &event, &pool, &mut hap, &make_config(), &mut mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        // With 400 bp fragments, 780 of the 4000 allowed starts put >= 10
+        // inserted bases in a read (~19.5%). Before the fix it was 0.
+        // R2 is reverse-complemented, so inserted T reads as A there.
+        let carries_insert = |p: &&ReadPair| {
+            p.seq1.iter().filter(|&&b| b == b'T').count() >= 10
+                || p.seq2.iter().filter(|&&b| b == b'A').count() >= 10
+        };
+        let n = out.chimeric_pairs.len();
+        let with_insert = out.chimeric_pairs.iter().filter(carries_insert).count();
+        assert!(
+            with_insert as f64 > 0.10 * n as f64,
+            "only {} of {} tiled pairs carry inserted sequence",
+            with_insert,
+            n
+        );
     }
 
     // ---------------------------------------------------------------

@@ -478,6 +478,26 @@ impl VariantHaplotype {
         None
     }
 
+    /// Like [`hap_to_ref`](Self::hap_to_ref), but a position in novel
+    /// (inserted) sequence maps to the nearest reference-mapped base.
+    /// Returns None only when no segment maps to the reference.
+    pub fn hap_to_ref_nearest(&self, hap_pos: u64) -> Option<(String, u64)> {
+        if let Some(mapped) = self.hap_to_ref(hap_pos) {
+            return Some(mapped);
+        }
+        let nearest = self
+            .segments
+            .iter()
+            .filter(|seg| seg.origin.is_some() && !seg.sequence.is_empty())
+            .map(|seg| {
+                let last = seg.hap_offset + seg.sequence.len() as u64 - 1;
+                let pos = hap_pos.clamp(seg.hap_offset, last);
+                (pos.abs_diff(hap_pos), pos)
+            })
+            .min()?;
+        self.hap_to_ref(nearest.1)
+    }
+
     /// Get the breakpoint positions in the haplotype (segment boundaries).
     ///
     /// Returns the haplotype offsets where one segment ends and the next begins.

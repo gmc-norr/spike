@@ -741,9 +741,11 @@ impl<'a> SynthReadGenerator<'a> {
         reverse_complement(&mut seq2);
         qual2.reverse();
 
-        // Map haplotype positions back to reference coordinates.
-        let (chrom, r1_ref) = haplotype.hap_to_ref(hap_frag_start)?;
-        let (_, r2_ref) = haplotype.hap_to_ref(r2_hap_start + rl - 1)?;
+        // Map haplotype positions back to reference coordinates. An end inside
+        // inserted sequence takes the nearest reference base: such pairs are
+        // the one-end-anchored evidence for the insertion.
+        let (chrom, r1_ref) = haplotype.hap_to_ref_nearest(hap_frag_start)?;
+        let (_, r2_ref) = haplotype.hap_to_ref_nearest(r2_hap_start + rl - 1)?;
 
         // Normalize: ensure ref_start <= ref_end. For reads in inverted
         // segments, R1 maps to a higher ref position than R2 (reversed mapping).
@@ -1293,5 +1295,35 @@ mod tests {
             result.is_some(),
             "boundary-crossing reads should be allowed for split-read evidence"
         );
+    }
+
+    #[test]
+    fn test_hap_read_pair_with_read1_inside_insertion_is_kept() {
+        // ref [0,2000) | 1000 bp insertion | ref [2000,4000).
+        let seg = |sequence: Vec<u8>, origin: Option<(u64, u64)>| HaplotypeSegment {
+            sequence,
+            origin: origin.map(|(ref_start, ref_end)| SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start,
+                ref_end,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        };
+        let hap = VariantHaplotype::from_segments(vec![
+            seg(vec![b'A'; 2000], Some((0, 2000))),
+            seg(vec![b'T'; 1000], None),
+            seg(vec![b'A'; 2000], Some((2000, 4000))),
+        ]);
+        let (_ref, gen) = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // R1 = hap [2800,2950) inside the insertion; R2 ends at hap 3199 = ref 2199.
+        let pair = gen
+            .generate_haplotype_read_pair(&hap, 2800, 400, "ins", &mut rng)
+            .expect("a pair with one read in the insertion is real evidence");
+
+        // R1's start maps to the nearest reference base: hap 3000 = ref 2000.
+        assert_eq!((pair.chrom.as_str(), pair.ref_start, pair.ref_end), ("chr1", 2000, 2200));
     }
 }
