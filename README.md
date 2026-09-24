@@ -418,7 +418,7 @@ Options:
       --seed <SEED>                Random seed for reproducibility [default: 42]
   -t, --threads <N>                Threads for BAM reading [default: 4]
       --region <chr:start-end>     Read extraction region (overrides event +/- flank)
-      --flank <BP>                 Flanking region around events [default: 10000]
+      --flank <BP>                 Flanking region around events, at least 2000 [default: 10000]
       --min-mapq <MAPQ>            Minimum mapping quality [default: 20]
       --aligner <CMD>              Aligner for align script [default: bwa-mem2]
                                    Presets: bwa-mem2, minimap2, bowtie2, or custom

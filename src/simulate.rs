@@ -100,36 +100,22 @@ pub fn simulate_event(
             continue;
         }
 
-        // Check if read overlaps the haplotype reference footprint.
+        // Only pairs entirely inside the haplotype's reference footprint are
+        // replaced. Tiled fragments never extend past the haplotype ends, so
+        // suppressing pairs that stick out would leave a depth dip there.
         let in_haplotype = classify_pair_relation(pair, hap_ref_start, hap_ref_end);
-        if matches!(in_haplotype, PairRelation::Outside) {
-            // Entirely outside the haplotype range — keep, unaffected by the SV.
+        if !matches!(in_haplotype, PairRelation::Inside) {
             kept.push(pair.clone());
             continue;
         }
 
-        // Read is within (or overlapping) the haplotype range.
+        // Read is within the haplotype range.
         // For inside/overlapping the SV with LOH info, use haplotype-aware
         // suppression for classified reads, random fallback for unclassified.
         // For haplotype-flank reads (or without LOH), use random.
         let in_sv = classify_pair_relation(pair, sv_start, sv_end);
         let use_loh_for_this =
             use_loh && matches!(in_sv, PairRelation::Inside | PairRelation::Overlapping);
-
-        // For reads that only partially overlap the haplotype range, scale
-        // suppression probability by the overlap fraction. This prevents
-        // boundary artifacts where reads straddling the edge get fully
-        // suppressed despite most of their coverage being outside.
-        let overlap_frac = if matches!(in_haplotype, PairRelation::Overlapping) {
-            let overlap_start = pair.ref_start.max(hap_ref_start);
-            let overlap_end = pair.ref_end.min(hap_ref_end);
-            let frag_len = pair.ref_end.saturating_sub(pair.ref_start).max(1) as f64;
-            (overlap_end.saturating_sub(overlap_start)) as f64 / frag_len
-        } else {
-            1.0 // fully inside → full suppression rate
-        };
-
-        let effective_vaf = vaf * overlap_frac;
 
         if use_loh_for_this {
             if classified_set.contains(&pair.name) {
@@ -141,7 +127,7 @@ pub fn simulate_event(
                 // suppress 60% of loh_set reads (60% × 50% ≈ 30% total).
                 // For VAF>0.5 we also suppress some non-loh classified reads.
                 if loh_set.contains(&pair.name) {
-                    let hap_prob = (2.0 * vaf).min(1.0) * overlap_frac;
+                    let hap_prob = (2.0 * vaf).min(1.0);
                     if rng.gen::<f64>() < hap_prob {
                         suppressed.push(pair.name.clone());
                     } else {
@@ -149,7 +135,7 @@ pub fn simulate_event(
                     }
                 } else {
                     // Non-variant haplotype: only suppress when VAF > 0.5.
-                    let other_prob = (2.0 * vaf - 1.0).max(0.0) * overlap_frac;
+                    let other_prob = (2.0 * vaf - 1.0).max(0.0);
                     if rng.gen::<f64>() < other_prob {
                         suppressed.push(pair.name.clone());
                     } else {
@@ -158,14 +144,14 @@ pub fn simulate_event(
                 }
             } else {
                 // Read couldn't be classified (no het SNP overlap) —
-                // fall back to random suppression at effective VAF rate.
-                if rng.gen::<f64>() > effective_vaf {
+                // fall back to random suppression at the VAF rate.
+                if rng.gen::<f64>() > vaf {
                     kept.push(pair.clone());
                 } else {
                     suppressed.push(pair.name.clone());
                 }
             }
-        } else if rng.gen::<f64>() > effective_vaf {
+        } else if rng.gen::<f64>() > vaf {
             kept.push(pair.clone());
         } else {
             suppressed.push(pair.name.clone());
@@ -397,12 +383,12 @@ fn compute_tiling_count(
     }
 
     // Use reference-mapped length (excludes novel insertion sequence).
+    // Fragment starts are uniform over [0, L - f], so interior depth is
+    // n * f / (L - f); matching the suppressed v * coverage needs
+    // n = coverage * v * (L - f) / f.
     let ref_len = haplotype.ref_mapped_len();
-    let effective_len = if ref_len > 0 {
-        ref_len as f64
-    } else {
-        haplotype.total_len as f64
-    };
+    let len = if ref_len > 0 { ref_len } else { haplotype.total_len } as f64;
+    let effective_len = (len - mean_frag).max(0.0);
 
     let n = ((coverage * vaf * effective_len) / mean_frag).round() as usize;
     n.max(2) // at least 2 chimeric reads
@@ -431,7 +417,13 @@ fn tile_haplotype_reads(
         return Vec::new();
     }
 
-    let mean_frag = pool.frag_dist.mean.max(300.0);
+    // Use the library's real mean fragment length; fall back only when the
+    // pool gave none (e.g. no reads).
+    let mean_frag = if pool.frag_dist.mean.is_finite() && pool.frag_dist.mean > 0.0 {
+        pool.frag_dist.mean
+    } else {
+        300.0
+    };
     let read_length = synth_gen.read_length() as u64;
     let breakpoints = haplotype.breakpoints();
 
@@ -664,10 +656,11 @@ mod tests {
         assert_eq!(hap.total_len, 4000);
         assert_eq!(hap.ref_mapped_len(), 4000);
 
-        // 30x coverage, 0.5 VAF, 400bp mean frag.
+        // 30x coverage, 0.5 VAF, 400bp mean frag. Fragment starts are uniform
+        // over [0, L - f], so interior depth is n * f / (L - f); for v * cov
+        // that is n = cov * v * (L - f) / f = 30 * 0.5 * 3600 / 400 = 135.
         let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
-        // Expected: 30 * 0.5 * 4000 / 400 = 150
-        assert_eq!(count, 150);
+        assert_eq!(count, 135);
     }
 
     #[test]
@@ -683,8 +676,8 @@ mod tests {
         assert_eq!(hap.ref_mapped_len(), 4000);
 
         let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
-        // Expected: 30 * 0.5 * 4000 / 400 = 150 (not 168.75 if using total_len).
-        assert_eq!(count, 150);
+        // Expected: 30 * 0.5 * (4000 - 400) / 400 = 135.
+        assert_eq!(count, 135);
     }
 
     #[test]
@@ -709,8 +702,8 @@ mod tests {
         assert_eq!(hap.ref_mapped_len(), 9000);
 
         let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
-        // Expected: 30 * 0.5 * 9000 / 400 = 337.5 → 338
-        assert_eq!(count, 338);
+        // Expected: 30 * 0.5 * (9000 - 400) / 400 = 322.5 → 323
+        assert_eq!(count, 323);
     }
 
     #[test]
@@ -809,210 +802,6 @@ mod tests {
     // needing a SynthReadGenerator (which requires a real FASTA).
     // ---------------------------------------------------------------
 
-    /// Simulate the suppression loop from simulate_event for non-additive events.
-    /// Returns (kept_count, suppressed_count).
-    fn run_suppression(
-        pairs: &[ReadPair],
-        hap_ref_start: u64,
-        hap_ref_end: u64,
-        _sv_start: u64,
-        _sv_end: u64,
-        is_additive: bool,
-        vaf: f64,
-        rng: &mut StdRng,
-    ) -> (usize, usize) {
-        let mut kept = 0usize;
-        let mut suppressed = 0usize;
-
-        for pair in pairs {
-            if is_additive {
-                kept += 1;
-                continue;
-            }
-
-            let in_haplotype = classify_pair_relation(pair, hap_ref_start, hap_ref_end);
-            if matches!(in_haplotype, PairRelation::Outside) {
-                kept += 1;
-                continue;
-            }
-
-            // Scale suppression by overlap fraction for boundary-spanning reads.
-            let overlap_frac = if matches!(in_haplotype, PairRelation::Overlapping) {
-                let overlap_start = pair.ref_start.max(hap_ref_start);
-                let overlap_end = pair.ref_end.min(hap_ref_end);
-                let frag_len = pair.ref_end.saturating_sub(pair.ref_start).max(1) as f64;
-                (overlap_end.saturating_sub(overlap_start)) as f64 / frag_len
-            } else {
-                1.0
-            };
-
-            // No LOH in these tests — always random suppression.
-            if rng.gen::<f64>() > vaf * overlap_frac {
-                kept += 1;
-            } else {
-                suppressed += 1;
-            }
-        }
-
-        (kept, suppressed)
-    }
-
-    #[test]
-    fn test_suppression_keeps_outside_reads() {
-        use rand::SeedableRng;
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Reads at [100, 200) are outside haplotype range [200, 500).
-        let outside_pairs: Vec<ReadPair> = (0..50)
-            .map(|i| make_pair(&format!("outside_{}", i), 100, 200))
-            .collect();
-
-        let (kept, suppressed) = run_suppression(
-            &outside_pairs,
-            200,
-            500, // hap_ref range
-            300,
-            400,   // sv range
-            false, // not additive
-            0.5,
-            &mut rng,
-        );
-
-        assert_eq!(kept, 50);
-        assert_eq!(suppressed, 0);
-    }
-
-    #[test]
-    fn test_suppression_rate_matches_vaf() {
-        use rand::SeedableRng;
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // 500 reads inside the haplotype range — large N for statistical reliability.
-        let inside_pairs: Vec<ReadPair> = (0..500)
-            .map(|i| make_pair(&format!("in_{}", i), 200, 800))
-            .collect();
-
-        let (kept, suppressed) = run_suppression(
-            &inside_pairs,
-            0,
-            1000, // hap_ref range
-            100,
-            900, // sv range
-            false,
-            0.5,
-            &mut rng,
-        );
-
-        // Kept + suppressed = total.
-        assert_eq!(kept + suppressed, 500);
-
-        // Suppression rate ≈ 0.5 (within 10% for 500 reads).
-        let rate = suppressed as f64 / 500.0;
-        assert!(
-            (rate - 0.5).abs() < 0.10,
-            "suppression rate {:.3} too far from 0.5",
-            rate
-        );
-    }
-
-    #[test]
-    fn test_suppression_additive_keeps_all() {
-        use rand::SeedableRng;
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // DUP: additive events keep all reads.
-        let pairs: Vec<ReadPair> = (0..100)
-            .map(|i| make_pair(&format!("r_{}", i), 400, 600))
-            .collect();
-
-        let (kept, suppressed) = run_suppression(
-            &pairs, 200, 800, // hap_ref range
-            300, 700,  // sv range
-            true, // additive (DUP)
-            0.5, &mut rng,
-        );
-
-        assert_eq!(kept, 100);
-        assert_eq!(suppressed, 0);
-    }
-
-    #[test]
-    fn test_suppression_mixed_inside_outside() {
-        use rand::SeedableRng;
-        let mut rng = StdRng::seed_from_u64(123);
-
-        // Mix of outside and inside reads.
-        let mut pairs = Vec::new();
-        for i in 0..50 {
-            pairs.push(make_pair(&format!("out_{}", i), 10, 90)); // outside [100, 900)
-        }
-        for i in 0..200 {
-            pairs.push(make_pair(&format!("in_{}", i), 300, 700)); // inside
-        }
-
-        let (kept, suppressed) = run_suppression(
-            &pairs, 100, 900, // hap_ref range
-            100, 900, // sv range
-            false, 0.5, &mut rng,
-        );
-
-        // All 50 outside reads kept + roughly half of 200 inside reads kept.
-        assert_eq!(kept + suppressed, 250);
-        assert!(
-            kept >= 50,
-            "should keep at least the 50 outside reads, kept {}",
-            kept
-        );
-        assert!(suppressed > 0, "should suppress some inside reads");
-
-        // Outside reads are always kept, so suppressed must come from the 200 inside reads.
-        assert!(suppressed <= 200);
-        let inside_suppressed_rate = suppressed as f64 / 200.0;
-        assert!(
-            (inside_suppressed_rate - 0.5).abs() < 0.12,
-            "inside suppression rate {:.3} too far from 0.5",
-            inside_suppressed_rate
-        );
-    }
-
-    #[test]
-    fn test_suppression_overlap_fraction_reduces_rate() {
-        use rand::SeedableRng;
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // 500 reads that span the haplotype boundary: each read is [150, 550),
-        // haplotype range is [200, 1000). Overlap = 350/400 = 87.5%.
-        // Effective suppression rate = 0.5 * 0.875 = 0.4375.
-        let overlapping_pairs: Vec<ReadPair> = (0..500)
-            .map(|i| make_pair(&format!("ov_{}", i), 150, 550))
-            .collect();
-
-        let (kept, suppressed) = run_suppression(
-            &overlapping_pairs,
-            200,
-            1000, // hap_ref range
-            200,
-            1000, // sv range
-            false,
-            0.5,
-            &mut rng,
-        );
-
-        assert_eq!(kept + suppressed, 500);
-
-        // Expected rate ≈ 0.4375 (less than the 0.5 VAF due to overlap fraction).
-        let rate = suppressed as f64 / 500.0;
-        assert!(
-            rate < 0.5,
-            "overlap fraction should reduce suppression rate below VAF, got {:.3}",
-            rate
-        );
-        assert!(
-            (rate - 0.4375).abs() < 0.08,
-            "suppression rate {:.3} too far from expected 0.4375",
-            rate
-        );
-    }
 
     // ---------------------------------------------------------------
     // overlaps_ref_segment tests
@@ -1573,6 +1362,89 @@ mod tests {
             !out.chimeric_pairs.is_empty(),
             "Fusion should produce chimeric reads spanning the breakpoint"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // simulate_event suppression (real code)
+    // ---------------------------------------------------------------
+
+    fn del_event(start: u64, end: u64) -> SimEvent {
+        SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: start,
+            del_end: end,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.2),
+        }
+    }
+
+    #[test]
+    fn test_simulate_event_suppresses_inside_pairs_at_vaf_and_keeps_outside() {
+        // DEL [1000,3000) with 1 kb flanks: footprint [0,4000).
+        let mut pairs: Vec<ReadPair> = (0..500)
+            .map(|i| make_pair(&format!("in_{}", i), 1500, 1900))
+            .collect();
+        pairs.extend((0..50).map(|i| make_pair(&format!("out_{}", i), 5000, 5400)));
+        let pool = make_pool(pairs);
+        let mut hap = del_haplotype(1000, 2000);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let out = simulate_event(
+            1, &del_event(1000, 3000), &pool, &mut hap, &make_config(),
+            &mut mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        assert!(out.suppressed_names.iter().all(|n| n.starts_with("in_")));
+        let rate = out.suppressed_count as f64 / 500.0;
+        assert!((rate - 0.2).abs() < 0.05, "inside suppression rate {:.3}", rate);
+    }
+
+    #[test]
+    fn test_simulate_event_keeps_pairs_straddling_footprint_edge() {
+        // Tiled fragments never extend past the haplotype ends, so originals
+        // that stick out of the footprint must not be suppressed either;
+        // otherwise depth dips at the footprint edge.
+        // DEL [1000,3000) with 1 kb flanks: footprint [0,4000).
+        let pairs: Vec<ReadPair> = (0..500)
+            .map(|i| make_pair(&format!("edge_{}", i), 3800, 4200))
+            .collect();
+        let pool = make_pool(pairs);
+        let mut hap = del_haplotype(1000, 2000);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let out = simulate_event(
+            1, &del_event(1000, 3000), &pool, &mut hap, &make_config(),
+            &mut mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(out.suppressed_count, 0);
+    }
+
+    #[test]
+    fn test_tiling_uses_actual_fragment_length_for_short_inserts() {
+        // 220 bp fragments starting every 11 bp: exactly 20 cover each point.
+        let pairs: Vec<ReadPair> = (0..728u64)
+            .map(|i| make_pair(&format!("r{}", i), i * 11, i * 11 + 220))
+            .collect();
+        let pool = ReadPool {
+            pairs,
+            frag_dist: FragmentDist::from_stats(220.0, 30.0),
+        };
+        // DEL [2000,4000) with 2 kb flanks: haplotype of 4000 bp.
+        let mut hap = del_haplotype(2000, 2000);
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let out = simulate_event(
+            1, &del_event(2000, 4000), &pool, &mut hap, &make_config(),
+            &mut mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        // n = cov * v * (L - f) / f = 20 * 0.2 * (4000 - 220) / 220 = 68.7 -> 69
+        assert_eq!(out.chimeric_pairs.len(), 69);
     }
 
     // ---------------------------------------------------------------

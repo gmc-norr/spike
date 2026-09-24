@@ -150,6 +150,25 @@ struct Args {
     dup_model: String,
 }
 
+/// Reference flank on each side of an event in its variant haplotype. Must be
+/// >= the longest expected fragment so reads near the haplotype edges form
+/// complete pairs.
+const HAP_FLANK: u64 = 2000;
+
+/// Check `--flank`: originals are only suppressed inside the extracted
+/// window (event ± flank), but synthetic reads cover event ± HAP_FLANK.
+fn validate_flank(flank: u64) -> Result<()> {
+    if flank < HAP_FLANK {
+        bail!(
+            "--flank {} is too small: it must be at least {} so every original \
+             read replaced by synthetic reads is extracted",
+            flank,
+            HAP_FLANK
+        );
+    }
+    Ok(())
+}
+
 /// Parsed extraction region from --region flag.
 struct ExtractionRegion {
     chrom: String,
@@ -240,6 +259,7 @@ fn main() -> Result<()> {
     if args.allele_fraction <= 0.0 || args.allele_fraction > 1.0 {
         bail!("allele-fraction must be in (0.0, 1.0]");
     }
+    validate_flank(args.flank)?;
 
     // Create output directory.
     std::fs::create_dir_all(&args.output)?;
@@ -373,9 +393,6 @@ fn main() -> Result<()> {
     }
     let mut event_stats: Vec<EventStat> = Vec::new();
 
-    // Haplotype flank: must be >= max expected fragment length so reads near
-    // haplotype edges form complete pairs. 2000bp is conservative.
-    let hap_flank: u64 = 2000;
 
     // Process each event using the unified haplotype + tiling approach.
     for (i, event) in events.iter().enumerate() {
@@ -398,7 +415,7 @@ fn main() -> Result<()> {
 
         // Build variant haplotype.
         let mut haplotype =
-            build_haplotype(event, &shared_ref, hap_flank, &config.dup_model, &mut rng)?;
+            build_haplotype(event, &shared_ref, HAP_FLANK, &config.dup_model, &mut rng)?;
 
         // Simulate: suppress reads + tile synthetic reads across haplotype.
         let output = simulate::simulate_event(
@@ -1366,6 +1383,16 @@ mod tests {
             allele_fraction: None,
             join: FusionJoin::Forward,
         }
+    }
+
+    #[test]
+    fn test_flank_smaller_than_haplotype_flank_is_rejected() {
+        // With --flank 500, originals 500-2000 bp from the event are never
+        // extracted, so never suppressed, while synthetic reads still cover
+        // them: depth there would be 1 + VAF.
+        assert!(validate_flank(500).is_err());
+        assert!(validate_flank(HAP_FLANK - 1).is_err());
+        assert!(validate_flank(HAP_FLANK).is_ok());
     }
 
     #[test]

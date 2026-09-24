@@ -34,9 +34,9 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | H6 | High | LOH allele chosen at random per SNP | `loh.rs:112-121` |
 | H7 | High | Insertions ≥ ~500 bp yield almost no insert-carrying reads | `synth.rs:745-746` |
 | H8 | High | Synthetic reads lack the sample's own SNPs | `simulate.rs:77-80` |
-| M1 | Medium | Allele fraction drifts at haplotype edges | `simulate.rs:123-130, 352, 437` |
-| M2 | Medium | Short-insert libraries under-tiled | `simulate.rs:379` |
-| M3 | Medium | `--flank` < 2000 leaves extra reads | `main.rs:379` |
+| M1 | Medium | **Fixed.** Allele fraction drifts at haplotype edges | `simulate.rs:123-130, 352, 437` |
+| M2 | Medium | **Fixed.** Short-insert libraries under-tiled | `simulate.rs:379` |
+| M3 | Medium | **Fixed** (rejected). `--flank` < 2000 leaves extra reads | `main.rs:379` |
 | M4 | Medium | Chromosome-end segments overcount length | `haplotype.rs:81-104` |
 | M5 | Medium | `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
 | M6 | Medium | Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
