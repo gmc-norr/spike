@@ -50,7 +50,10 @@ pub fn simulate_event(
             if let SimEvent::Fusion { bp_a, .. } = event {
                 (*bp_a, *bp_a)
             } else {
-                unreachable!()
+                anyhow::bail!(
+                    "event has no primary region and is not a Fusion — \
+                     this is a bug; please report it"
+                );
             }
         }
     };
@@ -1338,5 +1341,156 @@ mod tests {
         let n = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
         // Expected: 30 * 0.5 * 5000 / 400 = 187.5 → 188
         assert!(n > 100, "Full tandem DUP should produce many reads, got {}", n);
+    }
+
+    // ---------------------------------------------------------------
+    // simulate_event integration tests
+    // ---------------------------------------------------------------
+
+    fn make_config() -> SimConfig {
+        SimConfig {
+            bam_path: String::new(),
+            ref_path: String::new(),
+            allele_fraction: 0.5,
+            flank_bp: 1000,
+            read_length: 150,
+            min_mapq: 20,
+            gvcf_path: None,
+            indel_error_rate: 0.0,
+            dup_model: "full".to_string(),
+        }
+    }
+
+    /// Build a pool of read pairs uniformly covering [region_start, region_end).
+    fn make_covering_pool(region_start: u64, region_end: u64, count: usize) -> ReadPool {
+        let step = (region_end - region_start) / count as u64;
+        let pairs = (0..count)
+            .map(|i| {
+                let start = region_start + i as u64 * step;
+                make_pair(&format!("read_{}", i), start, start + 400)
+            })
+            .collect();
+        ReadPool {
+            pairs,
+            frag_dist: FragmentDist::from_stats(400.0, 80.0),
+        }
+    }
+
+    #[test]
+    fn test_simulate_event_del_produces_chimeric_and_suppresses() {
+        // DEL: chr1:1000-3000 (2kb deletion), flanks at [0,1000) and [3000,4000).
+        // del_haplotype(flank=1000, del_size=2000) builds [0,1000) | [3000,4000).
+        let mut hap = del_haplotype(1000, 2000);
+
+        // Pool: 200 pairs spread across [0, 5000) so reads land before, inside, and after deletion.
+        let pool = make_covering_pool(0, 5000, 200);
+        let config = make_config();
+        let mut gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let event = SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 1000,
+            del_end: 3000,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        };
+
+        let out = simulate_event(1, &event, &pool, &mut hap, &config, &mut gen, 0.5, &mut rng)
+            .expect("simulate_event should succeed for DEL");
+
+        // Reads inside the deletion should be suppressed at ~50%.
+        assert!(
+            out.suppressed_count > 0,
+            "DEL should suppress some reads; got suppressed_count={}",
+            out.suppressed_count
+        );
+
+        // Chimeric reads should be generated to replace suppressed fraction.
+        assert!(
+            !out.chimeric_pairs.is_empty(),
+            "DEL should produce chimeric reads spanning the deletion junction"
+        );
+
+        // Chimeric read names should carry the event prefix.
+        assert!(
+            out.chimeric_pairs[0].name.starts_with("ev0001"),
+            "chimeric read name should start with event prefix 'ev0001'"
+        );
+
+        // Total output (kept + chimeric) should be non-empty.
+        assert!(
+            out.kept_originals.len() + out.chimeric_pairs.len() > 0,
+            "simulate_event should produce output reads"
+        );
+    }
+
+    #[test]
+    fn test_simulate_event_fusion_is_additive() {
+        // Fusion: chr1:10000 >> chr1:20000 (same chromosome for simplicity).
+        // Haplotype: left flank [9000,10000) | right flank [20000,21000).
+        let mut hap = make_haplotype(vec![
+            HaplotypeSegment {
+                sequence: vec![b'A'; 1000],
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: 9000,
+                    ref_end: 10000,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: vec![b'C'; 1000],
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: 20000,
+                    ref_end: 21000,
+                    is_reverse: false,
+                }),
+                hap_offset: 1000,
+            },
+        ]);
+
+        // Pool: 100 pairs near the breakpoint region.
+        let pool = make_covering_pool(8000, 11000, 100);
+        let config = make_config();
+        let mut gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(99);
+
+        let event = SimEvent::Fusion {
+            chrom_a: "chr1".to_string(),
+            bp_a: 10000,
+            gene_a: "GENE_A".to_string(),
+            chrom_b: "chr1".to_string(),
+            bp_b: 20000,
+            gene_b: "GENE_B".to_string(),
+            inverted: false,
+            allele_fraction: Some(0.05),
+        };
+
+        let out = simulate_event(2, &event, &pool, &mut hap, &config, &mut gen, 0.05, &mut rng)
+            .expect("simulate_event should succeed for Fusion");
+
+        // Fusion is additive: no reads are suppressed.
+        assert_eq!(
+            out.suppressed_count, 0,
+            "Fusion should not suppress any original reads (additive model)"
+        );
+
+        // All original reads should be kept.
+        assert_eq!(
+            out.kept_originals.len(),
+            pool.pairs.len(),
+            "Fusion should keep all {} original reads",
+            pool.pairs.len()
+        );
+
+        // Chimeric reads should be generated at the junction.
+        assert!(
+            !out.chimeric_pairs.is_empty(),
+            "Fusion should produce chimeric reads spanning the breakpoint"
+        );
     }
 }

@@ -221,6 +221,7 @@ fn load_het_snps_from_gvcf(
     // Determine sample index from header (defaults to first sample, index 9).
     let sample_col: usize = 9;
     let mut het_snps = Vec::new();
+    let mut first_other_chrom: Option<String> = None;
 
     if gvcf_path.ends_with(".gz") {
         // Use bcftools for indexed access to bgzipped VCF.
@@ -238,7 +239,15 @@ fn load_het_snps_from_gvcf(
         use std::io::BufRead;
         for line_result in reader.lines() {
             let line = line_result.context("failed to read bcftools output")?;
-            parse_gvcf_line(&line, chrom, region_start, region_end, sample_col, &mut het_snps);
+            parse_gvcf_line(
+                &line,
+                chrom,
+                region_start,
+                region_end,
+                sample_col,
+                &mut het_snps,
+                &mut first_other_chrom,
+            );
         }
 
         let status = child.wait().context("failed to wait for bcftools")?;
@@ -254,7 +263,29 @@ fn load_het_snps_from_gvcf(
         for line_result in reader.lines() {
             let line = line_result
                 .with_context(|| format!("failed to read gVCF: {}", gvcf_path))?;
-            parse_gvcf_line(&line, chrom, region_start, region_end, sample_col, &mut het_snps);
+            parse_gvcf_line(
+                &line,
+                chrom,
+                region_start,
+                region_end,
+                sample_col,
+                &mut het_snps,
+                &mut first_other_chrom,
+            );
+        }
+    }
+
+    if het_snps.is_empty() {
+        if let Some(other) = &first_other_chrom {
+            log::warn!(
+                "gVCF '{}': no records found for chromosome '{}', \
+                 but found records for '{}'. \
+                 Chromosome names may not match (e.g. 'chr1' vs '1'). \
+                 Falling back to pileup-based het SNP detection.",
+                gvcf_path,
+                chrom,
+                other,
+            );
         }
     }
 
@@ -270,6 +301,7 @@ fn parse_gvcf_line(
     region_end: u64,
     sample_col: usize,
     het_snps: &mut Vec<HetSnp>,
+    first_other_chrom: &mut Option<String>,
 ) {
     if line.starts_with('#') {
         return;
@@ -282,6 +314,10 @@ fn parse_gvcf_line(
 
     let line_chrom = fields[0];
     if line_chrom != chrom {
+        // Record the first non-matching chromosome seen for a mismatch warning.
+        if first_other_chrom.is_none() {
+            *first_other_chrom = Some(line_chrom.to_string());
+        }
         return;
     }
 

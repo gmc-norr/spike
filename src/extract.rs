@@ -562,11 +562,15 @@ fn passes_filters_buf(min_mapq: u8, buf: &noodles::sam::alignment::RecordBuf) ->
     mq >= min_mapq
 }
 
-/// Convert a 0-based half-open end coordinate to a noodles 1-based Position.
-/// Noodles positions must be >= 1, so we clamp.
+/// Convert a coordinate to a noodles 1-based Position.
+///
+/// Saturates to [`noodles::core::Position::MIN`] (= 1) on underflow and to
+/// `usize::MAX` on overflow. Both extremes are valid noodles positions, so
+/// this function never panics.
 pub fn safe_noodles_position(pos: u64) -> noodles::core::Position {
     let pos_usize = usize::try_from(pos).unwrap_or(usize::MAX).max(1);
-    noodles::core::Position::try_from(pos_usize).expect("position must be >= 1")
+    // pos_usize >= 1 is guaranteed by .max(1) above; new() only fails for 0.
+    noodles::core::Position::new(pos_usize).unwrap_or(noodles::core::Position::MIN)
 }
 
 /// Reverse-complement a DNA sequence in place.

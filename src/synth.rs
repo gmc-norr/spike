@@ -235,7 +235,24 @@ impl QualityProfile {
     /// 2. Markov + cycle: `P(Q_i | cycle, prev_q_bin)` — drop base conditioning
     /// 3. Base-only: `P(Q_i | cycle, base)` — no Markov (cycle 0 or sparse bins)
     /// 4. Cycle-only: `P(Q_i | cycle)` — final fallback
+    ///
+    /// The returned byte is clamped to the valid Phred+33 range [b'!', b'~'] = [33, 126].
     pub fn sample_quality(
+        &self,
+        read_num: u8,
+        cycle: usize,
+        base: u8,
+        prev_qual: Option<u8>,
+        rng: &mut StdRng,
+    ) -> u8 {
+        // Phred+33: valid byte range is b'!' (Q0) to b'~' (Q93).
+        const MIN_QUAL_BYTE: u8 = b'!';
+        const MAX_QUAL_BYTE: u8 = b'!' + 93; // '~' = 126
+        let q = self.sample_quality_inner(read_num, cycle, base, prev_qual, rng);
+        q.clamp(MIN_QUAL_BYTE, MAX_QUAL_BYTE)
+    }
+
+    fn sample_quality_inner(
         &self,
         read_num: u8,
         cycle: usize,
