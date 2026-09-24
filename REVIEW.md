@@ -43,9 +43,9 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
 | M8 | Medium | `--region` merged with distant events | `main.rs:172-180` |
 | M9 | Medium | Fusion read pools double-counted | `main.rs:906-911`; `simulate.rs:471-503` |
-| M10 | Medium | `validate` coverage check always passes on WGS | `validate.rs:753-756` |
-| M11 | Medium | `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
-| M12 | Medium | `validate` split-read check passes with no simulation | `validate.rs:503-517` |
+| M10 | Medium | **Fixed.** `validate` coverage check always passes on WGS | `validate.rs:753-756` |
+| M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
+| M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
 | M13 | Medium | All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
 | M14 | Medium | Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
 | M15 | Medium | CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |

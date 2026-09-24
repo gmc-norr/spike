@@ -3,7 +3,7 @@
 //! Reads a simulated BAM + truth VCF and runs automated checks to verify
 //! that the spike-in reads look realistic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 
 use anyhow::{bail, Context, Result};
@@ -29,6 +29,9 @@ struct TruthEvent {
     sv_type: String, // DEL, DUP, INV, INS, BND, SNP
     expected_vaf: f64,
     gene: String,
+    /// The other breakpoint (chrom, 0-based position): a split read at this
+    /// event should have its other part there. None for INS and SNP.
+    partner: Option<(String, u64)>,
     /// For SmallVariant: explicit REF/ALT alleles.
     ref_allele: Option<Vec<u8>>,
     alt_allele: Option<Vec<u8>>,
@@ -41,6 +44,21 @@ struct CheckResult {
     expected: String,
     observed: String,
     pass: bool,
+}
+
+/// A check's result; a check that could not run is a failed result, so an
+/// unevaluable run never reports all-PASS.
+fn check_outcome(label: &str, check_name: &str, result: Result<CheckResult>) -> CheckResult {
+    result.unwrap_or_else(|e| {
+        log::warn!("{} check failed to run for {}: {:#}", check_name, label, e);
+        CheckResult {
+            event_label: label.to_string(),
+            check_name: check_name.to_string(),
+            expected: "check runs".to_string(),
+            observed: format!("error: {:#}", e),
+            pass: false,
+        }
+    })
 }
 
 /// Entry point for `spike validate`.
@@ -58,7 +76,6 @@ pub fn run() -> Result<()> {
     log::info!("Loaded {} truth events", truth_events.len());
 
     let mut results: Vec<CheckResult> = Vec::new();
-    let mut n_errors: usize = 0;
 
     // Per-event checks.
     for event in &truth_events {
@@ -66,44 +83,27 @@ pub fn run() -> Result<()> {
 
         // Coverage ratio check (meaningful for DEL, DUP).
         if event.sv_type == "DEL" || event.sv_type == "DUP" {
-            match check_coverage_ratio(
+            let r = check_coverage_ratio(
                 &args.bam_path,
                 &args.ref_path,
                 event,
                 args.flank_bp,
                 args.min_mapq,
-            ) {
-                Ok(r) => results.push(r),
-                Err(e) => {
-                    log::warn!("coverage_ratio check failed for {}: {}", label, e);
-                    n_errors += 1;
-                }
-            }
+            );
+            results.push(check_outcome(&label, "coverage_ratio", r));
         }
 
-        // Split-read evidence (meaningful for SVs, not small variants).
-        if matches!(
-            event.sv_type.as_str(),
-            "DEL" | "DUP" | "INV" | "INS" | "BND"
-        ) {
-            match check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq) {
-                Ok(r) => results.push(r),
-                Err(e) => {
-                    log::warn!("split_reads check failed for {}: {}", label, e);
-                    n_errors += 1;
-                }
-            }
+        // Split reads joining the two breakpoints (not INS: its inserted
+        // sequence has no second reference breakpoint).
+        if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
+            let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
+            results.push(check_outcome(&label, "split_reads", r));
         }
 
         // Allele frequency (meaningful for SNPs/small variants).
         if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
-            match check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq) {
-                Ok(r) => results.push(r),
-                Err(e) => {
-                    log::warn!("allele_freq check failed for {}: {}", label, e);
-                    n_errors += 1;
-                }
-            }
+            let r = check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq);
+            results.push(check_outcome(&label, "allele_freq", r));
         }
 
         // Log progress.
@@ -111,40 +111,14 @@ pub fn run() -> Result<()> {
     }
 
     // Global checks.
-    match check_insert_size(&args.bam_path, Some(&args.ref_path)) {
-        Ok(r) => results.push(r),
-        Err(e) => {
-            log::warn!("insert_size check failed: {}", e);
-            n_errors += 1;
-        }
-    }
-    match check_dup_rate(&args.bam_path, Some(&args.ref_path)) {
-        Ok(r) => results.push(r),
-        Err(e) => {
-            log::warn!("dup_rate check failed: {}", e);
-            n_errors += 1;
-        }
-    }
-    match check_mapq(&args.bam_path, Some(&args.ref_path)) {
-        Ok(r) => results.push(r),
-        Err(e) => {
-            log::warn!("mean_mapq check failed: {}", e);
-            n_errors += 1;
-        }
-    }
-
-    if results.is_empty() {
-        bail!(
-            "all {} checks failed to run (BAM file may be corrupt or missing index)",
-            n_errors,
-        );
-    }
-    if n_errors > 0 {
-        log::warn!(
-            "{} check(s) could not be executed (see warnings above)",
-            n_errors
-        );
-    }
+    let ref_path = Some(args.ref_path.as_str());
+    results.push(check_outcome(
+        "global",
+        "insert_size",
+        check_insert_size(&args.bam_path, ref_path),
+    ));
+    results.push(check_outcome("global", "dup_rate", check_dup_rate(&args.bam_path, ref_path)));
+    results.push(check_outcome("global", "mean_mapq", check_mapq(&args.bam_path, ref_path)));
 
     // Print results.
     print_results(&results, args.json_output)?;
@@ -302,11 +276,13 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
         match sv_type_str {
             Some("DEL") => {
                 let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
                     start: vcf_pos, // VCF POS for SV = 0-based start
                     end,
                     sv_type: "DEL".to_string(),
+                    partner,
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: None,
@@ -315,11 +291,13 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
             }
             Some("DUP") => {
                 let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
                     start: vcf_pos,
                     end,
                     sv_type: "DUP".to_string(),
+                    partner,
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: None,
@@ -328,11 +306,13 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
             }
             Some("INV") => {
                 let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
                     start: vcf_pos,
                     end,
                     sv_type: "INV".to_string(),
+                    partner,
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: None,
@@ -345,6 +325,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     start: vcf_pos,
                     end: vcf_pos,
                     sv_type: "INS".to_string(),
+                    partner: None,
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: None,
@@ -365,6 +346,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     start: vcf_pos.saturating_sub(1), // 1-based → 0-based
                     end: vcf_pos,
                     sv_type: "BND".to_string(),
+                    partner: bnd_partner(alt_col),
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: None,
@@ -383,6 +365,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     start: pos_0based,
                     end,
                     sv_type: "SNP".to_string(),
+                    partner: None,
                     expected_vaf: sim_vaf,
                     gene,
                     ref_allele: Some(ref_allele),
@@ -451,30 +434,47 @@ fn check_coverage_ratio(
         (false, false) => 0.0,
     };
 
+    Ok(coverage_ratio_result(
+        label,
+        &event.sv_type,
+        event.expected_vaf,
+        event_depth,
+        flank_depth,
+    ))
+}
+
+/// Judge an event's depth against its flanks.
+fn coverage_ratio_result(
+    label: String,
+    sv_type: &str,
+    expected_vaf: f64,
+    event_depth: f64,
+    flank_depth: f64,
+) -> CheckResult {
     if flank_depth < 1.0 {
-        return Ok(CheckResult {
+        return CheckResult {
             event_label: label,
             check_name: "coverage_ratio".to_string(),
             expected: "N/A".to_string(),
             observed: "no flanking coverage".to_string(),
-            pass: true, // can't evaluate without coverage
-        });
+            pass: false, // can't evaluate: don't report it as a pass
+        };
     }
 
     let ratio = event_depth / flank_depth;
 
     // Expected ratio depends on SV type and VAF.
-    let (expected_str, pass) = match event.sv_type.as_str() {
+    let (expected_str, pass) = match sv_type {
         "DEL" => {
             // Spike suppresses reads at rate VAF → expected ratio = 1 - VAF.
-            let expected_ratio = 1.0 - event.expected_vaf;
+            let expected_ratio = 1.0 - expected_vaf;
             let tolerance = 0.3;
             let pass = (ratio - expected_ratio).abs() < tolerance;
             (format!("{:.2}", expected_ratio), pass)
         }
         "DUP" => {
             // Spike adds depth copies at rate VAF → expected ratio = 1 + VAF.
-            let expected_ratio = 1.0 + event.expected_vaf;
+            let expected_ratio = 1.0 + expected_vaf;
             let tolerance = 0.3;
             let pass = (ratio - expected_ratio).abs() < tolerance;
             (format!("{:.2}", expected_ratio), pass)
@@ -482,46 +482,61 @@ fn check_coverage_ratio(
         _ => ("~1.0".to_string(), (ratio - 1.0).abs() < 0.5),
     };
 
-    Ok(CheckResult {
+    CheckResult {
         event_label: label,
         check_name: "coverage_ratio".to_string(),
         expected: expected_str,
         observed: format!("{:.2}", ratio),
         pass,
-    })
+    }
 }
 
-/// Check for split-read evidence (SA:Z tags) in the event region.
+/// Check for split reads joining the event's two breakpoints: reads at one
+/// breakpoint whose SA:Z alignment lands at the other.
 fn check_split_reads(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
     min_mapq: u8,
 ) -> Result<CheckResult> {
-    let label = format_event_label(event);
-
-    // Query region: the event itself plus a small padding.
+    // At least this many split reads must join the breakpoints. Reads with
+    // an SA tag occur anywhere; reads joining these two points do not.
+    const MIN_SPLIT_READS: usize = 2;
     let pad = 500u64;
-    let query_start = event.start.saturating_sub(pad);
-    let query_end = event.end.saturating_add(pad);
+    let label = format_event_label(event);
+    let partner = event
+        .partner
+        .clone()
+        .with_context(|| format!("{}: no partner breakpoint for split reads", label))?;
+    let here = (event.chrom.clone(), event.start);
 
-    let sa_count = count_sa_tags_in_region(
+    let mut names = split_reads_to_partner(
         bam_path,
         ref_path,
-        &event.chrom,
-        query_start,
-        query_end,
+        &here.0,
+        here.1.saturating_sub(pad),
+        here.1.saturating_add(pad),
         min_mapq,
+        &partner,
+        pad,
     )?;
-
-    let pass = sa_count > 0;
+    names.extend(split_reads_to_partner(
+        bam_path,
+        ref_path,
+        &partner.0,
+        partner.1.saturating_sub(pad),
+        partner.1.saturating_add(pad),
+        min_mapq,
+        &here,
+        pad,
+    )?);
 
     Ok(CheckResult {
         event_label: label,
         check_name: "split_reads".to_string(),
-        expected: ">0".to_string(),
-        observed: format!("{}", sa_count),
-        pass,
+        expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
+        observed: format!("{}", names.len()),
+        pass: names.len() >= MIN_SPLIT_READS,
     })
 }
 
@@ -673,7 +688,7 @@ fn check_mapq(bam_path: &str, ref_path: Option<&str>) -> Result<CheckResult> {
 // BAM reading helpers
 // ---------------------------------------------------------------------------
 
-/// Count average depth (reads per base) in a region.
+/// Mean read depth (aligned bases per base) in a region.
 fn count_depth_in_region(
     bam_path: &str,
     ref_path: &str,
@@ -686,8 +701,7 @@ fn count_depth_in_region(
         return Ok(0.0);
     }
 
-    let region_len = (end - start) as f64;
-    let mut read_count: u64 = 0;
+    let mut spans: Vec<(u64, u64)> = Vec::new();
 
     if crate::extract::is_cram(bam_path) {
         let repository = crate::extract::build_fasta_repository(ref_path)?;
@@ -718,7 +732,10 @@ fn count_depth_in_region(
             if mq < min_mapq {
                 continue;
             }
-            read_count += 1;
+            if let Some(p) = buf.alignment_start() {
+                let s = usize::from(p) as u64 - 1;
+                spans.push((s, s + ref_span(CigarTrait::iter(&buf.cigar()))));
+            }
         }
     } else {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -746,26 +763,59 @@ fn count_depth_in_region(
             if mq < min_mapq {
                 continue;
             }
-            read_count += 1;
+            if let Some(Ok(p)) = record.alignment_start() {
+                let s = usize::from(p) as u64 - 1;
+                spans.push((s, s + ref_span(record.cigar().iter())));
+            }
         }
     }
 
-    // Average depth = (reads * read_length) / region_length.
-    // Approximate: just use read_count / region_length * 150 (typical read length).
-    // Actually, for a ratio we just need consistent counting, so reads/bp is fine.
-    Ok(read_count as f64 / region_len)
+    Ok(mean_depth(&spans, start, end))
 }
 
-/// Count reads with SA:Z supplementary alignment tag in a region.
-fn count_sa_tags_in_region(
+/// Mean depth over [start, end) from read reference spans [s, e).
+fn mean_depth(spans: &[(u64, u64)], start: u64, end: u64) -> f64 {
+    if start >= end {
+        return 0.0;
+    }
+    let bases: u64 = spans
+        .iter()
+        .map(|&(s, e)| e.min(end).saturating_sub(s.max(start)))
+        .sum();
+    bases as f64 / (end - start) as f64
+}
+
+/// Reference bases covered by an alignment's CIGAR.
+fn ref_span(
+    ops: impl Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>>,
+) -> u64 {
+    ops.filter_map(|op| op.ok())
+        .filter(|op| {
+            matches!(
+                op.kind(),
+                Kind::Match | Kind::Deletion | Kind::Skip | Kind::SequenceMatch | Kind::SequenceMismatch
+            )
+        })
+        .map(|op| op.len() as u64)
+        .sum()
+}
+
+/// Names of reads in [start, end) whose SA:Z tag has an alignment within
+/// `pad` of `partner` (chrom, 0-based position).
+#[allow(clippy::too_many_arguments)]
+fn split_reads_to_partner(
     bam_path: &str,
     ref_path: &str,
     chrom: &str,
     start: u64,
     end: u64,
     min_mapq: u8,
-) -> Result<u64> {
-    let mut sa_count: u64 = 0;
+    partner: &(String, u64),
+    pad: u64,
+) -> Result<HashSet<String>> {
+    let mut names = HashSet::new();
+    let points_to_partner =
+        |sa: Option<String>| sa.is_some_and(|sa| sa_points_near(&sa, &partner.0, partner.1, pad));
 
     if crate::extract::is_cram(bam_path) {
         let repository = crate::extract::build_fasta_repository(ref_path)?;
@@ -796,9 +846,10 @@ fn count_sa_tags_in_region(
             if mq < min_mapq {
                 continue;
             }
-            // Check for SA:Z tag in data.
-            if has_sa_tag_buf(&buf) {
-                sa_count += 1;
+            if points_to_partner(sa_value_buf(&buf)) {
+                if let Some(n) = buf.name() {
+                    names.insert(String::from_utf8_lossy(n.as_ref()).into_owned());
+                }
             }
         }
     } else {
@@ -827,27 +878,58 @@ fn count_sa_tags_in_region(
             if mq < min_mapq {
                 continue;
             }
-            if has_sa_tag_bam(&record) {
-                sa_count += 1;
+            if points_to_partner(sa_value_bam(&record)) {
+                if let Some(n) = record.name() {
+                    names.insert(String::from_utf8_lossy(n.as_ref()).into_owned());
+                }
             }
         }
     }
 
-    Ok(sa_count)
+    Ok(names)
 }
 
-/// Check if a BAM record has an SA:Z auxiliary tag.
-fn has_sa_tag_bam(record: &noodles::bam::Record) -> bool {
-    use noodles::sam::alignment::record::data::field::Tag;
-    let sa_tag = Tag::new(b'S', b'A');
-    record.data().get(&sa_tag).is_some()
+/// True if an SA:Z value (`chrom,pos,strand,CIGAR,mapQ,NM;...`, 1-based pos)
+/// has an alignment on `chrom` within `pad` of 0-based `pos`.
+fn sa_points_near(sa: &str, chrom: &str, pos: u64, pad: u64) -> bool {
+    sa.split(';').filter(|e| !e.is_empty()).any(|entry| {
+        let mut fields = entry.split(',');
+        let (Some(c), Some(p)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        match p.parse::<u64>() {
+            Ok(p1) => c == chrom && p1.saturating_sub(1).abs_diff(pos) <= pad,
+            Err(_) => false,
+        }
+    })
 }
 
-/// Check if a RecordBuf has an SA:Z auxiliary tag.
-fn has_sa_tag_buf(buf: &noodles::sam::alignment::RecordBuf) -> bool {
+/// Partner breakpoint (chrom, 0-based) from a BND ALT such as `A]chr2:500]`.
+fn bnd_partner(alt: &str) -> Option<(String, u64)> {
+    let open = alt.find(['[', ']'])?;
+    let close = alt.rfind(['[', ']'])?;
+    let (chrom, pos) = alt.get(open + 1..close)?.rsplit_once(':')?;
+    let pos: u64 = pos.parse().ok()?;
+    Some((chrom.to_string(), pos.checked_sub(1)?))
+}
+
+/// The SA:Z value of a BAM record, if any.
+fn sa_value_bam(record: &noodles::bam::Record) -> Option<String> {
+    use noodles::sam::alignment::record::data::field::{Tag, Value};
+    match record.data().get(&Tag::new(b'S', b'A'))? {
+        Ok(Value::String(s)) => Some(String::from_utf8_lossy(s).into_owned()),
+        _ => None,
+    }
+}
+
+/// The SA:Z value of a RecordBuf (CRAM), if any.
+fn sa_value_buf(buf: &noodles::sam::alignment::RecordBuf) -> Option<String> {
     use noodles::sam::alignment::record::data::field::Tag;
-    let sa_tag = Tag::new(b'S', b'A');
-    buf.data().get(&sa_tag).is_some()
+    use noodles::sam::alignment::record_buf::data::field::Value;
+    match buf.data().get(&Tag::new(b'S', b'A'))? {
+        Value::String(s) => Some(String::from_utf8_lossy(s).into_owned()),
+        _ => None,
+    }
 }
 
 /// Pileup a region to count alleles at each position.
@@ -1278,6 +1360,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_sa_points_near_partner_only() {
+        let sa = "chr20,45000101,-,100S50M,60,0;chr20,41000001,+,100M50S,60,1;";
+        assert!(sa_points_near(sa, "chr20", 45000000, 500));
+        assert!(sa_points_near(sa, "chr20", 41000000, 500)); // second entry
+        assert!(!sa_points_near(sa, "chr20", 43000000, 500)); // elsewhere
+        assert!(!sa_points_near(sa, "chr9", 45000000, 500)); // other chrom
+        assert!(!sa_points_near("garbage", "chr20", 45000000, 500));
+    }
+
+    #[test]
+    fn test_truth_events_know_their_partner_breakpoint() {
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chr20\t41000000\tsim_del_1\tA\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=41010000;SVLEN=-10000\tGT\t0/1
+chr20\t41000000\tsim_fus_2\tA\tA]chr20:45000000]\t999\tPASS\tSVTYPE=BND;MATEID=sim_fus_2_mate\tGT\t0/1
+chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
+";
+        let path = std::env::temp_dir().join(format!("spike_partner_{}.vcf", std::process::id()));
+        std::fs::write(&path, vcf).unwrap();
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(events[0].partner, Some(("chr20".to_string(), 41010000)));
+        assert_eq!(events[1].partner, Some(("chr20".to_string(), 44999999)));
+        assert_eq!(events[2].partner, None);
+    }
+
+    #[test]
+    fn test_mean_depth_counts_aligned_bases() {
+        // Two reads over [0,100): 100 + 50 bases inside -> depth 1.5.
+        assert_eq!(mean_depth(&[(0, 100), (50, 150)], 0, 100), 1.5);
+        // 35x of 150 bp reads, one start every 150/35 bp: depth ~35, not ~0.23.
+        let spans: Vec<(u64, u64)> = (0..3500u64).map(|i| {
+            let s = i * 150 / 35;
+            (s, s + 150)
+        }).collect();
+        let d = mean_depth(&spans, 1000, 2000);
+        assert!((d - 35.0).abs() < 0.5, "depth {}", d);
+    }
+
+    #[test]
+    fn test_coverage_ratio_without_flank_coverage_fails() {
+        let r = coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 0.0, 0.0);
+        assert!(!r.pass, "an unevaluable coverage check must not pass");
+    }
+
+    #[test]
+    fn test_coverage_ratio_tells_deletion_from_untouched() {
+        assert!(coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 17.5, 35.0).pass);
+        assert!(!coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 35.0, 35.0).pass);
+    }
+
+    #[test]
+    fn test_check_that_cannot_run_is_a_failure() {
+        // e.g. truth VCF uses "20" but the BAM uses "chr20".
+        let r = check_outcome(
+            "DEL 20:100-200",
+            "split_reads",
+            Err(anyhow::anyhow!("reference sequence not found: 20")),
+        );
+        assert!(!r.pass);
+        assert_eq!(r.check_name, "split_reads");
+        assert!(r.observed.contains("reference sequence not found: 20"), "{}", r.observed);
+    }
+
+    #[test]
     fn test_parse_info_field() {
         assert_eq!(
             parse_info_field("SVTYPE=DEL;END=100;SIM_VAF=0.500", "END"),
@@ -1299,6 +1448,7 @@ mod tests {
             sv_type: "DEL".to_string(),
             expected_vaf: 0.5,
             gene: "EGFR".to_string(),
+            partner: None,
             ref_allele: None,
             alt_allele: None,
         };
@@ -1314,6 +1464,7 @@ mod tests {
             sv_type: "INS".to_string(),
             expected_vaf: 0.3,
             gene: "EGFR".to_string(),
+            partner: None,
             ref_allele: None,
             alt_allele: None,
         };
