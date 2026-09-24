@@ -222,6 +222,79 @@ fn extract_read_pairs_bam(
     })
 }
 
+/// Pick the CRAM index entries whose slice can hold a record overlapping
+/// `interval` on `reference_sequence_id`.
+///
+/// A `.crai` entry covers one slice, and the slice's records all lie within
+/// `alignment_start .. alignment_start + alignment_span`, so a slice outside
+/// the interval cannot hold a record inside it. Entries that name no
+/// reference sequence are kept: a container spanning several contigs has no
+/// coordinates to judge it by.
+fn select_crai_entries(
+    index: &[noodles::cram::crai::Record],
+    reference_sequence_id: usize,
+    interval: noodles::core::region::Interval,
+) -> Vec<noodles::cram::crai::Record> {
+    index
+        .iter()
+        .filter(|entry| {
+            let Some(id) = entry.reference_sequence_id() else {
+                return true;
+            };
+            if id != reference_sequence_id {
+                return false;
+            }
+            let Some(start) = entry.alignment_start() else {
+                return true;
+            };
+            let last = usize::from(start).saturating_add(entry.alignment_span().saturating_sub(1));
+            let end = noodles::core::Position::new(last).unwrap_or(start);
+            interval.intersects((start..=end).into())
+        })
+        .cloned()
+        .collect()
+}
+
+/// Open an indexed CRAM reader that only has to visit `region`'s containers.
+///
+/// noodles-cram 0.74's `Query::read_next_container` compares an index entry's
+/// reference id and nothing else, so a query seeks to and fully decodes every
+/// container on the chromosome (M15). The index it queries is the one the
+/// reader was built with, so pruning that index to the slices that can overlap
+/// `region` is enough to skip the rest. Record-level filtering is unchanged:
+/// noodles still returns only the records intersecting the region.
+fn open_cram_reader_for_region(
+    cram_path: &str,
+    repository: &noodles::fasta::Repository,
+    region: &noodles::core::Region,
+) -> Result<(
+    noodles::cram::io::IndexedReader<std::fs::File>,
+    noodles::sam::Header,
+)> {
+    // The header is what maps the region's name to a reference id, so it has
+    // to be read before the index can be pruned.
+    let mut reader = noodles::cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository.clone())
+        .build_from_path(cram_path)?;
+    let header = reader.read_header()?;
+
+    let Some(reference_sequence_id) = header.reference_sequences().get_index_of(region.name())
+    else {
+        // Unknown contig: leave the full index in place and let query() raise
+        // its own "invalid reference sequence name".
+        return Ok((reader, header));
+    };
+    let index = select_crai_entries(reader.index(), reference_sequence_id, region.interval());
+
+    let mut reader = noodles::cram::io::indexed_reader::Builder::default()
+        .set_reference_sequence_repository(repository.clone())
+        .set_index(index)
+        .build_from_path(cram_path)?;
+    let header = reader.read_header()?;
+
+    Ok((reader, header))
+}
+
 /// CRAM-specific read pair extraction.
 ///
 /// Converts CRAM records to RecordBuf for uniform field access.
@@ -252,15 +325,11 @@ fn extract_read_pairs_cram(
     let mut tally = UnusableQualTally::default();
 
     {
-        let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-            .set_reference_sequence_repository(repository.clone())
-            .build_from_path(cram_path)
-            .with_context(|| format!("failed to open CRAM: {}", cram_path))?;
-        let header = reader.read_header()?;
-
         let start_pos = safe_noodles_position(start + 1);
         let end_pos = safe_noodles_position(end);
         let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) = open_cram_reader_for_region(cram_path, &repository, &region)
+            .with_context(|| format!("failed to open CRAM: {}", cram_path))?;
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {
@@ -323,18 +392,14 @@ fn extract_read_pairs_cram(
     let wider_padding = max_abs_tlen.saturating_add(200).max(1000);
 
     {
-        let mut reader = noodles::cram::io::indexed_reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(cram_path)
-            .with_context(|| format!("failed to open CRAM for pass 2: {}", cram_path))?;
-        let header = reader.read_header()?;
-
         let wider_start = start.saturating_sub(wider_padding);
         let wider_end = end.saturating_add(wider_padding);
 
         let start_pos = safe_noodles_position(wider_start + 1);
         let end_pos = safe_noodles_position(wider_end);
         let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) = open_cram_reader_for_region(cram_path, &repository, &region)
+            .with_context(|| format!("failed to open CRAM for pass 2: {}", cram_path))?;
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {
@@ -842,6 +907,69 @@ mod tests {
         let mut seq = Vec::new();
         reverse_complement(&mut seq);
         assert!(seq.is_empty());
+    }
+
+    fn crai_record(
+        reference_sequence_id: Option<usize>,
+        start: usize,
+        span: usize,
+        offset: u64,
+    ) -> noodles::cram::crai::Record {
+        noodles::cram::crai::Record::new(
+            reference_sequence_id,
+            noodles::core::Position::new(start),
+            span,
+            offset,
+            0,
+            0,
+        )
+    }
+
+    fn query_interval(start: usize, end: usize) -> noodles::core::region::Interval {
+        (noodles::core::Position::new(start).unwrap()..=noodles::core::Position::new(end).unwrap())
+            .into()
+    }
+
+    #[test]
+    fn test_select_crai_entries_skips_slices_outside_the_region() {
+        // Five 1000 bp slices on reference 19 plus one on another contig. A
+        // query of 2500-3200 can only be served by the 2001-3000 and 3001-4000
+        // slices; noodles-cram 0.74 seeks to and decodes all five, because
+        // `Query::read_next_container` compares only the reference id (M15).
+        let index = vec![
+            crai_record(Some(19), 1, 1000, 100),
+            crai_record(Some(19), 1001, 1000, 200),
+            crai_record(Some(19), 2001, 1000, 300),
+            crai_record(Some(19), 3001, 1000, 400),
+            crai_record(Some(19), 4001, 1000, 500),
+            crai_record(Some(7), 2001, 1000, 600),
+        ];
+        let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
+        let offsets: Vec<u64> = selected.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, vec![300, 400]);
+    }
+
+    #[test]
+    fn test_select_crai_entries_keeps_the_slice_ending_on_the_first_base() {
+        // A slice that ends exactly on the first queried base still holds
+        // records inside the region; one ending a base earlier cannot.
+        let index = vec![
+            crai_record(Some(19), 1, 2499, 100),
+            crai_record(Some(19), 1, 2500, 200),
+        ];
+        let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
+        let offsets: Vec<u64> = selected.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, vec![200]);
+    }
+
+    #[test]
+    fn test_select_crai_entries_keeps_entries_without_a_reference_id() {
+        // A container spanning several contigs (REVIEW L2) carries no single
+        // reference id, so its coordinates say nothing about this region.
+        // Dropping it here would bake in the assumption L2 says is false.
+        let index = vec![crai_record(None, 1, 0, 100)];
+        let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
+        assert_eq!(selected.len(), 1);
     }
 
     #[test]

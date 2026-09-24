@@ -250,6 +250,8 @@ spike --bam sample.cram --reference GRCh38.fasta \
 
 The `--reference` FASTA is required for CRAM decoding (it is also required for haplotype construction, so there is no extra burden). Both `.crai` and `.cram.crai` index conventions are supported.
 
+Read extraction seeks only the CRAM containers that can overlap the requested region. The LOH pileup that phases heterozygous SNPs still reads every container on the chromosome, so a CRAM run stays slower than the same run from a BAM.
+
 ### The sample's SNPs from a gVCF
 
 For more accurate haplotype-aware simulation, provide a pre-called VCF (e.g., from DeepVariant) with SNP genotypes:
