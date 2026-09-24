@@ -13,12 +13,18 @@ Date: 2026-09-24 · Reviewed: working tree on `master` at `f5428ce` plus uncommi
 
 ## Health check
 
-| Check | Result |
-| --- | --- |
-| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) |
-| `cargo test` | 128 passed, 0 failed |
-| `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` |
-| `scripts/validate_pipeline.sh` | **Fixed** (M17): runs end to end, and fails (exit 1) when the spike-in contributed nothing the background does not already carry |
+This table is a record: the "At review" column is the original measurement
+and is never edited. The two right columns were added later (bookkeeping fix,
+2026-09-25) once the original numbers had gone stale from the fix run's own
+commits — measure both at the row's own command, not by scaling the "At
+review" figure.
+
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `7c680f4`) |
+| --- | --- | --- | --- |
+| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | not re-measured |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **260** passed, 0 failed |
+| `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run held the line here |
+| `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
 The tests pass, but most would still pass with the high-severity bugs below. See [Test gaps](#test-gaps).
 
@@ -444,7 +450,14 @@ the leak here.
   made almost every position look heterozygous. Every one of those "after"
   numbers is exactly what the same reads give from a **chr20-only** CRAM, and
   R1, R2, `truth.vcf` and `replaced_reads.txt` are byte-identical to that
-  control — the foreign contribution is zero, not merely smaller.
+  control — the foreign contribution is zero, not merely smaller. Only R1/R2
+  actually discriminate here, though: verified directly against the task's
+  fixtures (`loh_before_both` vs `loh_before_chr20`) that `truth.vcf` and
+  `replaced_reads.txt` were **already** byte-identical to the chr20-only
+  control *before* this fix existed — they don't encode per-record
+  reference-id information, so this leak could never show up in them.
+  Decompressed R1 differs before the fix (multi-ref md5 `4dbe610a…` vs
+  control `2fef3416…`) and matches after (both `2fef3416…`).
 - **`spike validate` gave a false PASS**, measured on a CRAM whose chr21 reads
   sit only inside the deletion: `coverage_ratio` **1.77 → 0.91** (control
   0.91), so a region with no coverage drop looked like one with a 77% *rise*;
@@ -454,7 +467,11 @@ the leak here.
 - **The mate's reference is deliberately not checked at these five**, unlike
   the two extraction loops. They judge records one at a time, and a read on the
   queried contig whose mate lies elsewhere is a genuine record of this contig —
-  28 of 6865 in the test window — that every BAM query returns. Measured: with
+  **27** of 6865 in the test window under spike's own filter set (`-q 20 -F
+  0xF04`; re-verified directly against `real_chr20.cram`, `chr20:38405000-
+  38425000` — 28 is what `-F 0x904` gives instead, i.e. leaving
+  duplicate-flagged records in, which those five sites do drop) — that every
+  BAM query returns. Measured: with
   the mate clause added, the same **single-contig** CRAM run classifies **542**
   fragments where both the BAM run and the record-only guard classify **543**.
   So `record_is_on_queried_reference` compares the record's reference id only,

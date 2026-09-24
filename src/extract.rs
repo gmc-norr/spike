@@ -806,8 +806,10 @@ fn passes_filters_bam(
 ///
 /// The *mate's* reference is deliberately not consulted here: a read on the
 /// queried contig whose mate lies on another one is a genuine record of this
-/// contig, and every BAM query returns it (28 of 6865 in a 20 kb HG002 chr20
-/// window). `loh`'s and `validate`'s pileups judge records one at a time and
+/// contig, and every BAM query returns it (27 of 6865 in a 20 kb HG002 chr20
+/// window, under spike's own flag/MAPQ filter: `-q 20 -F 0xF04`, which drops
+/// duplicate-flagged records same as spike does). `loh`'s and `validate`'s
+/// pileups judge records one at a time and
 /// want exactly that (N4); read extraction wants whole pairs and uses
 /// [`pair_is_on_queried_reference`] instead.
 pub(crate) fn record_is_on_queried_reference(
