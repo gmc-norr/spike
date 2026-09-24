@@ -402,6 +402,9 @@ fn main() -> Result<()> {
         suppressed: usize,
     }
     let mut event_stats: Vec<EventStat> = Vec::new();
+    // M14: pairs whose stored quality is unusable never reach a pool, so they
+    // are in neither kept_originals nor suppressed_names.
+    let mut unusable_qual_names: BTreeSet<String> = BTreeSet::new();
 
 
     // Process each event using the unified haplotype + tiling approach.
@@ -411,7 +414,12 @@ fn main() -> Result<()> {
         log::info!("  Using VAF={:.3} for this event", vaf);
 
         // Extract reads and build pool.
-        let (pool, _extraction_chrom) = extract_pool_for_event(event, &config, &extraction_region)?;
+        let (pool, _extraction_chrom) = extract_pool_for_event(
+            event,
+            &config,
+            &extraction_region,
+            &mut unusable_qual_names,
+        )?;
 
         // Build quality profile and synth generator.
         let quality_profile =
@@ -457,8 +465,19 @@ fn main() -> Result<()> {
         event_outputs.push(output);
     }
 
-    // Names of the originals spike took; merge.sh removes exactly these.
-    let replaced_names = simulate::consumed_original_names(&event_outputs);
+    // Names of the originals spike took out of the BAM; merge.sh removes
+    // exactly these.
+    let mut replaced_names = simulate::consumed_original_names(&event_outputs);
+    // M14: a pair dropped for unusable quality cannot be replaced -- spike has
+    // no quality string to write for it -- but it must still be removed.
+    // Left in place it would sit inside every simulated event as
+    // un-suppressible reference support and dilute the realised VAF; removed,
+    // it costs only its own depth, uniformly across the extraction window.
+    let dropped_unreplaced = unusable_qual_names
+        .iter()
+        .filter(|name| !replaced_names.contains(*name))
+        .count();
+    replaced_names.extend(unusable_qual_names);
 
     let all_output_pairs = simulate::combine_event_outputs(event_outputs);
 
@@ -492,8 +511,10 @@ fn main() -> Result<()> {
     // Write the read names merge.sh removes from the original BAM.
     write_replaced_reads(&args.output, &replaced_names)?;
     log::info!(
-        "Originals replaced: {} read pairs (replaced_reads.txt)",
-        replaced_names.len()
+        "Originals removed from the BAM: {} read pairs (replaced_reads.txt); {} of \
+         them were dropped for unusable quality and are not replaced",
+        replaced_names.len(),
+        dropped_unreplaced,
     );
 
     // Write merge script.
@@ -883,6 +904,7 @@ fn extract_pool_for_event(
     event: &SimEvent,
     config: &SimConfig,
     extraction_region: &Option<ExtractionRegion>,
+    unusable_qual_names: &mut BTreeSet<String>,
 ) -> Result<(ReadPool, String)> {
     if let SimEvent::Fusion {
         chrom_a,
@@ -898,7 +920,7 @@ fn extract_pool_for_event(
         let (region_b_start, region_b_end) =
             extraction_bounds(chrom_b, *bp_b, *bp_b, config.flank_bp, extraction_region);
 
-        let pairs_a = extract::extract_read_pairs(
+        let extracted_a = extract::extract_read_pairs(
             &config.bam_path,
             chrom_a,
             region_a_start,
@@ -906,7 +928,7 @@ fn extract_pool_for_event(
             config.min_mapq,
             Some(config.ref_path.as_str()),
         )?;
-        let pairs_b = extract::extract_read_pairs(
+        let extracted_b = extract::extract_read_pairs(
             &config.bam_path,
             chrom_b,
             region_b_start,
@@ -914,9 +936,11 @@ fn extract_pool_for_event(
             config.min_mapq,
             Some(config.ref_path.as_str()),
         )?;
+        unusable_qual_names.extend(extracted_a.unusable_qual_names);
+        unusable_qual_names.extend(extracted_b.unusable_qual_names);
 
-        let mut all_pairs = pairs_a;
-        all_pairs.extend(pairs_b);
+        let mut all_pairs = extracted_a.pairs;
+        all_pairs.extend(extracted_b.pairs);
         let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
         let pool = extract::build_read_pool(all_pairs, frag_dist);
         return Ok((pool, chrom_a.clone()));
@@ -926,7 +950,7 @@ fn extract_pool_for_event(
     let (chrom, start, end) = event.primary_region().unwrap();
     let (region_start, region_end) =
         extraction_bounds(chrom, start, end, config.flank_bp, extraction_region);
-    let pairs = extract::extract_read_pairs(
+    let extracted = extract::extract_read_pairs(
         &config.bam_path,
         chrom,
         region_start,
@@ -934,8 +958,9 @@ fn extract_pool_for_event(
         config.min_mapq,
         Some(config.ref_path.as_str()),
     )?;
-    let frag_dist = stats::FragmentDist::from_read_pairs(&pairs);
-    let pool = extract::build_read_pool(pairs, frag_dist);
+    unusable_qual_names.extend(extracted.unusable_qual_names);
+    let frag_dist = stats::FragmentDist::from_read_pairs(&extracted.pairs);
+    let pool = extract::build_read_pool(extracted.pairs, frag_dist);
     Ok((pool, chrom.to_string()))
 }
 
@@ -1373,7 +1398,7 @@ fn write_readme(
     writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
     writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
     writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
-    writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took; `merge.sh` removes exactly these |")?;
+    writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took out of the BAM, plus any pair dropped for unusable quality; `merge.sh` removes exactly these |")?;
     writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions ± {}bp flank) |", flank)?;
     writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
     writeln!(md)?;

@@ -241,10 +241,13 @@ impl QualityProfile {
     ///
     /// This clamp is defense in depth, not the primary fix for M14 (missing
     /// donor qualities poisoning this model with byte 32): `extract.rs` now
-    /// drops donor records with no stored quality before they ever reach
-    /// this profile, and `fastq.rs::write_paired_fastq` refuses to write any
-    /// out-of-range byte regardless of source. Kept here because nothing
-    /// proves this sampler can never be fed bad data through some other path.
+    /// drops donor records with no stored quality, or with a raw score above
+    /// Q93, before they ever reach this profile, and
+    /// `fastq.rs::write_paired_fastq` refuses to write any out-of-range byte
+    /// regardless of source. Kept here because nothing proves this sampler
+    /// can never be fed bad data through some other path -- and because a
+    /// poisoned donor is only ever *suppressed*, never written, so the writer
+    /// would not catch it.
     pub fn sample_quality(
         &self,
         read_num: u8,

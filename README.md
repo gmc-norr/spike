@@ -326,6 +326,7 @@ The originals to replace are named, not located. spike writes every read name it
 
 - Records inside the event regions that spike never extracted — PCR duplicates, non-proper pairs, reads below `--min-mapq`, reads whose mate was filtered — are **kept**. Removing by region deleted them without putting anything back, which cost real depth.
 - Mates that lie outside the event regions but whose pair spike did extract are **removed**, because `sim.bam` carries their replacement. Removing by region left them in, so they appeared twice.
+- Pairs spike extracted but could not use — a mate with no stored base qualities, see [Missing or unusable donor base qualities](#missing-or-unusable-donor-base-qualities) — are **removed without replacement**. That costs depth; left in, they would dilute the realised VAF of every event they overlap.
 
 `ORIGINAL_BAM` (the first argument to `merge.sh`) must be the exact BAM spike was run on: `replaced_reads.txt` names reads spike found in that BAM, and `-N` only removes names it can find. A different BAM shares essentially no read names, so nothing would be removed and `sim.bam` would be merged onto full, un-thinned original depth — `merge.sh` guards against this by comparing how many of the expected names it actually matched against how many `replaced_reads.txt` lists, and aborts with an error instead of silently producing a wrong `merged.bam`.
 
@@ -401,7 +402,7 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
 | `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
-| `replaced_reads.txt` | Names of the originals spike extracted; `merge.sh` removes exactly these |
+| `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
 | `README.md` | Run log: command, events table, read counts, next-step instructions |
@@ -687,15 +688,19 @@ The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to ke
 
 Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
 
-### Missing donor base qualities
+### Missing or unusable donor base qualities
 
-SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). A donor BAM/CRAM record with no stored quality is dropped during extraction rather than kept — it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped pairs are counted and logged as a warning (spike logs to stderr), e.g.:
+SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). The two containers encode `*` differently and spike sees both — BAM keeps a per-base array with every byte `0xFF`, while noodles normalises a CRAM record's all-`0xFF` buffer to an *empty* one before spike ever sees it. A record with either shape, or carrying a raw quality above Q93 (the SAM maximum — a malformed record), is dropped during extraction: it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped records are counted and logged as a warning (spike logs to stderr), e.g.:
 
 ```
-WARN spike::extract] 457 record(s) in chr20:38402500-38432500 had no quality scores (SAM '*') and were skipped
+WARN spike::extract] 457 record(s) considered for the chr20:38402500-38432500 donor pool had no quality scores (SAM '*'); their pairs were dropped from the pool and merge.sh removes them from the merged BAM
 ```
 
-This trades a small amount of depth (the fraction of donor reads with no quality) for correctness: without this, missing quality used to decode to an invalid FASTQ quality byte (space) for kept reads, and poisoned the learned quality model so synthetic reads sampled from it came out as mostly-Q0 with effectively random bases. As a second line of defense, `write_paired_fastq` refuses (returns an error) to write any quality byte outside the printable Phred+33 range `!`-`~` (33-126) regardless of where it came from.
+**A dropped pair is removed from the merged BAM even though nothing replaces it.** spike has no quality string to write for it, so it cannot come back through the FASTQ — but it is still listed in `replaced_reads.txt`, so `merge.sh` drops it. That costs real depth. Leaving it in costs more: the pair would sit inside every event it overlaps as reference support that no allele fraction can suppress and no synthetic read can replace, so the realised VAF would come out diluted by the unusable-quality fraction while the truth VCF still claimed the full one. Because the same pairs are dropped across the whole extraction window, not just inside the event, the loss cancels in a flank-normalised ratio; the dilution would not. Measured on an HG002 chr20 slice with 5% of donor pairs' quality stripped to `*`, over a 10 kb deletion: 147 of 2868 eligible records inside the event (5.13%) carried `*` quality and were un-suppressible; removing them takes that to 0.00%, at a cost of those same 147 records of depth.
+
+Without the drop, a missing quality used to decode to an invalid FASTQ quality byte (space) for kept reads and poisoned the learned quality model, so synthetic reads sampled from it came out mostly-Q0 with effectively random bases. On the CRAM path it produced a FASTQ record with a full-length SEQ line next to a zero-length QUAL line, which `samtools import` rejects outright (`truncated file`).
+
+As a last line of defense, `write_paired_fastq` validates every pair *before* it creates either output file — so a refusal leaves no half-written `.fq.gz` in `--output` — and returns an error if a quality string's length does not match its SEQ, or if any byte falls outside the printable Phred+33 range `!`-`~` (33-126).
 
 ### Indel error model
 
