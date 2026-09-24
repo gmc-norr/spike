@@ -459,6 +459,8 @@ fn main() -> Result<()> {
         config.allele_fraction, // default AF for events without per-event override
         &truth_path.to_string_lossy(),
         &args.reference,
+        &shared_ref,
+        &reference::fasta_contigs(&args.reference)?,
     )?;
 
     // Write alignment convenience script.

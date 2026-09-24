@@ -39,7 +39,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M3 | Medium | **Fixed** (rejected). `--flank` < 2000 leaves extra reads | `main.rs:379` |
 | M4 | Medium | Chromosome-end segments overcount length | `haplotype.rs:81-104` |
 | M5 | Medium | `merge.sh` loses/duplicates reads; adds sample `SIM` | `main.rs:1130`, `main.rs:667-671` |
-| M6 | Medium | Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
+| M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
 | M8 | Medium | `--region` merged with distant events | `main.rs:172-180` |
 | M9 | Medium | Fusion read pools double-counted | `main.rs:906-911`; `simulate.rs:471-503` |

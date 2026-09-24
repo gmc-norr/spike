@@ -5,6 +5,32 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
+/// Read the .fai index of a FASTA file.
+fn read_fai(path: &Path) -> Result<fasta::fai::Index> {
+    let index_path = path.with_extension("fa.fai");
+    let index_path = if index_path.exists() {
+        index_path
+    } else {
+        let alt = format!("{}.fai", path.display());
+        Path::new(&alt).to_path_buf()
+    };
+    fasta::fai::read(&index_path)
+        .with_context(|| format!("failed to read FASTA index: {}", index_path.display()))
+}
+
+/// Contig names and lengths of a FASTA file, in .fai order.
+pub fn fasta_contigs(fasta_path: &str) -> Result<Vec<(String, u64)>> {
+    let index = read_fai(Path::new(fasta_path))?;
+    Ok(index
+        .as_ref()
+        .iter()
+        .map(|r| {
+            let name: &[u8] = r.name();
+            (String::from_utf8_lossy(name).into_owned(), r.length())
+        })
+        .collect())
+}
+
 /// Indexed reference FASTA reader with region caching.
 struct ReferenceReader {
     index: fasta::fai::Index,
@@ -18,17 +44,7 @@ impl ReferenceReader {
     /// Open a reference FASTA with its .fai index.
     fn open<P: AsRef<Path>>(fasta_path: P) -> Result<Self> {
         let path = fasta_path.as_ref();
-
-        let index_path = path.with_extension("fa.fai");
-        let index_path = if index_path.exists() {
-            index_path
-        } else {
-            let alt = format!("{}.fai", path.display());
-            Path::new(&alt).to_path_buf()
-        };
-
-        let index = fasta::fai::read(&index_path)
-            .with_context(|| format!("failed to read FASTA index: {}", index_path.display()))?;
+        let index = read_fai(path)?;
 
         let file = File::open(path)
             .with_context(|| format!("failed to open FASTA: {}", path.display()))?;
