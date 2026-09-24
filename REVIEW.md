@@ -53,6 +53,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) |
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
+| N3 | Medium | **Not fixed** (found during the fix run). Five more CRAM query sites still walk the whole chromosome's index; the two in the LOH pileup run on every event and cost 47.3 s of the 50.4 s a CRAM run takes after M15 | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 
 ## High severity
 
@@ -280,6 +281,7 @@ noodles-cram 0.74 `Query::read_next_container` checks only the reference id, nev
 - 30 kb region: 0.12 s from BAM, 39.97 s from a CRAM with only 10 Mb of chr20. `samtools view`: 0.015 s.
 - **Fix:** filter index entries by position and seek manually, or upgrade noodles after checking the fix.
 - **Fixed**, and measured: the CRAM reader is now built with a `.crai` pruned to the slices whose `alignment_start`/`alignment_span` can overlap the query interval, so noodles seeks only to containers the region needs; per-record filtering is untouched. Same 30 kb window (`del:chr20:38412500-38422500`, `--seed 1`) on a 10 Mb chr20 CRAM of 338 slices: extraction 42.79 s → 0.47 s (91x), against 0.04 s from the equivalent BAM and 0.016 s for `samtools view -c`; whole run 91.0 s → 49.4 s. Output is unchanged — R1/R2 FASTQ and truth VCF are byte-identical to the slow path on four windows, including two straddling a slice boundary and the first and last slices of the file. Two notes on the entry above: the "~300x" ratio came from a 0.12 s BAM floor, and measured here the CRAM/BAM ratio was 42.79/0.040 ≈ 1070x before and ≈12x after; and the 49 s that remain are two LOH pileup queries (`loh.rs:507, 910`), which open CRAM the same way and are outside M15's scope.
+- Caveat on that equality proof: it is **single-contig only** — all 338 slices of the test CRAM are chr20. On a multi-contig CRAM the output *can* change, because pruning decodes fewer foreign containers and so leaks fewer of their reads (L2). That direction is an improvement, but it is unproven here.
 
 ### M16 · LOH pileup memory ~1 GB per Mb
 `loh.rs:580-583` stores one `(u64, u8)` per aligned base per read.
@@ -373,6 +375,28 @@ Two related decisions are **open, and deliberately not taken here**:
   on the confounded checks. The honest alternative is to drop the `spike
   validate` check count from the verdict altogether rather than leave an inert
   gate in it — a judgement call for a human, recorded here rather than made.
+
+### N3 · Five more CRAM query sites walk the whole chromosome's index
+
+*Found while fixing M15, which names `extract.rs:240-243, 314-317`; those lines
+are fixed. These five are the same five-line pattern —
+`indexed_reader::Builder::default()` → `read_header()` → a bounded `Region` →
+`query` — with no index pruning, and nothing tracked them.*
+
+`loh.rs:507` (`count_alleles_cram`) and `loh.rs:910` (`collect_snp_alleles_cram`)
+run on **every event**, with or without `--gvcf`. Measured on the same 10 Mb
+chr20 CRAM (338 slices), `del:chr20:38412500-38422500`, `--seed 1`, with M15
+already fixed: the two pileup passes take **23.67 s and 23.65 s** of a 50.4 s
+run (the same two passes cost 0.027 s and 0.018 s from the equivalent BAM), so
+94% of what is left is this defect and a CRAM run is still ~30× the 1.70 s BAM
+run. M15's own cited lines are genuinely fixed, but its stated symptom — CRAM
+far slower than BAM — survives at most of its original cost.
+
+`validate.rs:708` (`count_depth_in_region`), `validate.rs:822`
+(`split_reads_to_partner`) and `validate.rs:950` (`pileup_region`) are the same
+defect in the `spike validate` subcommand; not timed.
+
+- **Fix:** the same index pruning, through `extract::open_cram_reader_for_region`.
 
 ## Low severity
 

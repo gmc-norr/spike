@@ -228,8 +228,13 @@ fn extract_read_pairs_bam(
 /// A `.crai` entry covers one slice, and the slice's records all lie within
 /// `alignment_start .. alignment_start + alignment_span`, so a slice outside
 /// the interval cannot hold a record inside it. Entries that name no
-/// reference sequence are kept: a container spanning several contigs has no
-/// coordinates to judge it by.
+/// reference sequence are kept: `-1` is noodles' `UNMAPPED`, a slice of
+/// unplaced reads, and it carries no coordinates to judge. (A container
+/// holding several contigs is *not* this case — htslib writes one `.crai`
+/// line per contig, each with that contig's own start and span, all pointing
+/// at the same offset.) Keeping them changes nothing either way:
+/// `Query::read_next_container` skips every entry whose reference id is not
+/// the queried one.
 fn select_crai_entries(
     index: &[noodles::cram::crai::Record],
     reference_sequence_id: usize,
@@ -963,13 +968,39 @@ mod tests {
     }
 
     #[test]
-    fn test_select_crai_entries_keeps_entries_without_a_reference_id() {
-        // A container spanning several contigs (REVIEW L2) carries no single
-        // reference id, so its coordinates say nothing about this region.
-        // Dropping it here would bake in the assumption L2 says is false.
-        let index = vec![crai_record(None, 1, 0, 100)];
+    fn test_select_crai_entries_keeps_the_slice_starting_on_the_last_base() {
+        // The right edge, pinned at one base: a slice whose first base is the
+        // region's last base can hold a record inside the region.
+        let index = vec![crai_record(Some(19), 3200, 1000, 100)];
         let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
-        assert_eq!(selected.len(), 1);
+        let offsets: Vec<u64> = selected.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, vec![100]);
+    }
+
+    #[test]
+    fn test_select_crai_entries_drops_the_slice_starting_one_base_past_the_region() {
+        // The same edge from the other side: a slice starting one base after
+        // the region ends cannot hold a record inside it, however long it is.
+        let index = vec![crai_record(Some(19), 3201, 1000, 200)];
+        let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
+        let offsets: Vec<u64> = selected.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, Vec::<u64>::new());
+    }
+
+    #[test]
+    fn test_select_crai_entries_keeps_entries_without_a_reference_id() {
+        // A `.crai` entry with no reference id is `-1`, a slice of unplaced
+        // reads; it has no coordinates on this reference, so there is nothing
+        // to judge it by and it stays. The second entry (same contig, well
+        // outside the region) is what makes this a test rather than a
+        // restatement of "keep everything".
+        let index = vec![
+            crai_record(None, 1, 0, 100),
+            crai_record(Some(19), 4001, 1000, 200),
+        ];
+        let selected = select_crai_entries(&index, 19, query_interval(2500, 3200));
+        let offsets: Vec<u64> = selected.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, vec![100]);
     }
 
     #[test]
