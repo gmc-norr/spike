@@ -1014,7 +1014,7 @@ fn build_haplotype(
 
 /// Return BED regions (chrom, start, end) covering an event ± flank.
 ///
-/// Used for events.bed (merge step) and README. Coordinates are 0-based half-open.
+/// Used for events.bed (written for inspection) and README. Coordinates are 0-based half-open.
 fn event_extraction_regions(event: &SimEvent, flank: u64) -> Vec<(String, u64, u64)> {
     match event {
         SimEvent::Deletion {
@@ -1088,7 +1088,9 @@ fn event_extraction_regions(event: &SimEvent, flank: u64) -> Vec<(String, u64, u
 
 /// Write events.bed: one line per extraction region (event ± flank), 0-based half-open.
 ///
-/// Used by merge.sh to identify which reads in the original BAM to replace.
+/// For inspection only: documents which regions events were extracted from.
+/// merge.sh does not read this file -- it selects originals to replace by read
+/// name (replaced_reads.txt), not by region.
 fn write_event_bed(output_dir: &str, events: &[SimEvent], flank: u64) -> Result<()> {
     use std::io::Write as IoWrite;
     let bed_path = Path::new(output_dir).join("events.bed");
@@ -1143,6 +1145,12 @@ set -euo pipefail
 #
 # Usage: bash merge.sh [ORIGINAL_BAM] [REFERENCE_FASTA] [THREADS]
 #
+# ORIGINAL_BAM must be the exact BAM spike was run on: replaced_reads.txt names
+# the reads spike extracted from it, and -N below only removes names it finds.
+# A different BAM shares essentially no read names, so this script checks for
+# that and aborts rather than silently merging sim.bam onto full, un-thinned
+# original depth.
+#
 # REFERENCE_FASTA is required when ORIGINAL_BAM is a CRAM file.
 # Requires: samtools (>= 1.13 for -N and -U flag support)
 ORIGINAL="${{1:-{original_bam}}}"
@@ -1162,7 +1170,23 @@ if [ ! -f "$DIR/replaced_reads.txt" ]; then
 fi
 
 echo "Removing the replaced originals from $ORIGINAL..."
-"$SAMTOOLS" view -b -T "$REF" -N "$DIR/replaced_reads.txt" -U "$DIR/outside.bam" "$ORIGINAL" -o /dev/null
+"$SAMTOOLS" view -b -T "$REF" -N "$DIR/replaced_reads.txt" -U "$DIR/outside.bam" "$ORIGINAL" -o "$DIR/removed.bam"
+
+# Sanity check: every name in replaced_reads.txt came from a read spike found
+# in ORIGINAL, so a correct ORIGINAL always yields at least one matching record
+# per name (usually two, for a pair). If far fewer matched, ORIGINAL is most
+# likely not the BAM spike was run on -- samtools does not error on read names
+# it cannot find, so without this check the merge below would silently combine
+# sim.bam with (near) full original depth instead of the thinned original.
+NAMES=$(wc -l < "$DIR/replaced_reads.txt")
+ACTUAL=$("$SAMTOOLS" view -c "$DIR/removed.bam")
+rm -f "$DIR/removed.bam"
+if [ "$NAMES" -gt 0 ] && [ "$ACTUAL" -lt "$NAMES" ]; then
+    echo "Error: only $ACTUAL of $NAMES replaced read names had a matching record in $ORIGINAL." >&2
+    echo "ORIGINAL must be the exact BAM spike was run on -- point merge.sh at a" >&2
+    echo "different BAM only if it is that same BAM (e.g. moved to a new path)." >&2
+    exit 1
+fi
 
 echo "Merging spiked reads with the untouched originals..."
 "$SAMTOOLS" merge -f -@ "$THREADS" "$DIR/merged_tmp.bam" "$DIR/sim.bam" "$DIR/outside.bam"
@@ -1470,6 +1494,169 @@ mod tests {
             !script.contains("-L \"$DIR/events.bed\""),
             "merge.sh must not drop originals by BED region:\n{}",
             script
+        );
+    }
+
+    /// A stub "samtools" for exercising merge.sh's own shell logic (the
+    /// shortfall guard, control flow, exit codes) without real BAM files or
+    /// real samtools. It only understands the exact invocations
+    /// `write_merge_script` emits:
+    /// - `view -c PATH`: echoes `$SAMTOOLS_FAKE_ACTUAL` (default 0) for a path
+    ///   ending in `removed.bam`, else `0`.
+    /// - `view ... -o OUT -U UN ... IN`: touches OUT and UN (no real filtering).
+    /// - `merge -f -@ N OUT IN...` / `sort -@ N -o OUT IN`: touches OUT.
+    /// - `index FILE`: no-op.
+    ///
+    /// Everything exits 0 so `set -euo pipefail` never trips on the stub itself
+    /// -- only the guard logic under test can fail the script.
+    fn write_stub_samtools(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake_samtools.sh");
+        let script = r#"#!/bin/bash
+set -u
+case "$1" in
+  view)
+    if [ "$2" = "-c" ]; then
+      case "$3" in
+        */removed.bam) echo "${SAMTOOLS_FAKE_ACTUAL:-0}" ;;
+        *) echo "0" ;;
+      esac
+      exit 0
+    fi
+    outfile=""
+    unfile=""
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -o) outfile="$2"; shift 2 ;;
+        -U) unfile="$2"; shift 2 ;;
+        -T|-N) shift 2 ;;
+        -b) shift ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$outfile" ] && : > "$outfile"
+    [ -n "$unfile" ] && : > "$unfile"
+    exit 0
+    ;;
+  merge)
+    shift
+    out=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift ;;
+        -@) shift 2 ;;
+        *) out="$1"; break ;;
+      esac
+    done
+    [ -n "$out" ] && : > "$out"
+    exit 0
+    ;;
+  sort)
+    shift
+    out=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -@) shift 2 ;;
+        -o) out="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$out" ] && : > "$out"
+    exit 0
+    ;;
+  index)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+"#;
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn test_merge_script_aborts_when_original_bam_does_not_match_replaced_reads() {
+        // `bash merge.sh /other.bam` lets a caller override ORIGINAL_BAM. If that
+        // BAM is not the one spike ran on, none of its read names are in
+        // replaced_reads.txt, so `-N` matches nothing and the unguarded script
+        // would silently merge sim.bam onto full, un-thinned original depth.
+        let dir = scratch_dir("merge_guard_abort");
+        let samtools = write_stub_samtools(&dir);
+
+        write_merge_script(
+            dir.to_str().unwrap(),
+            "orig.bam",
+            "ref.fa",
+            4,
+            samtools.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("sim.bam"), b"").unwrap();
+        std::fs::write(dir.join("replaced_reads.txt"), "r1\nr2\nr3\nr4\nr5\n").unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg(dir.join("merge.sh"))
+            .env("SAMTOOLS_FAKE_ACTUAL", "0") // wrong-BAM case: none of the 5 names matched
+            .output()
+            .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "merge.sh must abort when far fewer records matched by name than \
+             replaced_reads.txt lists (a wrong ORIGINAL_BAM):\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("ORIGINAL"),
+            "abort message should point at ORIGINAL_BAM as the likely cause:\n{}",
+            stderr
+        );
+        assert!(
+            !dir.join("merged.bam").exists(),
+            "merge.sh must not produce merged.bam once the shortfall check fails"
+        );
+    }
+
+    #[test]
+    fn test_merge_script_proceeds_when_original_bam_matches_replaced_reads() {
+        let dir = scratch_dir("merge_guard_ok");
+        let samtools = write_stub_samtools(&dir);
+
+        write_merge_script(
+            dir.to_str().unwrap(),
+            "orig.bam",
+            "ref.fa",
+            4,
+            samtools.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("sim.bam"), b"").unwrap();
+        std::fs::write(dir.join("replaced_reads.txt"), "r1\nr2\nr3\nr4\nr5\n").unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg(dir.join("merge.sh"))
+            .env("SAMTOOLS_FAKE_ACTUAL", "10") // healthy case: ~2 records per name
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "merge.sh must not false-positive when the expected records were found:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            dir.join("merged.bam").exists(),
+            "merge.sh should have produced merged.bam"
         );
     }
 
