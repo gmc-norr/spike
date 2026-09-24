@@ -53,7 +53,10 @@ All types support per-event allele fraction control.
 ### Prerequisites
 
 - **Rust** (edition 2021 or later)
-- **Reference FASTA** with `.fai` index (e.g., from `samtools faidx`)
+- **Reference FASTA** with `.fai` index (e.g., from `samtools faidx`). May be
+  plain or bgzip-compressed (`.gz`/`.bgz`, detected by extension); a
+  bgzipped FASTA also needs the matching `.gzi` index that `samtools faidx`
+  produces alongside the `.fai` for a bgzipped input.
 - **BAM/CRAM** input must be coordinate-sorted and indexed (`.bai` / `.crai`)
 - **bcftools** (only needed if using `--gvcf` with `.vcf.gz` files)
 - An **aligner** for the optional `--align` step (default: `bwa-mem2`; also supports `minimap2`, `bowtie2`, or any custom aligner)

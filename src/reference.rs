@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use noodles::fasta;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 /// Read the .fai index of a FASTA file.
@@ -34,7 +33,7 @@ pub fn fasta_contigs(fasta_path: &str) -> Result<Vec<(String, u64)>> {
 /// Indexed reference FASTA reader with region caching.
 struct ReferenceReader {
     index: fasta::fai::Index,
-    reader: fasta::IndexedReader<BufReader<File>>,
+    reader: fasta::IndexedReader<fasta::io::BufReader<File>>,
     cache: HashMap<(String, u64, u64), Vec<u8>>,
     cache_order: VecDeque<(String, u64, u64)>,
     max_cache_entries: usize,
@@ -42,13 +41,26 @@ struct ReferenceReader {
 
 impl ReferenceReader {
     /// Open a reference FASTA with its .fai index.
+    ///
+    /// Detects a bgzipped FASTA (`.gz`/`.bgz`) by extension and decompresses
+    /// it via its `.gzi` index; a plain FASTA is read as raw bytes as
+    /// before. Reading a bgzipped FASTA as raw bytes (the previous bug here)
+    /// silently returns garbage/truncated sequence instead of failing, which
+    /// then surfaces later as a misleading "beyond chromosome length" error.
     fn open<P: AsRef<Path>>(fasta_path: P) -> Result<Self> {
         let path = fasta_path.as_ref();
         let index = read_fai(path)?;
 
-        let file = File::open(path)
-            .with_context(|| format!("failed to open FASTA: {}", path.display()))?;
-        let reader = fasta::IndexedReader::new(BufReader::new(file), index.clone());
+        let reader = fasta::io::indexed_reader::Builder::default()
+            .set_index(index.clone())
+            .build_from_path(path)
+            .with_context(|| {
+                format!(
+                    "failed to open FASTA reader for {} (if this is a bgzipped FASTA, \
+                     it needs a matching .gzi index alongside it)",
+                    path.display()
+                )
+            })?;
 
         Ok(Self {
             index,
@@ -190,5 +202,97 @@ impl SharedReference {
             return Ok(Vec::new());
         }
         Ok(seq[start_clamped..end_clamped].to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Write a one-contig bgzipped FASTA plus its .fai and .gzi companions to
+    /// `dir`, using noodles' own bgzf writer/gzi types (no external tools).
+    fn write_bgzipped_fasta(
+        dir: &Path,
+        contig: &str,
+        sequence: &[u8],
+    ) -> std::path::PathBuf {
+        let fa_path = dir.join("ref.fa.gz");
+
+        let mut raw = Vec::new();
+        raw.extend_from_slice(format!(">{contig}\n").as_bytes());
+        let offset = raw.len() as u64;
+        raw.extend_from_slice(sequence);
+        raw.push(b'\n');
+
+        let mut writer = noodles::bgzf::Writer::new(Vec::new());
+        writer.write_all(&raw).expect("write bgzf data");
+        let compressed = writer.finish().expect("finish bgzf stream");
+        std::fs::write(&fa_path, &compressed).expect("write .fa.gz");
+
+        let record = fasta::fai::Record::new(
+            contig,
+            sequence.len() as u64,
+            offset,
+            sequence.len() as u64,
+            sequence.len() as u64 + 1,
+        );
+        fasta::fai::fs::write(
+            dir.join("ref.fa.gz.fai"),
+            &fasta::fai::Index::from(vec![record]),
+        )
+        .expect("write .fai");
+
+        // The whole record fits in one bgzf block, so the block boundary
+        // list is empty; gzi::Index::query() falls back to offset 0 for any
+        // position in that case, which is exactly right here.
+        noodles::bgzf::gzi::fs::write(dir.join("ref.fa.gz.gzi"), &noodles::bgzf::gzi::Index::default())
+            .expect("write .gzi");
+
+        fa_path
+    }
+
+    #[test]
+    fn fetch_sequence_reads_bgzipped_fasta_correctly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_reference_bgzip_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fa_path = write_bgzipped_fasta(&dir, "chr1", b"ACGTACGTAC");
+
+        let mut reader = ReferenceReader::open(&fa_path).expect("open bgzipped FASTA");
+        let seq = reader
+            .fetch_sequence("chr1", 0, 10)
+            .expect("fetch_sequence on bgzipped FASTA");
+        assert_eq!(seq, b"ACGTACGTAC");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_bgzipped_fasta_without_gzi_names_the_real_problem() {
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_reference_bgzip_missing_gzi_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fa_path = write_bgzipped_fasta(&dir, "chr1", b"ACGTACGTAC");
+        std::fs::remove_file(dir.join("ref.fa.gz.gzi")).unwrap();
+
+        let message = match ReferenceReader::open(&fa_path) {
+            Ok(_) => panic!("expected opening a bgzipped FASTA without a .gzi to fail"),
+            Err(err) => format!("{err:#}").to_lowercase(),
+        };
+        assert!(
+            message.contains("gzi"),
+            "error should name the missing bgzip index (.gzi), got: {message}"
+        );
+        assert!(
+            !message.contains("beyond chromosome length"),
+            "error should not be the misleading downstream message, got: {message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
