@@ -73,6 +73,7 @@ fn extract_read_pairs_bam(
     let mut pass1_read1_count = 0usize;
     let mut pass1_read2_count = 0usize;
     let mut max_abs_tlen = 0u64;
+    let mut missing_qual_count = 0usize;
 
     {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -103,10 +104,11 @@ fn extract_read_pairs_bam(
                 Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
                 None => continue,
             };
-            let partial = match parse_partial_from_bam_record(&record, &flags) {
-                Some(p) => p,
-                None => continue,
-            };
+            let partial =
+                match parse_partial_from_bam_record(&record, &flags, &mut missing_qual_count) {
+                    Some(p) => p,
+                    None => continue,
+                };
             max_abs_tlen = max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
 
             if flags.is_first_segment() {
@@ -178,7 +180,9 @@ fn extract_read_pairs_bam(
                     continue;
                 }
                 if let Some(read2) = read2_map.remove(&name) {
-                    let Some(read1) = parse_partial_from_bam_record(&record, &flags) else {
+                    let Some(read1) =
+                        parse_partial_from_bam_record(&record, &flags, &mut missing_qual_count)
+                    else {
                         continue;
                     };
                     pairs.push(build_pair_from_partials(name, read1, read2, chrom));
@@ -188,7 +192,9 @@ fn extract_read_pairs_bam(
                     continue;
                 }
                 if let Some(read1) = read1_map.remove(&name) {
-                    let Some(read2) = parse_partial_from_bam_record(&record, &flags) else {
+                    let Some(read2) =
+                        parse_partial_from_bam_record(&record, &flags, &mut missing_qual_count)
+                    else {
                         continue;
                     };
                     pairs.push(build_pair_from_partials(name, read1, read2, chrom));
@@ -198,7 +204,7 @@ fn extract_read_pairs_bam(
     }
 
     let unmatched = read1_map.len() + read2_map.len();
-    log_extraction_result(unmatched, pairs.len(), chrom, start, end);
+    log_extraction_result(missing_qual_count, unmatched, pairs.len(), chrom, start, end);
     Ok(pairs)
 }
 
@@ -229,6 +235,7 @@ fn extract_read_pairs_cram(
     let mut pass1_read1_count = 0usize;
     let mut pass1_read2_count = 0usize;
     let mut max_abs_tlen = 0u64;
+    let mut missing_qual_count = 0usize;
 
     {
         let mut reader = noodles::cram::io::indexed_reader::Builder::default()
@@ -264,10 +271,11 @@ fn extract_read_pairs_cram(
                 Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
                 None => continue,
             };
-            let partial = match parse_partial_from_record_buf(&buf, &flags) {
-                Some(p) => p,
-                None => continue,
-            };
+            let partial =
+                match parse_partial_from_record_buf(&buf, &flags, &mut missing_qual_count) {
+                    Some(p) => p,
+                    None => continue,
+                };
             max_abs_tlen = max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
 
             if flags.is_first_segment() {
@@ -344,7 +352,9 @@ fn extract_read_pairs_cram(
                     continue;
                 }
                 if let Some(read2) = read2_map.remove(&name) {
-                    let Some(read1) = parse_partial_from_record_buf(&buf, &flags) else {
+                    let Some(read1) =
+                        parse_partial_from_record_buf(&buf, &flags, &mut missing_qual_count)
+                    else {
                         continue;
                     };
                     pairs.push(build_pair_from_partials(name, read1, read2, chrom));
@@ -354,7 +364,9 @@ fn extract_read_pairs_cram(
                     continue;
                 }
                 if let Some(read1) = read1_map.remove(&name) {
-                    let Some(read2) = parse_partial_from_record_buf(&buf, &flags) else {
+                    let Some(read2) =
+                        parse_partial_from_record_buf(&buf, &flags, &mut missing_qual_count)
+                    else {
                         continue;
                     };
                     pairs.push(build_pair_from_partials(name, read1, read2, chrom));
@@ -364,7 +376,7 @@ fn extract_read_pairs_cram(
     }
 
     let unmatched = read1_map.len() + read2_map.len();
-    log_extraction_result(unmatched, pairs.len(), chrom, start, end);
+    log_extraction_result(missing_qual_count, unmatched, pairs.len(), chrom, start, end);
     Ok(pairs)
 }
 
@@ -438,10 +450,26 @@ fn build_pair_from_partials(
     }
 }
 
+/// Whether raw (pre-Phred+33) quality-score bytes indicate that no quality
+/// data was stored for this record.
+///
+/// SAM's QUAL field is all-or-nothing per record: it is either `*` (missing)
+/// or a full string the same length as SEQ — never a mix of the two within
+/// one record. BAM/CRAM encode "missing" as every per-base byte set to 0xFF
+/// (255); a real Phred score never reaches 255 (max is 93), so this check is
+/// unambiguous.
+fn quality_is_missing(raw_qual: &[u8]) -> bool {
+    !raw_qual.is_empty() && raw_qual.iter().all(|&b| b == 0xff)
+}
+
 /// Parse sequence/quality/position fields from a BAM record into a partial read.
+///
+/// Records whose quality is entirely missing (SAM `*`, encoded as every
+/// per-base byte 0xFF) are skipped, and `missing_qual_count` is incremented.
 fn parse_partial_from_bam_record(
     record: &noodles::bam::Record,
     flags: &noodles::sam::alignment::record::Flags,
+    missing_qual_count: &mut usize,
 ) -> Option<PartialRead> {
     let pos = match record.alignment_start() {
         Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
@@ -452,13 +480,14 @@ fn parse_partial_from_bam_record(
     }
     let tlen = record.template_length();
 
+    let raw_qual = record.quality_scores();
+    let raw_qual = raw_qual.as_ref();
+    if quality_is_missing(raw_qual) {
+        *missing_qual_count += 1;
+        return None;
+    }
     let mut seq: Vec<u8> = record.sequence().iter().collect();
-    let mut qual: Vec<u8> = record
-        .quality_scores()
-        .as_ref()
-        .iter()
-        .map(|s| s.wrapping_add(33))
-        .collect();
+    let mut qual: Vec<u8> = raw_qual.iter().map(|s| s.wrapping_add(33)).collect();
 
     if flags.is_reverse_complemented() {
         reverse_complement(&mut seq);
@@ -474,9 +503,13 @@ fn parse_partial_from_bam_record(
 }
 
 /// Parse sequence/quality/position fields from a CRAM RecordBuf into a partial read.
+///
+/// Records whose quality is entirely missing (SAM `*`, encoded as every
+/// per-base byte 0xFF) are skipped, and `missing_qual_count` is incremented.
 fn parse_partial_from_record_buf(
     buf: &noodles::sam::alignment::RecordBuf,
     flags: &noodles::sam::alignment::record::Flags,
+    missing_qual_count: &mut usize,
 ) -> Option<PartialRead> {
     let pos = match buf.alignment_start() {
         Some(p) => usize::from(p).saturating_sub(1) as u64,
@@ -487,13 +520,14 @@ fn parse_partial_from_record_buf(
     }
     let tlen = buf.template_length();
 
+    let raw_qual = buf.quality_scores();
+    let raw_qual = raw_qual.as_ref();
+    if quality_is_missing(raw_qual) {
+        *missing_qual_count += 1;
+        return None;
+    }
     let mut seq: Vec<u8> = buf.sequence().as_ref().to_vec();
-    let mut qual: Vec<u8> = buf
-        .quality_scores()
-        .as_ref()
-        .iter()
-        .map(|s| s.wrapping_add(33))
-        .collect();
+    let mut qual: Vec<u8> = raw_qual.iter().map(|s| s.wrapping_add(33)).collect();
 
     if flags.is_reverse_complemented() {
         reverse_complement(&mut seq);
@@ -509,7 +543,27 @@ fn parse_partial_from_record_buf(
 }
 
 /// Log extraction results (shared between BAM and CRAM paths).
-fn log_extraction_result(unmatched: usize, pair_count: usize, chrom: &str, start: u64, end: u64) {
+fn log_extraction_result(
+    missing_qual_count: usize,
+    unmatched: usize,
+    pair_count: usize,
+    chrom: &str,
+    start: u64,
+    end: u64,
+) {
+    if missing_qual_count > 0 {
+        // M14: a record whose quality is entirely missing (SAM `*`) is
+        // dropped rather than silently turned into space characters, which
+        // used to poison the learned quality model. Surface the count so a
+        // user can tell this is happening to their donor BAM.
+        log::warn!(
+            "{} record(s) in {}:{}-{} had no quality scores (SAM '*') and were skipped",
+            missing_qual_count,
+            chrom,
+            start,
+            end,
+        );
+    }
     if unmatched > 0 {
         log::debug!(
             "{} records had no matching mate in the queried windows",
@@ -704,5 +758,70 @@ mod tests {
         assert_eq!(pair.insert_size, 420);
         assert_eq!(pair.seq1.len(), 150);
         assert_eq!(pair.seq2.len(), 150);
+    }
+
+    // --- M14: missing base qualities must not silently become spaces ---
+
+    #[test]
+    fn test_quality_is_missing_detects_all_0xff() {
+        // BAM/CRAM encode a SAM `*` (no quality stored) as every per-base
+        // raw byte set to 0xFF. That's the exact input that used to produce
+        // `s.wrapping_add(33) == 32` (space) for every base.
+        assert!(quality_is_missing(&[0xff; 10]));
+    }
+
+    #[test]
+    fn test_quality_is_missing_false_for_real_quality() {
+        // Real Phred scores never reach 255 (max encodable is 93), so any
+        // record with real quality data must not be flagged as missing.
+        assert!(!quality_is_missing(&[30, 30, 40, 2, 0]));
+    }
+
+    #[test]
+    fn test_quality_is_missing_false_for_empty() {
+        // An empty quality slice (e.g. a zero-length read) isn't the
+        // "missing" sentinel; don't misclassify it.
+        assert!(!quality_is_missing(&[]));
+    }
+
+    fn record_buf_with_quality(qual: Vec<u8>) -> noodles::sam::alignment::RecordBuf {
+        let seq_len = qual.len();
+        noodles::sam::alignment::RecordBuf::builder()
+            .set_alignment_start(safe_noodles_position(100))
+            .set_mate_alignment_start(safe_noodles_position(500))
+            .set_template_length(400)
+            .set_sequence(noodles::sam::alignment::record_buf::Sequence::from(vec![
+                b'A';
+                seq_len
+            ]))
+            .set_quality_scores(noodles::sam::alignment::record_buf::QualityScores::from(
+                qual,
+            ))
+            .build()
+    }
+
+    #[test]
+    fn test_parse_partial_from_record_buf_skips_missing_quality_and_counts_it() {
+        let buf = record_buf_with_quality(vec![0xff; 10]);
+        let flags = noodles::sam::alignment::record::Flags::empty();
+        let mut missing_qual_count = 0usize;
+
+        let result = parse_partial_from_record_buf(&buf, &flags, &mut missing_qual_count);
+
+        assert!(result.is_none(), "record with all-0xFF quality must be skipped");
+        assert_eq!(missing_qual_count, 1);
+    }
+
+    #[test]
+    fn test_parse_partial_from_record_buf_keeps_real_quality() {
+        let buf = record_buf_with_quality(vec![30; 10]);
+        let flags = noodles::sam::alignment::record::Flags::empty();
+        let mut missing_qual_count = 0usize;
+
+        let result = parse_partial_from_record_buf(&buf, &flags, &mut missing_qual_count);
+
+        let partial = result.expect("record with real quality must be kept");
+        assert_eq!(partial.qual, vec![30u8 + 33; 10]);
+        assert_eq!(missing_qual_count, 0);
     }
 }

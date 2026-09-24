@@ -238,6 +238,13 @@ impl QualityProfile {
     /// 4. Cycle-only: `P(Q_i | cycle)` — final fallback
     ///
     /// The returned byte is clamped to the valid Phred+33 range [b'!', b'~'] = [33, 126].
+    ///
+    /// This clamp is defense in depth, not the primary fix for M14 (missing
+    /// donor qualities poisoning this model with byte 32): `extract.rs` now
+    /// drops donor records with no stored quality before they ever reach
+    /// this profile, and `fastq.rs::write_paired_fastq` refuses to write any
+    /// out-of-range byte regardless of source. Kept here because nothing
+    /// proves this sampler can never be fed bad data through some other path.
     pub fn sample_quality(
         &self,
         read_num: u8,

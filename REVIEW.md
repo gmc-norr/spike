@@ -47,7 +47,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
 | M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
 | M13 | Medium | All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
-| M14 | Medium | Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
+| M14 | Medium | **Fixed.** Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
 | M15 | Medium | CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
@@ -231,6 +231,7 @@ Pairs come out of a `HashMap` in random order (`extract.rs:124`, `285`). `build_
 - Kept originals are written with spaces as quality characters.
 - The quality model learns 32. The new clamp in `sample_quality` turns it into Q0 and the Markov chain sticks there. With 5% of donor pairs missing quality: 4.99% of synthetic reads were mostly Q0 with random bases.
 - **Fix:** skip or flag reads with all-0xFF quality at extraction; refuse to write qualities outside 33–126.
+- **Fixed:** `parse_partial_from_bam_record`/`parse_partial_from_record_buf` now skip (not encode) a record whose raw quality is all-0xFF, counted and logged (`log::warn!`) per extraction call; `write_paired_fastq` refuses (returns `Err`) any quality byte outside 33-126. The `synth.rs` clamp is kept as defense in depth (not proven unreachable — see "Judgement calls" in the task report). HG002 chr20 slice with 5% of donor pairs' quality stripped to `*` (seed 1, `del:chr20:38412500-38422500`): kept-original quality lines containing byte 32 (space) 188/3862 → 0/3667; synthetic (chimeric) reads "mostly Q0" 4.11% (R1) / 4.79% (R2) of 292 → 0.00% of 273; extraction now logs `457 record(s) ... had no quality scores (SAM '*') and were skipped`; R1 mean quality 34.2 → 36.0 (no longer dragged down by poisoned Q0 runs). Absolute counts differ from the review's numbers because the donor BAM here is a synthetic 5%-stripped HG002 slice, not the original review's BAM.
 
 ### M15 · CRAM extraction ~300× slower than BAM
 noodles-cram 0.74 `Query::read_next_container` checks only the reference id, never position, so every container on the chromosome is decoded (`extract.rs:240-243, 314-317`).

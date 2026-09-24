@@ -687,6 +687,16 @@ The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to ke
 
 Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
 
+### Missing donor base qualities
+
+SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). A donor BAM/CRAM record with no stored quality is dropped during extraction rather than kept — it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped pairs are counted and logged as a warning (spike logs to stderr), e.g.:
+
+```
+WARN spike::extract] 457 record(s) in chr20:38402500-38432500 had no quality scores (SAM '*') and were skipped
+```
+
+This trades a small amount of depth (the fraction of donor reads with no quality) for correctness: without this, missing quality used to decode to an invalid FASTQ quality byte (space) for kept reads, and poisoned the learned quality model so synthetic reads sampled from it came out as mostly-Q0 with effectively random bases. As a second line of defense, `write_paired_fastq` refuses (returns an error) to write any quality byte outside the printable Phred+33 range `!`-`~` (33-126) regardless of where it came from.
+
 ### Indel error model
 
 When `--indel-error-rate` is set above 0, a fraction of sequencing errors are modeled as insertions or deletions (50/50 split) rather than substitutions. This maintains fixed read length: insertions consume an output position without advancing the reference, and deletions skip a reference base without consuming an output position.
