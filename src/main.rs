@@ -1569,6 +1569,26 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_read_length_accepts_exact_max() {
+        // L5 boundary: MAX_FRAGMENT_LEN (1500) itself must be accepted — the
+        // guard rejects lengths *above* the max, not lengths *at* it. A
+        // future `>` -> `>=` typo would reject this and fail silently
+        // otherwise, since only far-below (151) and far-above (2000) values
+        // were previously exercised.
+        assert!(validate_read_length(1500).is_ok());
+    }
+
+    #[test]
+    fn test_validate_read_length_rejects_one_above_max() {
+        // L5 boundary: one bp past MAX_FRAGMENT_LEN (1501) must be rejected.
+        // Pins the exact threshold, complementing the 1500-accepts case.
+        let err = validate_read_length(1501).expect_err("1501bp should be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("1501"), "message should cite the read length: {msg}");
+        assert!(msg.contains("1500"), "message should cite the max: {msg}");
+    }
+
+    #[test]
     fn test_extraction_bounds_keeps_distant_region_and_event_apart() {
         // M8: --region chr20:30490000-30510000 with a fusion partner at 35 Mb
         // used to take the min/max, extracting every read in the 4.5 Mb

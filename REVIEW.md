@@ -852,6 +852,32 @@ the mean of the real library and mislabel that as a spike-in run. Instead:
   completion (exit 0, 3862 pairs written), identical in shape to the L4
   real-data run.
 
+**Fix pass 1** (review of `158356e` itself). The two new `validate_read_length`
+tests exercised only far-below (151) and far-above (2000) values; nothing
+pinned the exact threshold, so a future off-by-one (`>` becoming `>=`) would
+pass silently. Added `test_validate_read_length_accepts_exact_max`
+(`validate_read_length(1500)` must stay `Ok`) and
+`test_validate_read_length_rejects_one_above_max` (`validate_read_length(1501)`
+must be rejected, message citing both `1501` and `1500`). Mutation-checked:
+flipping `read_length as i64 > max` to `>= max` in `main.rs` (backed up to
+`scratch/work/task-14-L5-and-bookkeeping/` first, restored with `cat`, never
+`git checkout --`) fails only the 1500-accepts test
+(`assertion failed: validate_read_length(1500).is_ok()`); restored, both new
+tests pass. Full suite 260/260 (258 + 2 new); clippy unchanged, 13 (bin) / 14
+(test, 12 duplicates).
+
+Two Minors raised alongside this finding were checked and did not need a
+change: the `bail!` message already names the implication — "spike simulates
+fixed-length paired-end reads and does not support long-read (PacBio/ONT)
+libraries" is already the full text of the message added in `158356e`, so
+there is nothing to add. `MAX_FRAGMENT_LEN`'s name describes its
+fragment-length role but the constant also gates read length; the doc
+comments on the constant (`stats.rs`) and on `validate_read_length`
+(`main.rs`) already say so explicitly, and no name was found that captures
+"cap on both fragment length and the read length that must fit inside a
+fragment" more clearly than the existing name plus those comments, so it was
+left as is.
+
 ## Uncommitted changes
 
 | File | Change | Assessment |
