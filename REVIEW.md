@@ -42,7 +42,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M6 | Medium | **Fixed.** Truth VCF unsorted, no `##contig`, `REF=N` | `truth.rs:24-72, 94`; `main.rs:451` |
 | M7 | Medium | **Fixed.** Same `--seed` gives different output | `extract.rs:376` |
 | M8 | Medium | **Fixed.** `--region` merged with distant events | `main.rs:172-180` |
-| M9 | Medium | Fusion read pools double-counted. **Half landed** as a side effect of M8 (dedup) — see note below; chromosome-blind coverage is still open. | `main.rs:906-911` (superseded, see note); `simulate.rs:471-503` (now `564-596`, see note) |
+| M9 | Medium | **Fixed.** Fusion read pools double-counted (dedup half landed with M8 — see note below) | `main.rs:906-911` (superseded, see note); `simulate.rs:196-203, 566-598` |
 | M10 | Medium | **Fixed.** `validate` coverage check always passes on WGS | `validate.rs:753-756` |
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
 | M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
@@ -225,8 +225,24 @@ the second bullet and second `Fix:` clause only. `estimate_coverage_at` is
 chromosome-blind, at `simulate.rs:564-596` as of `92ad2bd` (not `471-503` —
 the file has grown since this entry was written; verify the current range
 before citing it again). Two breakpoints at similar coordinates on *different*
-chromosomes still pool their coverage; untouched, and next in the queue. Do
-not mark this entry **Fixed** until that lands.
+chromosomes still pool their coverage; untouched, and next in the queue.
+(That second half has since landed — see **Fixed** below.)
+
+**Fixed:** `estimate_coverage_at` takes the breakpoint's chromosome and counts
+only pool pairs on it; the call site keeps the chromosome `hap_to_ref` already
+returns for the first breakpoint. HG002, cross-chromosome fusion
+chr20:40001200 >> chr21:40001000 (exon BED, `af=0.5`, seed 1) against the same
+chr20 breakpoint with the partner moved to chr21:10001000: estimated coverage
+**120.8 vs 61.5 → 61.5 vs 61.5**, chimeric pairs **121 vs 61 → 61 vs 61** (the
+entry's "85 vs 45" is the same 2× shape at a different locus; measured
+independently from the BAM, chr20 fragment depth over that window is 70.3 and
+chr21's is 67.9, so the near side was carrying ~1.97× its own depth). The
+distant-partner run is byte-identical before and after, as are a
+same-chromosome fusion (`chr20:38421200 >> chr20:38424000`, coverage 60.1) and
+`del:chr20:38412500-38422500` (coverage 68.0) — H5's `coverage * v / (1 - v)`
+zone arithmetic is untouched, and a single-region event's pool is
+single-chromosome so the filter is a no-op there. Two runs at `--seed 1` still
+give byte-identical FASTQ (M7).
 
 ### M10 · `validate` coverage check always passes on WGS
 `count_depth_in_region` returns reads per bp (`validate.rs:753-756`), ~0.23 at 35x. The guard `flank_depth < 1.0` then reports "no flanking coverage" with `pass: true` (`validate.rs:454-462`).

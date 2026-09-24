@@ -123,12 +123,12 @@ fn simulate_event_with_copies(
     let name_prefix = format!("ev{:04}", event_index);
 
     // Get SV boundaries for read classification.
-    let (sv_start, sv_end) = match event.primary_region() {
-        Some((_chrom, start, end)) => (start, end),
+    let (sv_chrom, sv_start, sv_end) = match event.primary_region() {
+        Some((chrom, start, end)) => (chrom.to_string(), start, end),
         None => {
             // Fusion: use the first breakpoint as a point event.
-            if let SimEvent::Fusion { bp_a, .. } = event {
-                (*bp_a, *bp_a)
+            if let SimEvent::Fusion { chrom_a, bp_a, .. } = event {
+                (chrom_a.clone(), *bp_a, *bp_a)
             } else {
                 anyhow::bail!(
                     "event has no primary region and is not a Fusion — \
@@ -193,14 +193,14 @@ fn simulate_event_with_copies(
         }
     }
 
-    // Estimate coverage at the first breakpoint for chimeric read count.
+    // Estimate coverage at the first breakpoint for chimeric read count, from
+    // reads on that breakpoint's own chromosome only.
     let bp_positions = haplotype.breakpoints();
-    let first_bp_ref = bp_positions
+    let (first_bp_chrom, first_bp_ref) = bp_positions
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
-        .map(|(_, pos)| pos)
-        .unwrap_or(sv_start);
-    let cov = estimate_coverage_at(pool, first_bp_ref, 2000);
+        .unwrap_or((sv_chrom, sv_start));
+    let cov = estimate_coverage_at(pool, &first_bp_chrom, first_bp_ref, 2000);
 
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
@@ -556,12 +556,14 @@ fn tile_haplotype_reads(
     pairs
 }
 
-/// Estimate fragment depth at a reference position.
+/// Estimate fragment depth at a reference position on `chrom`.
 ///
 /// Counts fragments overlapping positions in a window, returns mean coverage.
 /// Uses up to 50 evenly-spaced sample points for stable estimates.
 /// The pool must be sorted by `ref_start` (which `build_read_pool` ensures).
-fn estimate_coverage_at(pool: &ReadPool, pos: u64, window: u64) -> f64 {
+/// Only pairs on `chrom` count: a fusion pool holds both partners, and the
+/// other partner's reads can sit at the same coordinates (M9).
+fn estimate_coverage_at(pool: &ReadPool, chrom: &str, pos: u64, window: u64) -> f64 {
     let start = pos.saturating_sub(window / 2);
     let end = pos.saturating_add(window / 2);
 
@@ -587,7 +589,7 @@ fn estimate_coverage_at(pool: &ReadPool, pos: u64, window: u64) -> f64 {
             .partition_point(|p| p.ref_start <= sample_pos);
         let count = pool.pairs[..upper]
             .iter()
-            .filter(|p| p.ref_end > sample_pos)
+            .filter(|p| p.ref_end > sample_pos && p.chrom == chrom)
             .count();
         total += count;
     }
@@ -598,6 +600,7 @@ fn estimate_coverage_at(pool: &ReadPool, pos: u64, window: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract;
     use crate::haplotype::{HaplotypeSegment, SegmentOrigin};
     use crate::types::FusionJoin;
     use crate::stats::FragmentDist;
@@ -613,6 +616,13 @@ mod tests {
             ref_end: end,
             insert_size: (end - start) as i64,
             chrom: "chr1".to_string(),
+        }
+    }
+
+    fn make_pair_on(chrom: &str, name: &str, start: u64, end: u64) -> ReadPair {
+        ReadPair {
+            chrom: chrom.to_string(),
+            ..make_pair(name, start, end)
         }
     }
 
@@ -832,7 +842,7 @@ mod tests {
             .map(|i| make_pair(&format!("r{}", i), 0, 500))
             .collect();
         let pool = make_pool(pairs);
-        let cov = estimate_coverage_at(&pool, 250, 500);
+        let cov = estimate_coverage_at(&pool, "chr1", 250, 500);
         assert!((cov - 10.0).abs() < 1.0, "expected ~10.0 got {:.1}", cov);
     }
 
@@ -844,12 +854,26 @@ mod tests {
             .map(|i| make_pair(&format!("r{}", i), 0, 250))
             .collect();
         let pool = make_pool(pairs);
-        let cov = estimate_coverage_at(&pool, 250, 500);
+        let cov = estimate_coverage_at(&pool, "chr1", 250, 500);
         assert!(
             cov < 20.0 && cov > 0.0,
             "expected partial coverage, got {:.1}",
             cov
         );
+    }
+
+    #[test]
+    fn test_estimate_coverage_at_counts_only_the_queried_chromosome() {
+        // A fusion pool holds both partners. 10 pairs cover [0, 500) on chr1
+        // and 10 more cover the same coordinates on chr2; a chr1 query must
+        // see depth 10, not 20 (M9).
+        let mut pairs: Vec<ReadPair> = (0..10)
+            .map(|i| make_pair_on("chr1", &format!("a{}", i), 0, 500))
+            .collect();
+        pairs.extend((0..10).map(|i| make_pair_on("chr2", &format!("b{}", i), 0, 500)));
+        let pool = make_pool(pairs);
+        let cov = estimate_coverage_at(&pool, "chr1", 250, 500);
+        assert!((cov - 10.0).abs() < 1.0, "expected ~10.0 got {:.1}", cov);
     }
 
     // ---------------------------------------------------------------
@@ -1441,8 +1465,10 @@ mod tests {
         .unwrap();
 
         // 400 bp fragments every 10 bp from 0 to 9990: depth 40 in the interior.
+        // They are chrEnd reads, and estimate_coverage_at only counts the
+        // breakpoint's own chromosome, so they must say so.
         let pairs: Vec<ReadPair> = (0..1000u64)
-            .map(|i| make_pair(&format!("r{}", i), i * 10, i * 10 + 400))
+            .map(|i| make_pair_on("chrEnd", &format!("r{}", i), i * 10, i * 10 + 400))
             .collect();
         let pool = ReadPool {
             pairs,
@@ -1472,6 +1498,91 @@ mod tests {
         // (28*40 + 190) / 50 = 26.2. An additive event tiles
         // cov * v/(1-v) * breakpoints = 26.2 * 1.0 * 1 -> 26 pairs.
         assert_eq!(out.chimeric_pairs.len(), 26);
+    }
+
+    #[test]
+    fn test_cross_chromosome_fusion_ignores_the_other_chromosomes_depth() {
+        // Fusion chr1:10000 >> chr2:10000. Both breakpoints sit at the same
+        // coordinate on different chromosomes, so chr2's reads fall inside the
+        // coverage window of chr1's breakpoint. Putting the far side's reads in
+        // the pool -- which a fusion always does -- must not change how many
+        // chimeric pairs the junction gets (M9).
+        let segments = || {
+            vec![
+                HaplotypeSegment {
+                    sequence: vec![b'A'; 1000],
+                    origin: Some(SegmentOrigin {
+                        chrom: "chr1".to_string(),
+                        ref_start: 9000,
+                        ref_end: 10000,
+                        is_reverse: false,
+                    }),
+                    hap_offset: 0,
+                },
+                HaplotypeSegment {
+                    sequence: vec![b'C'; 1000],
+                    origin: Some(SegmentOrigin {
+                        chrom: "chr2".to_string(),
+                        ref_start: 10000,
+                        ref_end: 11000,
+                        is_reverse: false,
+                    }),
+                    hap_offset: 1000,
+                },
+            ]
+        };
+
+        let event = SimEvent::Fusion {
+            chrom_a: "chr1".to_string(),
+            bp_a: 10000,
+            gene_a: "GENE_A".to_string(),
+            chrom_b: "chr2".to_string(),
+            bp_b: 10000,
+            gene_b: "GENE_B".to_string(),
+            join: FusionJoin::Forward,
+            allele_fraction: Some(0.5),
+        };
+
+        // 400 bp fragments every 30 bp over [8000, 11000) on each side.
+        let side = |chrom: &str, tag: &str| -> Vec<ReadPair> {
+            (0..100u64)
+                .map(|i| {
+                    let start = 8000 + i * 30;
+                    make_pair_on(chrom, &format!("{}{}", tag, i), start, start + 400)
+                })
+                .collect()
+        };
+
+        let run = |pairs: Vec<ReadPair>| -> usize {
+            let pool = extract::build_read_pool(pairs, FragmentDist::from_stats(400.0, 80.0));
+            let mut hap = make_haplotype(segments());
+            let mut rng = StdRng::seed_from_u64(11);
+            simulate_event(
+                4,
+                &event,
+                &pool,
+                &mut hap,
+                &make_config(),
+                &mock_synth_gen(150),
+                0.5,
+                &mut rng,
+            )
+            .expect("simulate_event should succeed for a cross-chromosome fusion")
+            .chimeric_pairs
+            .len()
+        };
+
+        let pairs_a = side("chr1", "a");
+        let near_side_only = run(pairs_a.clone());
+        let mut both_sides = pairs_a;
+        both_sides.extend(side("chr2", "b"));
+        let with_far_side = run(both_sides);
+
+        assert_eq!(
+            with_far_side, near_side_only,
+            "chr2's reads inflated the chr1 breakpoint's coverage: {} chimeric pairs with them, {} without",
+            with_far_side, near_side_only
+        );
     }
 
     // ---------------------------------------------------------------
