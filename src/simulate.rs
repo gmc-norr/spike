@@ -363,9 +363,10 @@ fn classify_pair_relation(pair: &ReadPair, sv_start: u64, sv_end: u64) -> PairRe
 /// of the haplotype (excluding novel insertion sequence) to avoid inflating
 /// coverage near insertion points.
 ///
-/// For additive events (DUP, Fusion): uses the aggregate breakpoint zone
-/// length (2 × mean_frag per breakpoint) since reads are placed only near
-/// segment boundaries.
+/// For additive events (DUP, Fusion): every tiled fragment crosses a
+/// breakpoint and all original fragments are kept, so `n` junction fragments
+/// make up n / (coverage + n) of the depth there. For fraction `vaf` that is
+/// n = coverage × vaf / (1 − vaf) per breakpoint.
 fn compute_tiling_count(
     haplotype: &VariantHaplotype,
     coverage: f64,
@@ -379,19 +380,28 @@ fn compute_tiling_count(
 
     let breakpoints = haplotype.breakpoints();
 
-    let effective_len = if breakpoint_only && !breakpoints.is_empty() {
-        // Aggregate breakpoint zone length: 2 × mean_frag per breakpoint.
-        let zone_per_bp = (2.0 * mean_frag) as u64;
-        let total_zone = breakpoints.len() as u64 * zone_per_bp;
-        total_zone.min(haplotype.total_len) as f64
-    } else {
-        // Use reference-mapped length (excludes novel insertion sequence).
-        let ref_len = haplotype.ref_mapped_len();
-        if ref_len > 0 {
-            ref_len as f64
-        } else {
-            haplotype.total_len as f64
+    if breakpoint_only && !breakpoints.is_empty() {
+        // An additive event can't reach vaf = 1 (it would need infinitely
+        // many added fragments), so cap it.
+        const MAX_ADDITIVE_VAF: f64 = 0.95;
+        if vaf > MAX_ADDITIVE_VAF {
+            log::warn!(
+                "additive event: VAF {:.2} capped at {:.2} (original reads are kept)",
+                vaf,
+                MAX_ADDITIVE_VAF
+            );
         }
+        let v = vaf.min(MAX_ADDITIVE_VAF);
+        let n = (coverage * v / (1.0 - v) * breakpoints.len() as f64).round() as usize;
+        return n.max(2); // at least 2 chimeric reads
+    }
+
+    // Use reference-mapped length (excludes novel insertion sequence).
+    let ref_len = haplotype.ref_mapped_len();
+    let effective_len = if ref_len > 0 {
+        ref_len as f64
+    } else {
+        haplotype.total_len as f64
     };
 
     let n = ((coverage * vaf * effective_len) / mean_frag).round() as usize;
@@ -712,11 +722,36 @@ mod tests {
             ref_segment(0, 2000), // from dup start (junction)
         ]);
 
-        // With mean_frag=400, zone_per_bp = 800bp per breakpoint.
-        // 1 breakpoint → effective_len = 800.
+        // 1 breakpoint, all originals kept: 30 * 0.5 / (1 - 0.5) = 30.
         let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, true);
-        // Expected: 30 * 0.5 * 800 / 400 = 30
         assert_eq!(count, 30);
+    }
+
+    #[test]
+    fn test_tiling_count_breakpoint_only_gives_requested_fraction() {
+        // Additive events keep all `cov` original fragments at the junction,
+        // so n junction fragments make up n / (cov + n) of it. For fraction v,
+        // n = cov * v / (1 - v) per breakpoint.
+        let one_bp = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
+        assert_eq!(compute_tiling_count(&one_bp, 40.0, 0.2, 400.0, true), 10);
+        assert_eq!(compute_tiling_count(&one_bp, 100.0, 0.05, 400.0, true), 5);
+
+        let two_bp = make_haplotype(vec![
+            ref_segment(0, 2000),
+            ref_segment(5000, 2000),
+            ref_segment(9000, 2000),
+        ]);
+        assert_eq!(compute_tiling_count(&two_bp, 40.0, 0.2, 400.0, true), 20);
+    }
+
+    #[test]
+    fn test_tiling_count_breakpoint_only_is_bounded_at_full_vaf() {
+        // v = 1 would need infinitely many added fragments; the count must
+        // stay finite (an unbounded usize would abort on allocation).
+        let hap = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
+        let count = compute_tiling_count(&hap, 40.0, 1.0, 400.0, true);
+        assert!(count > compute_tiling_count(&hap, 40.0, 0.9, 400.0, true));
+        assert!(count <= 40 * 100, "count {} is unbounded", count);
     }
 
     #[test]

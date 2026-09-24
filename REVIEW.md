@@ -30,7 +30,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | H2 | High | **Fixed.** Exon numbers ignore strand | `exon.rs:99-103` |
 | H3 | High | **Fixed.** BND orientation misread from VCF input | `vcf_input.rs:325-327` |
 | H4 | High | **Fixed.** Inverted fusion simulated ~flank bp from truth position | `haplotype.rs:337-341`, `truth.rs:127-131` |
-| H5 | High | Fusion / junction-DUP get 2× junction reads | `simulate.rs:337-341` |
+| H5 | High | **Fixed.** Fusion / junction-DUP get 2× junction reads | `simulate.rs:337-341` |
 | H6 | High | LOH allele chosen at random per SNP | `loh.rs:112-121` |
 | H7 | High | Insertions ≥ ~500 bp yield almost no insert-carrying reads | `synth.rs:745-746` |
 | H8 | High | Synthetic reads lack the sample's own SNPs | `simulate.rs:77-80` |
