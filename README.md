@@ -487,19 +487,22 @@ the counting rule that fits its shape, and fails outright when none does:
 | Truth record | Counted as | Observed |
 | --- | --- | --- |
 | `A` > `T` (a substitution) | the alt base against the pileup depth at POS | a fraction |
-| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
-| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
+| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length that deletes the same sequence -- at the junction just past the anchor base (POS+1), or anywhere along the repeat it sits in -- against the reads spanning that junction without one | a fraction |
+| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length that inserts the same sequence -- the same bases at the junction, or the same bases as they read from elsewhere along the repeat -- against the reads spanning that junction without one | a fraction |
 | `AT` > `GC` (an MNV) | reads whose bases are the *whole* alt run, against reads whose bases are the whole ref run | a fraction |
 | `AC` > `GTT` (a complex allele) | nothing -- no single operation or allele run to count | `N/A (complex allele)` FAIL |
 | depth below 5 | nothing | `low depth (n)` FAIL |
 | an allele that is not A/C/G/T | nothing | `unknown alt base` / `unknown allele base` FAIL |
 
 An indel is read off the CIGAR rather than the pileup, because an indel is not
-a column in one: the reads that carry it are the ones whose alignment leaves
-the reference at the junction just past the anchor base, with an operation of
-the allele's own length and within 10 bp of POS -- an aligner left-aligns an
-indel to the start of the repeat it sits in, so it may place the operation a
-few bases away. An MNV's bases are read **jointly**, one read at a time: a
+a column in one. A read carries it when its alignment has a gap of the
+allele's own kind and length that, applied to the reference, spells the same
+sequence the truth allele does. Inside a repeat that is true of a gap anywhere
+along the repeat, and an aligner may put it anywhere along it: bwa-mem2 does
+not promise to left-align. Outside a repeat only the junction itself
+qualifies, and a same-size gap a few bases away is a different variant. An
+insertion's bases have to match too, so `A` > `ATTTT` is not carried by a
+read that inserts `GGCA` at the same place. An MNV's bases are read **jointly**, one read at a time: a
 fraction per base would answer a different question at each offset, and a read
 carrying only one of the two substitutions is not this variant.
 
@@ -510,14 +513,13 @@ pairs. On HG002 at 35x (fragments 418 ± 178 bp, 151 bp reads) mates overlap
 often enough that counting them twice changed the fraction at 75% of 1,959
 real het sites.
 
-That 10 bp window is what decides an indel read's vote on its own: an operation
-of the allele's kind and length inside it *is* the junction, so the read
-carries the allele however far its own deletion has drifted from POS. The two
-reference bases either side of the REF allele are only asked about for the
-other verdict -- they separate "spans this junction without the indel" from
-"never reached it". A read that carries neither allele whole -- clipped across
-the junction, or carrying a *different* indel there -- is evidence for neither
-and enters neither count.
+A gap that spells the allele decides the read's vote on its own: it *is* the
+junction, so the read carries the allele however far along the repeat its own
+gap sits. The two reference bases either side of the REF allele are only asked
+about for the other verdict -- they separate "spans this junction without the
+indel" from "never reached it". A read that carries neither allele whole --
+clipped across the junction, or with a *different* indel that swallows one of
+those two bases -- is evidence for neither and enters neither count.
 
 The three rows that measure nothing still push a result row, so the event
 counts as covered, and the row says out loud that nothing was measured. Only a
