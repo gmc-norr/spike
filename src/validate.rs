@@ -297,7 +297,9 @@ fn print_usage() {
     eprintln!("  and MNV          indel from an I/D operation of its own length at the");
     eprintln!("                   junction just past the anchor base, within 10bp,");
     eprintln!("                   against the reads spanning it without one; an MNV");
-    eprintln!("                   from the whole alt run, read by read)");
+    eprintln!("                   from the whole alt run, read by read). Each read");
+    eprintln!("                   pair votes once; a pair whose mates disagree");
+    eprintln!("                   does not vote");
     eprintln!("  every event      insert_size, dup_rate, mean_mapq, over the whole sample");
     eprintln!();
     eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
@@ -746,8 +748,23 @@ fn pileup_base_index(base: u8) -> Option<usize> {
 }
 
 /// Below this the fraction is noise: at 4 reads the only fractions that exist
-/// are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass.
+/// are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass. Every
+/// allele-fraction count is of fragments (`fragment_vote`), so this is five
+/// molecules whatever the variant's shape (N16).
 const MIN_PILEUP_DEPTH: u32 = 5;
+
+/// The one vote a fragment casts, from the votes of its reads.
+///
+/// Both mates of a pair arrive under one read name, and where they overlap
+/// they read the same molecule. Counted apart, one fragment was two draws in
+/// the binomial `allele_freq_result` grades against, and three pairs cleared
+/// `MIN_PILEUP_DEPTH` and `MIN_ALT_READS` meant for five and three
+/// molecules (N16). Mates that disagree give the fragment no vote, the rule
+/// `mnv_allele_freq` applies per offset.
+fn fragment_vote<T: Copy + PartialEq>(votes: &[T]) -> Option<T> {
+    let (&first, rest) = votes.split_first()?;
+    rest.iter().all(|&v| v == first).then_some(first)
+}
 
 /// Chance that a read of the reference shows the alt allele anyway
 /// (sequencing error, mismapping). Sets the floor of alt reads that errors
@@ -988,9 +1005,11 @@ fn check_allele_freq(
         ));
     };
 
-    // Pileup at the variant position.
-    let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
-    let mut dummy_read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
+    // Pileup at the variant position, one vote per fragment: the per-read
+    // map rather than the per-base counts, which see an overlapping pair
+    // twice (N16).
+    let mut dummy_allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
+    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
 
     pileup_region(
         bam_path,
@@ -999,11 +1018,21 @@ fn check_allele_freq(
         event.start,
         event.start + 1,
         min_mapq,
-        &mut allele_counts,
-        &mut dummy_read_alleles,
+        &mut dummy_allele_counts,
+        &mut read_alleles,
     )?;
 
-    let counts = allele_counts.get(&event.start).copied().unwrap_or([0; 4]);
+    let mut counts = [0u32; 4];
+    for bases in read_alleles.values() {
+        let at_site: Vec<u8> = bases
+            .iter()
+            .filter(|&&(rp, _)| rp == event.start)
+            .map(|&(_, base)| base)
+            .collect();
+        if let Some(idx) = fragment_vote(&at_site).and_then(pileup_base_index) {
+            counts[idx] += 1;
+        }
+    }
     Ok(allele_freq_result(
         event,
         counts[alt_idx],
@@ -1031,8 +1060,9 @@ fn indel_allele_freq(
     Ok(allele_freq_result(event, carries, carries + spans))
 }
 
-/// Reads whose alignment carries the small indel at the event's position, and
-/// reads that span the same junction without it.
+/// Fragments whose reads carry the small indel at the event's position, and
+/// fragments whose reads span the same junction without it -- one vote per
+/// fragment (`fragment_vote`), not per read.
 fn count_indel_reads(
     bam_path: &str,
     ref_path: &str,
@@ -1042,7 +1072,7 @@ fn count_indel_reads(
     min_mapq: u8,
 ) -> Result<(u32, u32)> {
     let ref_len = event.ref_allele.as_ref().map_or(1, |r| r.len() as u64);
-    let (mut carries, mut spans) = (0u32, 0u32);
+    let mut votes: HashMap<Vec<u8>, Vec<IndelVote>> = HashMap::new();
 
     // Every read that votes either way covers the anchor base and the base
     // just past the REF allele, so that span is also the query window.
@@ -1053,15 +1083,23 @@ fn count_indel_reads(
         event.start,
         event.start + ref_len + 1,
         min_mapq,
-        &mut |align_start, ops| {
-            match cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len) {
-                Some(IndelVote::Carries) => carries += 1,
-                Some(IndelVote::Spans) => spans += 1,
-                None => {}
+        &mut |name, align_start, ops| {
+            if let Some(vote) =
+                cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len)
+            {
+                votes.entry(name.to_vec()).or_default().push(vote);
             }
         },
     )?;
 
+    let (mut carries, mut spans) = (0u32, 0u32);
+    for fragment in votes.values() {
+        match fragment_vote(fragment) {
+            Some(IndelVote::Carries) => carries += 1,
+            Some(IndelVote::Spans) => spans += 1,
+            None => {}
+        }
+    }
     Ok((carries, spans))
 }
 
@@ -1988,12 +2026,18 @@ fn reads_with_inserted_sequence(
     Ok(names)
 }
 
-/// Walk every usable alignment overlapping 0-based `[start, end)`, handing the
-/// visitor each record's 0-based alignment start and its CIGAR operations.
+/// What `for_each_alignment` hands each record to: its read name, 0-based
+/// alignment start and CIGAR operations.
+type AlignmentVisitor<'a> =
+    dyn FnMut(&[u8], u64, &[noodles::sam::alignment::record::cigar::Op]) + 'a;
+
+/// Walk every usable, named alignment overlapping 0-based `[start, end)`,
+/// handing the visitor each record's read name, 0-based alignment start and
+/// CIGAR operations.
 ///
 /// The BAM and the CRAM reader hand out different record types, so the scans
 /// above each carry their own copy of this query; a check that needs nothing
-/// from a record but its CIGAR can share one.
+/// from a record but its name and CIGAR can share one.
 fn for_each_alignment(
     bam_path: &str,
     ref_path: &str,
@@ -2001,7 +2045,7 @@ fn for_each_alignment(
     start: u64,
     end: u64,
     min_mapq: u8,
-    visit: &mut dyn FnMut(u64, &[noodles::sam::alignment::record::cigar::Op]),
+    visit: &mut AlignmentVisitor<'_>,
 ) -> Result<()> {
     let start_pos = crate::extract::safe_noodles_position(start + 1);
     let end_pos = crate::extract::safe_noodles_position(end);
@@ -2028,12 +2072,15 @@ fn for_each_alignment(
             if !usable_alignment(buf.flags(), buf.mapping_quality().map(u8::from), min_mapq) {
                 continue;
             }
+            let Some(name) = buf.name() else {
+                continue;
+            };
             let Some(align_start) = buf.alignment_start() else {
                 continue;
             };
             let cigar = buf.cigar();
             let ops: Vec<_> = CigarTrait::iter(&cigar).collect::<std::io::Result<_>>()?;
-            visit(usize::from(align_start).saturating_sub(1) as u64, &ops);
+            visit(name.as_ref(), usize::from(align_start).saturating_sub(1) as u64, &ops);
         }
     } else {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -2051,13 +2098,16 @@ fn for_each_alignment(
             ) {
                 continue;
             }
+            let Some(name) = record.name() else {
+                continue;
+            };
             let align_start = match record.alignment_start() {
                 Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
                 _ => continue,
             };
             let cigar = record.cigar();
             let ops: Vec<_> = cigar.iter().collect::<std::io::Result<_>>()?;
-            visit(align_start, &ops);
+            visit(name.as_ref(), align_start, &ops);
         }
     }
 
@@ -3618,12 +3668,106 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
     /// read2 200 bp downstream, clear of the site it belongs to. Returns
     /// `(dir, fasta_path, cram_path)`; the caller removes `dir`.
     fn small_variant_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+
+        // A full-length match over the reference's own bases.
+        let plain = |start0: usize| -> TestRead {
+            (
+                start0,
+                vec![(Kind::Match, TEST_READ_LEN)],
+                seq[start0..start0 + TEST_READ_LEN].to_vec(),
+            )
+        };
+
+        let mut pairs: Vec<(String, TestRead, TestRead)> = Vec::new();
+        let mut push_pair = |name: String, start0: usize, ops: Vec<(Kind, usize)>, bases: Vec<u8>| {
+            pairs.push((name, (start0, ops, bases), plain(start0 + 200)));
+        };
+
+        // Eight alt and eight reference pairs per site: at VAF 0.5 the
+        // allele_freq check needs ~14 reads before it can tell a spike-in
+        // from none (N14), so twelve would grade "too shallow".
+        for i in 0..8usize {
+            // `ACG` > `A` at chrA:5001: the two reference bases after the
+            // anchor are gone, so the `D` operation starts at 0-based 5001.
+            let s = 4951 + i;
+            let (first_m, second_m) = (50 - i, 50 + i);
+            let mut bases = seq[s..s + first_m].to_vec();
+            bases.extend_from_slice(&seq[5003..5003 + second_m]);
+            push_pair(
+                format!("del_alt{}", i),
+                s,
+                vec![
+                    (Kind::Match, first_m),
+                    (Kind::Deletion, 2),
+                    (Kind::Match, second_m),
+                ],
+                bases,
+            );
+            let (_, ops, bases) = plain(4941 + 3 * i);
+            push_pair(format!("del_ref{}", i), 4941 + 3 * i, ops, bases);
+
+            // `A` > `ATTTT` at chrA:8001: four bases inserted after the anchor.
+            let s = 7951 + i;
+            let (first_m, second_m) = (50 - i, 46 + i);
+            let mut bases = seq[s..s + first_m].to_vec();
+            bases.extend_from_slice(b"TTTT");
+            bases.extend_from_slice(&seq[8001..8001 + second_m]);
+            push_pair(
+                format!("ins_alt{}", i),
+                s,
+                vec![
+                    (Kind::Match, first_m),
+                    (Kind::Insertion, 4),
+                    (Kind::Match, second_m),
+                ],
+                bases,
+            );
+            let (_, ops, bases) = plain(7941 + 3 * i);
+            push_pair(format!("ins_ref{}", i), 7941 + 3 * i, ops, bases);
+
+            // `AC` > `GT` at chrA:11001: both bases swapped, no length change.
+            let s = 10941 + 3 * i;
+            let (_, ops, mut bases) = plain(s);
+            bases[11_000 - s] = b'G';
+            bases[11_001 - s] = b'T';
+            push_pair(format!("mnv_alt{}", i), s, ops, bases);
+            let (_, ops, bases) = plain(10945 + 3 * i);
+            push_pair(format!("mnv_ref{}", i), 10945 + 3 * i, ops, bases);
+        }
+        // chrA:14001: sixteen reference reads and nothing planted -- deep
+        // enough that "no alt read" is a measured FAIL, not "too shallow".
+        for i in 0..16usize {
+            let (_, ops, bases) = plain(13941 + 3 * i);
+            push_pair(format!("clean_ref{}", i), 13941 + 3 * i, ops, bases);
+        }
+
+        pairs_cram(tag, &seq, &pairs)
+    }
+
+    /// Length of every read in the test CRAMs below.
+    const TEST_READ_LEN: usize = 100;
+
+    /// One read of a test pair: its 0-based start, CIGAR and bases.
+    type TestRead = (usize, Vec<(Kind, usize)>, Vec<u8>);
+
+    /// chrA for the test CRAMs: 20 kb of bases cycling `ACGT`, so 0-based
+    /// position `p` holds `ACGT[p % 4]`.
+    fn cycling_contig() -> Vec<u8> {
+        (0..20_000).map(|i| b"ACGT"[i % 4]).collect()
+    }
+
+    /// Write `pairs` -- `(name, read1, read2)` -- onto chrA as an indexed CRAM
+    /// in a scratch directory of its own. Returns `(dir, fasta_path,
+    /// cram_path)`; the caller removes `dir`.
+    fn pairs_cram(
+        tag: &str,
+        seq: &[u8],
+        pairs: &[(String, TestRead, TestRead)],
+    ) -> (std::path::PathBuf, String, String) {
         use noodles::sam::alignment::record::cigar::Op;
         use noodles::sam::alignment::record_buf::{Cigar, QualityScores, Sequence};
         use std::num::NonZeroUsize;
-
-        const CONTIG_LEN: usize = 20_000;
-        const READ_LEN: usize = 100;
 
         let dir = std::env::temp_dir().join(format!(
             "spike_test_validate_{}_{}",
@@ -3633,7 +3777,6 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let seq: Vec<u8> = (0..CONTIG_LEN).map(|i| b"ACGT"[i % 4]).collect();
         let mut fasta = String::from(">chrA\n");
         let offset = fasta.len();
         for chunk in seq.chunks(60) {
@@ -3660,22 +3803,28 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         // The CIGAR and the read bases are given explicitly: a small indel's
         // allele fraction is read off the CIGAR, so the fixture has to carry
         // real `I` and `D` operations rather than a full-length match.
-        let record = |name: &str,
-                      start0: usize,
-                      ops: &[(Kind, usize)],
-                      bases: Vec<u8>,
-                      first: bool| {
+        let record = |name: &str, read: &TestRead, mate: &TestRead, first: bool| {
+            let (start0, ops, bases) = read;
             let flags = noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY;
             let cigar: Cigar = ops.iter().map(|&(k, n)| Op::new(k, n)).collect();
-            let sequence = Sequence::from(bases);
-            let quality_scores = QualityScores::from(vec![40u8; READ_LEN]);
+            let sequence = Sequence::from(bases.clone());
+            let quality_scores = QualityScores::from(vec![40u8; TEST_READ_LEN]);
             let features = noodles::cram::record::Features::from_cigar(
                 flags,
                 &cigar,
                 &sequence,
                 &quality_scores,
             );
-            let mate_start = if first { start0 + 201 } else { start0 - 199 };
+            // Read 1 is the leftmost of every pair here, and a mate's
+            // reference span is its M and D operations.
+            let (r1_start, r2) = if first { (*start0, mate) } else { (mate.0, read) };
+            let r2_span: usize = r2
+                .1
+                .iter()
+                .filter(|(k, _)| matches!(k, Kind::Match | Kind::Deletion))
+                .map(|&(_, n)| n)
+                .sum();
+            let template = (r2.0 + r2_span - r1_start) as i32;
             noodles::cram::Record::builder()
                 .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
                     0x63u16
@@ -3684,12 +3833,12 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
                 }))
                 .set_flags(flags)
                 .set_reference_sequence_id(0)
-                .set_read_length(READ_LEN)
+                .set_read_length(TEST_READ_LEN)
                 .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
                 .set_name(name)
                 .set_next_fragment_reference_sequence_id(0)
-                .set_next_mate_alignment_start(noodles::core::Position::new(mate_start).unwrap())
-                .set_template_size(if first { 300 } else { -300 })
+                .set_next_mate_alignment_start(noodles::core::Position::new(mate.0 + 1).unwrap())
+                .set_template_size(if first { template } else { -template })
                 .set_mapping_quality(
                     noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
                 )
@@ -3699,81 +3848,10 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
                 .build()
         };
 
-        // A full-length match over the reference's own bases.
-        let plain = |start0: usize| -> (Vec<(Kind, usize)>, Vec<u8>) {
-            (
-                vec![(Kind::Match, READ_LEN)],
-                seq[start0..start0 + READ_LEN].to_vec(),
-            )
-        };
-
         let mut records: Vec<noodles::cram::Record> = Vec::new();
-        let mut push_pair = |name: String, start0: usize, ops: Vec<(Kind, usize)>, bases: Vec<u8>| {
-            records.push(record(&name, start0, &ops, bases, true));
-            let (mate_ops, mate_bases) = plain(start0 + 200);
-            records.push(record(&name, start0 + 200, &mate_ops, mate_bases, false));
-        };
-
-        // Eight alt and eight reference pairs per site: at VAF 0.5 the
-        // allele_freq check needs ~14 reads before it can tell a spike-in
-        // from none (N14), so twelve would grade "too shallow".
-        for i in 0..8usize {
-            // `ACG` > `A` at chrA:5001: the two reference bases after the
-            // anchor are gone, so the `D` operation starts at 0-based 5001.
-            let s = 4951 + i;
-            let (first_m, second_m) = (50 - i, 50 + i);
-            let mut bases = seq[s..s + first_m].to_vec();
-            bases.extend_from_slice(&seq[5003..5003 + second_m]);
-            push_pair(
-                format!("del_alt{}", i),
-                s,
-                vec![
-                    (Kind::Match, first_m),
-                    (Kind::Deletion, 2),
-                    (Kind::Match, second_m),
-                ],
-                bases,
-            );
-            let s = 4941 + 3 * i;
-            let (ops, bases) = plain(s);
-            push_pair(format!("del_ref{}", i), s, ops, bases);
-
-            // `A` > `ATTTT` at chrA:8001: four bases inserted after the anchor.
-            let s = 7951 + i;
-            let (first_m, second_m) = (50 - i, 46 + i);
-            let mut bases = seq[s..s + first_m].to_vec();
-            bases.extend_from_slice(b"TTTT");
-            bases.extend_from_slice(&seq[8001..8001 + second_m]);
-            push_pair(
-                format!("ins_alt{}", i),
-                s,
-                vec![
-                    (Kind::Match, first_m),
-                    (Kind::Insertion, 4),
-                    (Kind::Match, second_m),
-                ],
-                bases,
-            );
-            let s = 7941 + 3 * i;
-            let (ops, bases) = plain(s);
-            push_pair(format!("ins_ref{}", i), s, ops, bases);
-
-            // `AC` > `GT` at chrA:11001: both bases swapped, no length change.
-            let s = 10941 + 3 * i;
-            let (ops, mut bases) = plain(s);
-            bases[11_000 - s] = b'G';
-            bases[11_001 - s] = b'T';
-            push_pair(format!("mnv_alt{}", i), s, ops, bases);
-            let s = 10945 + 3 * i;
-            let (ops, bases) = plain(s);
-            push_pair(format!("mnv_ref{}", i), s, ops, bases);
-        }
-        // chrA:14001: sixteen reference reads and nothing planted -- deep
-        // enough that "no alt read" is a measured FAIL, not "too shallow".
-        for i in 0..16usize {
-            let s = 13941 + 3 * i;
-            let (ops, bases) = plain(s);
-            push_pair(format!("clean_ref{}", i), s, ops, bases);
+        for (name, read1, read2) in pairs {
+            records.push(record(name, read1, read2, true));
+            records.push(record(name, read2, read1, false));
         }
 
         let cram_path = dir.join("small_variant.cram");
@@ -3853,6 +3931,116 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
                 "{} must not pass at a site where nothing was planted",
                 what
             );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- N16: one vote per fragment ---
+
+    /// A CRAM whose mates overlap at four sites, read 2 starting 20 bp after
+    /// read 1, so both reads of every pair cover the site.
+    ///
+    /// - chrA:16001 `A>T`: three pairs, both mates alt.
+    /// - chrA:17001 `A>T`: five pairs with both mates alt, two whose read 1
+    ///   is alt and read 2 is reference, and one with both mates reference.
+    /// - chrA:18001 `ACG>A`: three pairs, both mates carrying the deletion.
+    /// - chrA:19001 `ACG>A`: the same split as chrA:17001 -- five pairs
+    ///   carrying the deletion in both mates, two carrying it in read 1 only
+    ///   (read 2 spans the junction without it), one spanning it in both.
+    fn overlapping_pairs_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let snv = |start0: usize, site: usize, alt: bool| -> TestRead {
+            let mut bases = seq[start0..start0 + TEST_READ_LEN].to_vec();
+            if alt {
+                bases[site - start0] = b'T';
+            }
+            (start0, vec![(Kind::Match, TEST_READ_LEN)], bases)
+        };
+        // `ACG` > `A` with the anchor at 0-based `site`: the `D` starts one
+        // base after it.
+        let del = |start0: usize, site: usize| -> TestRead {
+            let first_m = site + 1 - start0;
+            let second_m = TEST_READ_LEN - first_m;
+            let mut bases = seq[start0..site + 1].to_vec();
+            bases.extend_from_slice(&seq[site + 3..site + 3 + second_m]);
+            (
+                start0,
+                vec![
+                    (Kind::Match, first_m),
+                    (Kind::Deletion, 2),
+                    (Kind::Match, second_m),
+                ],
+                bases,
+            )
+        };
+
+        let plain = |start0: usize| -> TestRead {
+            (start0, vec![(Kind::Match, TEST_READ_LEN)], seq[start0..start0 + TEST_READ_LEN].to_vec())
+        };
+
+        let mut pairs: Vec<(String, TestRead, TestRead)> = Vec::new();
+        for i in 0..8usize {
+            let (s, m) = (15_960 + i, 15_980 + i);
+            if i < 3 {
+                pairs.push((format!("snv_once{}", i), snv(s, 16_000, true), snv(m, 16_000, true)));
+                let (s, m) = (17_950 + i, 17_970 + i);
+                pairs.push((format!("del_once{}", i), del(s, 18_000), del(m, 18_000)));
+            }
+            // Pairs 0-4 agree on alt, 5-6 split, 7 agrees on reference.
+            let (read1_alt, read2_alt) = (i < 7, i < 5);
+            let (s, m) = (s + 1000, m + 1000);
+            pairs.push((
+                format!("snv_split{}", i),
+                snv(s, 17_000, read1_alt),
+                snv(m, 17_000, read2_alt),
+            ));
+            let (s, m) = (18_950 + i, 18_970 + i);
+            pairs.push((
+                format!("del_split{}", i),
+                if read1_alt { del(s, 19_000) } else { plain(s) },
+                if read2_alt { del(m, 19_000) } else { plain(m) },
+            ));
+        }
+        pairs_cram(tag, &seq, &pairs)
+    }
+
+    /// A hom truth record at `pos`, so every read that votes is expected alt.
+    fn hom_event_at(pos: u64, reference: &[u8], alt: &[u8]) -> TruthEvent {
+        TruthEvent {
+            expected_vaf: 1.0,
+            ..small_variant_event_at(pos, reference, alt)
+        }
+    }
+
+    #[test]
+    fn test_allele_freq_counts_an_overlapping_pair_once() {
+        // The two mates of a pair read one molecule. Counted as two reads,
+        // three pairs clear the five-read depth floor and the three-alt-read
+        // floor that are meant to need five and three molecules (N16).
+        let (dir, fasta, cram) = overlapping_pairs_cram("n16_once");
+        for (pos, reference, what) in [(16_000u64, &b"A"[..], "an SNV"), (18_000, &b"ACG"[..], "a deletion")] {
+            let alt = if reference.len() == 1 { &b"T"[..] } else { &reference[..1] };
+            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), 20).unwrap();
+            assert_eq!(
+                r.observed, "low depth (3)",
+                "{}: three pairs are three votes, not six",
+                what
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_mates_that_disagree_give_their_pair_no_vote() {
+        // Five pairs agree on alt, one on reference, and two have one mate
+        // each way. A pair that says both is evidence for neither, the rule
+        // MNVs already use: 5/6. Counting reads gave 12/16; letting a split
+        // pair vote with its read 1 or its read 2 gives 7/8 or 5/8.
+        let (dir, fasta, cram) = overlapping_pairs_cram("n16_split");
+        for (pos, reference, what) in [(17_000u64, &b"A"[..], "an SNV"), (19_000, &b"ACG"[..], "a deletion")] {
+            let alt = if reference.len() == 1 { &b"T"[..] } else { &reference[..1] };
+            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), 20).unwrap();
+            assert_eq!(r.observed, "0.83", "{}: the two split pairs must not vote", what);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -503,6 +503,13 @@ few bases away. An MNV's bases are read **jointly**, one read at a time: a
 fraction per base would answer a different question at each offset, and a read
 carrying only one of the two substitutions is not this variant.
 
+Every count in the table is of **read pairs**, not reads. Where the two mates
+of a pair overlap the variant they read the same DNA molecule, so they give
+one vote, and a pair whose mates disagree gives none. "Depth below 5" is five
+pairs. On HG002 at 35x (fragments 418 ± 178 bp, 151 bp reads) mates overlap
+often enough that counting them twice changed the fraction at 75% of 1,959
+real het sites.
+
 That 10 bp window is what decides an indel read's vote on its own: an operation
 of the allele's kind and length inside it *is* the junction, so the read
 carries the allele however far its own deletion has drifted from POS. The two

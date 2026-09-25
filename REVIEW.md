@@ -77,7 +77,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
 | N14 | High | **Fixed** (`3c6937d`; found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
 | N15 | Medium | **Not fixed** (found by the verification review). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
-| N16 | Low | **Not fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
+| N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
 
 ## High severity
@@ -1409,6 +1409,45 @@ depending on the REF/ALT shape, and the observed fraction has the same
 ambiguity. On a 35x PCR-free library with 400 bp fragments and 151 bp reads the
 mates rarely overlap, so the three agree in practice; on a short-insert library
 they do not. Low impact, easy to get wrong later: recorded, not changed.
+
+**Fixed.** Every allele-fraction count is now of fragments. `fragment_vote`
+turns a fragment's per-read votes into one vote, and mates that disagree give
+none, the rule `mnv_allele_freq` already applied per offset. A substitution is
+counted from `pileup_region`'s per-read map instead of its per-base counts.
+`for_each_alignment` now hands its visitor the read name, so
+`count_indel_reads` can group a pair's two votes. `MIN_PILEUP_DEPTH` is five
+molecules whatever the shape. This matters more since N14: the binomial there
+treats every count as an independent draw, and two mates of one molecule are
+not.
+
+Two tests on a new fixture with overlapping mates failed first, as predicted:
+three overlapping pairs graded `1.00` rather than `low depth (3)`, and a site
+with 5 alt, 1 reference and 2 split pairs graded `0.75` (12/16) rather than
+`0.83` (5/6). Each of these mutations turns them red, at the value worked out
+beforehand:
+- a split pair votes with read 1: `0.88`;
+- it votes with read 2: `0.62`;
+- substitutions are counted per base: `0.75`;
+- indels are counted per record: `1.00`.
+
+**The "rarely overlap" line above was a prediction, and it was wrong.** The
+test was the untouched HG002 35x BAM (fragments 418 ± 178 bp), graded against
+1,959 GIAB v4.2.1 het variants in chr20:38-40 Mb (PASS, biallelic, at most
+10 bp; 1,696 SNVs, 132 deletions, 131 insertions), each at `SIM_VAF=0.5`.
+`master` (`e773177`) against the fix:
+
+| | before | after |
+| --- | --- | --- |
+| sites whose observed fraction changed | | 1,462 of 1,959 (75%); median shift 0.010, 90th percentile 0.030, max 0.060, as many up as down |
+| `allele_freq` FAIL | 58 (3.0%) | 43 (2.2%) |
+| verdicts that flipped | | 21: 18 FAIL→PASS, 3 PASS→FAIL, all at observed 0.22-0.33 or 0.68-0.74 |
+| global checks | 3 pass | identical |
+
+These are real het sites, so the grader's own design says at most 1% should
+fail. Counting a molecule twice made the counts more spread out than the
+binomial allows, and the fix moves the rate toward the design. The 2.2% left
+is not explained here. Reference bias is the obvious suspect, but it was not
+measured.
 
 ### N17 · The two rules keyed on "how many loci" had no link between them
 
