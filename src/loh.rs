@@ -1306,6 +1306,7 @@ mod tests {
     /// This diagnoses, it does not tolerate: a missing test dependency is a
     /// broken environment, so the test still fails. Only the message changes,
     /// so the reader installs bcftools instead of hunting a logic bug.
+    #[track_caller]
     fn require_bcftools() {
         let spawned = std::process::Command::new("bcftools")
             .arg("--version")

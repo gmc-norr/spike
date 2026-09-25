@@ -2965,11 +2965,12 @@ test's gVCF name the chromosome `chr20` so no rename warning is emitted -- a sta
 genuine regression -- still fails with `assertion left == right failed: []`, not with the
 bcftools message: the environment check does not mask real bugs.
 
-**The other tests.** `bcftools` is the only external binary the suite needs. Measured with
-`samtools`, `bcftools`, `bwa-mem2`, `bgzip` and `tabix` all off PATH: `447 passed; 1 failed;
-1 ignored`, the one failure being this test. The generated-script tests in `main.rs` run
-`bash`, but write their own stub `samtools` and stub aligner onto the script's PATH.
-`README.md` now states the test-time tools under `### Test-time prerequisites`.
+**The other tests.** Beyond `bash`, `bcftools` is the only external binary the suite needs.
+Measured with `samtools`, `bcftools`, `bwa-mem2`, `bgzip` and `tabix` all off PATH:
+`446 passed; 2 failed; 1 ignored` -- the two failures being this test and the sibling below,
+both now naming `bcftools`. The generated-script tests in `main.rs` run `bash`, but write
+their own stub `samtools` and stub aligner onto the script's PATH. `README.md` now states the
+test-time tools under `### Test-time prerequisites`.
 
 **The second test -- a false pass -- also fixed.** A sibling reads the same kind of `.vcf.gz`
 and had the same dependency with a worse symptom:
