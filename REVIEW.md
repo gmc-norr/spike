@@ -2864,7 +2864,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | ID | Priority | Finding | Status |
 | --- | --- | --- | --- |
 | CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, fixed |
-| CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
+| CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note; option B's depth fold and warning done (not a gate) |
 | CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note; its fail-closed half fixed for `--gvcf` |
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note; option B's census and warning done (not a gate) |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
@@ -2991,6 +2991,26 @@ Known limit, stated before measuring: `D_b` comes from the donor pool, which hol
 at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is.
 The design note warns that such a dip may reappear on its own when the synthetic reads are
 aligned. The fold will count it anyway; C4 measures how often that matters on ordinary loci.
+
+#### Result: CR2 option B -- supported
+
+Code `9ed9db1`. Binaries: before = the CR4 census binary `2b5b193`, md5 `fe5fa821…`; depth-fold
+`9ed9db1`, md5 `2dd58097…`; each built in its own target dir.
+- **C1 pass.** `variable`, `dup:chrT:10000-28000;af=0.5`: `SIM_DEPTH_FOLD=3.88`, worst bin
+  `chrT:17000-18000` at 25.0x against the 100.0x the tiling is scaled by (fragment depths: the
+  probe's 75x of reads is 100x of fragments), and the warning printed.
+- **C2 pass.** `uniform`, same event: `SIM_DEPTH_FOLD=1.00`, no warning.
+- **C3 pass.** On both probes `R1.fq.gz`, `R2.fq.gz` and `replaced_reads.txt` have the same
+  md5 before and after. With the new field, its header line and `##reference` (each run's own,
+  identical, probe reference) taken out, `truth.vcf` is the same line for line.
+- **C4 pass, narrowly.** The 40 spans as DUPs (event list md5 `8f304862…`, as locked) all ran,
+  none refused, and **6 of 40** warned against a bar of 8. Fold: min 1.11, median 1.27, max
+  2.46 (event 15, `chr20:25332805-25333805` at 19.7x against 50.0x). Two of the six are at 1.51.
+
+What C4 says beyond the bar: ordinary benchmark loci are not flat at the 1 kb scale, and a
+1.5-fold warning fires on about one DUP in seven of them. Whether those six are library depth
+or mappability (the known limit above) was not measured. A real fix (option A) would have to be
+judged against this spread, not against 1.0.
 
 ### CR3 -- synthetic haplotypes erase background indels
 

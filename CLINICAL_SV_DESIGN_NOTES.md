@@ -7,7 +7,8 @@
 > warning, the help line and the README say what fusion mode is; no rename. Details and
 > measurements are in `REVIEW.md` under each CR. **CR4 option B, as measure-and-warn**
 > (the user's choice, not a failing gate): `SIM_RESIST` in the truth VCF and a warning above
-> 0.10; plan, code and result in `REVIEW.md` under CR4.
+> 0.10; plan, code and result in `REVIEW.md` under CR4. **CR2 option B**, the same way:
+> `SIM_DEPTH_FOLD` and a warning above 1.5; it fired on 6 of 40 ordinary chr20 DUPs.
 
 # DESIGN-NOTES — the Codex findings that change spike's model or its defaults
 
