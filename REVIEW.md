@@ -1962,6 +1962,36 @@ measured rule.
 
 **If any fails,** there is no code change, and the result is recorded.
 
+#### N18 held-out result: all four predictions hold
+
+Run with `scripts/n18_indel_flank.py` (unchanged since `d6f4621`) against
+`spike validate` built at `97606a4`.
+
+**The ruler matched** on every site: indel carries and spans **8,008 /
+8,008**, indel verdicts **8,008 / 8,008**, SNV fractions **1,156 / 1,156**.
+
+| set | reads counted | evaluable | out of range | mean fraction | fragments |
+| --- | --- | --- | --- | --- | --- |
+| indels | unfiltered | 7,958 | 740 (9.30%) | 0.419 | 300,189 |
+| indels | F = 0 | 7,935 | 400 (5.04%) | 0.456 | 279,447 |
+| indels | F = 5 | 7,907 | 333 (4.21%) | 0.473 | 262,987 |
+| indels | **F = 10** | 7,855 | 320 (**4.07%**) | **0.478** | 242,835 |
+| indels | F = 20 | 7,616 | 276 (3.62%) | 0.482 | 201,817 |
+| indels | F = 30 | 6,829 | 224 (3.28%) | 0.483 | 161,306 |
+| SNVs | unfiltered | 1,156 | 6 (0.52%) | 0.495 | 43,715 |
+| SNVs | F = 10 | 1,156 | 7 (0.61%) | 0.495 | 38,436 |
+
+| prediction | measured | holds |
+| --- | --- | --- |
+| indel out-of-range at F = 10 <= 4.5% | 4.07% | yes |
+| at most half the unfiltered 9.30% (4.65%) | 4.07% | yes |
+| mean fraction +0.04 or more | +0.059 | yes |
+| SNVs move < 1.0 point and < 0.02 | +0.09 points, -0.0005 | yes |
+
+The held-out curve has the same shape as chr20's, sitting about 0.3 points
+higher throughout, and F = 10 keeps 81% of fragments on both. So the rule is
+built.
+
 ## Low severity
 
 | ID | Problem | Where | Fix |
