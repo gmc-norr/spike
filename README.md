@@ -686,7 +686,8 @@ The truth VCF contains one record per simulated event with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
-- `SIM_VAF` in the INFO field with the actual allele fraction used
+- `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up
+- `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
 
@@ -1031,7 +1032,7 @@ Averaged over both copies this is `VAF`. At VAF 0.5 it removes every read of the
 The number of synthetic reads to tile is:
 
 - **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform over exactly that set, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
-- **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95).
+- **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95 -- a request above it is simulated at 0.95, and the truth VCF records `SIM_VAF=0.950` with the request in `SIM_REQ_VAF`).
 
 `mean_fragment_length` is the library's own mean. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth.
 
@@ -1205,16 +1206,24 @@ cover that. ...
 
 When the coverage is real but thin, the floor still applies -- a haplotype
 shorter than one fragment asks for 0 fragments however good the coverage is,
-and planting nothing would leave a truth VCF with no reads behind it. But the
-floor then plants *more* support than `--allele-fraction` asked for, while
-`SIM_VAF` in the truth VCF still records the request, so spike warns with both
-numbers:
+and planting nothing would leave a truth VCF with no reads behind it. The floor
+then plants *more* support than `--allele-fraction` asked for, so spike warns
+with both numbers **and** the truth VCF records what was planted: `SIM_VAF` is
+the fraction the two fragments make up, `SIM_REQ_VAF` the request.
 
 ```
-WARN spike::simulate] coverage 0.7x at VAF 0.050 asks for 0 tiled fragment(s); spike
-emits the 2 it needs to plant the event at all, so the realized allele fraction will
-be above the 0.050 recorded as SIM_VAF in the truth VCF
+WARN spike::simulate] coverage 3.8x at VAF 0.030 asks for 1 tiled fragment(s); spike
+emits the 2 it needs to plant the event at all, so the realized allele fraction is
+above the 0.030 requested; the truth VCF records the realized fraction as SIM_VAF and
+the 0.030 requested as SIM_REQ_VAF
 ```
+
+That run's truth record reads `SIM_VAF=0.058;SIM_REQ_VAF=0.030`: two fragments
+of the library's mean 400 bp, over 3.8x coverage across the haplotype's 3,600
+usable start positions, are 5.8% of the depth there, not the 3.0% asked for.
+Feeding that record back through `--vcf` asks for 0.058, gets the same two fragments and
+writes `SIM_VAF=0.058` again, with no warning -- the request a thin region can
+actually be spiked at.
 
 ### Missing or unusable donor base qualities
 

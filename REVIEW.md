@@ -703,7 +703,10 @@ only thing left that could notice, and it did not.
   the event, now preceded by `WARN spike::simulate] coverage 0.7x at VAF 0.050
   asks for 0 tiled fragment(s); spike emits the 2 it needs to plant the event at
   all, so the realized allele fraction will be above the 0.050 recorded as
-  SIM_VAF in the truth VCF`.
+  SIM_VAF in the truth VCF`. (CR7's AF-cap bullet below has since changed both
+  halves of this: the warning's wording, and the truth itself -- `SIM_VAF` now
+  records the fraction the floor's two fragments realize and the new
+  `SIM_REQ_VAF` carries the request.)
 
   H5 and M1/M2 are untouched by this: the additive formula
   `n = round(cov x v / (1 - v) x breakpoints.len())` and the interior formula's
@@ -2708,7 +2711,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
-| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence fixed) |
+| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence and the AF caps fixed; input GT, ploidy and `af=het` still open) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, not fixed |
@@ -2838,7 +2841,32 @@ conserved.
   and `bcftools query` read it unchanged.
 - **Requested AF is written despite caps.** `MAX_ADDITIVE_VAF = 0.95`
   (`src/simulate.rs:575`) and `MIN_TILED_FRAGMENTS = 2` (`src/simulate.rs:608`) change the
-  simulated fraction; only a `log::warn!` records it, and truth keeps the request.
+  simulated fraction; only a `log::warn!` recorded it, and truth kept the request.
+  **Fixed -- this bullet only; input GT, ploidy and `af=het` are still open.** `SIM_VAF` is
+  now the fraction that was *simulated* and the new `SIM_REQ_VAF` carries the request, both
+  declared in the header and both written on every record so the two are always comparable.
+  The simulated fraction is `compute_tiling_count`'s own formula inverted for the count it
+  actually returned -- `n / (n + coverage x breakpoints)` on the additive branch,
+  `n x mean_frag / (coverage x effective_len)` on the other -- so the number recorded is the
+  one the emitted fragments make up. It is computed only when one of the two mechanisms
+  fired (`vaf > MAX_ADDITIVE_VAF`, or `floor_tiling_count` raising the count), never by
+  comparing the two numbers: `round()` moves the realized fraction off the request by a hair
+  on nearly every event, and reporting that would change every record and drown the two
+  mechanisms. An event neither mechanism touched keeps a byte-identical `SIM_VAF`. Measured
+  on the review's own synthetic chrT (`--seed 17 --flank 2000`), `4efa0f4` (and the branch
+  parent `18c7847`) against the fix: a junction DUP at `af=0.99` wrote
+  `SIM_VAF=0.990` and now writes `SIM_VAF=0.950;SIM_REQ_VAF=0.990` (1900 junction fragments
+  against 100x kept originals = 0.95); a DEL at `af=0.03` on a thinned copy of the same BAM (spike measured
+  3.8x donor coverage) wrote `SIM_VAF=0.030` and now writes `SIM_VAF=0.058;SIM_REQ_VAF=0.030` (the floor's 2
+  fragments of 400 bp over 3.8x across 3,600 start positions). On a del+dup+inv+ins run at
+  the default AF every `SIM_VAF=0.500` token is byte-identical to the parent's and the
+  records differ only by the added `;SIM_REQ_VAF=0.500`. `R1.fq.gz`, `R2.fq.gz` and
+  `replaced_reads.txt` are byte-identical to `18c7847`'s on all three runs -- no RNG draw
+  moved. `bcftools query` reads both fields; `spike validate` loads the events unchanged and
+  only its `coverage_ratio` *expected* column moves (DEL 0.97 -> 0.94, DUP 1.99 -> 1.95),
+  with every verdict the same. Feeding the floored record back through `--vcf` is now a
+  fixed point: it asks for 0.058, gets the same two fragments and writes 0.058 with no
+  warning.
 
 ### CR8 -- unmatched R1 is removed before mate recovery
 

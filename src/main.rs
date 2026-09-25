@@ -473,6 +473,10 @@ fn main() -> Result<()> {
     validate_event_overlaps(&events, args.allow_overlap)?;
 
     let mut event_outputs = Vec::with_capacity(events.len());
+    // Per event, in the same order: the fraction its tiled fragments actually
+    // plant when the additive cap or the two-fragment floor moved it off the
+    // request, `None` when the request stands. The truth VCF records it.
+    let mut adjusted_afs: Vec<Option<f64>> = Vec::with_capacity(events.len());
 
     let mut event_stats: Vec<EventStat> = Vec::new();
     // M14: pairs whose stored quality is unusable never reach a pool, so they
@@ -538,6 +542,7 @@ fn main() -> Result<()> {
             uncovered_breakpoint_sides: output.uncovered_breakpoint_sides.clone(),
         });
 
+        adjusted_afs.push(output.adjusted_vaf);
         event_outputs.push(output);
     }
 
@@ -564,6 +569,7 @@ fn main() -> Result<()> {
     let truth_path = Path::new(&args.output).join("truth.vcf");
     truth::write_truth_vcf(
         &events,
+        &adjusted_afs,
         config.allele_fraction, // default AF for events without per-event override
         &truth_path.to_string_lossy(),
         &args.reference,

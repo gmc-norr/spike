@@ -57,8 +57,15 @@ fn with_bnd_base(alt: &str, base: &str) -> String {
 /// Write a truth VCF describing the simulated events.
 ///
 /// Each event may carry a per-event allele fraction; `default_af` is used as fallback.
+/// That fraction is the *request*, and goes in `SIM_REQ_VAF`. `adjusted_afs`
+/// holds its simulated counterpart, one entry per event in the same order:
+/// `Some(v)` when the additive cap or the two-fragment floor moved the
+/// fraction off the request, `None` when the request stands. `SIM_VAF` is
+/// what was simulated, so it is `v` where there is one and the request
+/// everywhere else.
 pub fn write_truth_vcf(
     events: &[SimEvent],
+    adjusted_afs: &[Option<f64>],
     default_af: f64,
     output_path: &str,
     ref_path: &str,
@@ -95,7 +102,15 @@ pub fn write_truth_vcf(
     )?;
     writeln!(
         f,
-        "##INFO=<ID=SIM_VAF,Number=1,Type=Float,Description=\"Simulated allele fraction\">"
+        "##INFO=<ID=SIM_VAF,Number=1,Type=Float,Description=\"Allele fraction that was \
+         simulated: the fraction of the depth the fragments spike planted make up. Below \
+         SIM_REQ_VAF where the additive 0.95 cap applied and above it where the \
+         two-fragment floor did\">"
+    )?;
+    writeln!(
+        f,
+        "##INFO=<ID=SIM_REQ_VAF,Number=1,Type=Float,Description=\"Allele fraction requested \
+         for this event; SIM_VAF is the fraction that was simulated\">"
     )?;
     writeln!(
         f,
@@ -133,8 +148,17 @@ pub fn write_truth_vcf(
     };
 
     for (i, event) in events.iter().enumerate() {
-        let event_af = event.allele_fraction().unwrap_or(default_af);
-        let gt = genotype_from_vaf(event_af);
+        let requested_af = event.allele_fraction().unwrap_or(default_af);
+        // What was simulated: the request, unless the additive cap or the
+        // two-fragment floor moved it.
+        let event_af = adjusted_afs
+            .get(i)
+            .copied()
+            .flatten()
+            .unwrap_or(requested_af);
+        // The genotype says which copies carry the event, which neither the
+        // cap nor the floor changes, so it stays the request's.
+        let gt = genotype_from_vaf(requested_af);
 
         match event {
             SimEvent::Deletion {
@@ -157,12 +181,13 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *del_start,
                     format!(
-                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
+                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *del_start),
                         del_end,
                         sv_len,
                         event_af,
+                        requested_af,
                         gene,
                         exons_str,
                         gt,
@@ -192,12 +217,13 @@ pub fn write_truth_vcf(
                         chrom.clone(),
                         pos,
                         format!(
-                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={}\tGT\t{}",
                             id,
                             base,
                             with_bnd_base(&alt, &base),
                             mate,
                             event_af,
+                            requested_af,
                             gene,
                             gt,
                         ),
@@ -216,12 +242,13 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *dup_start,
                     format!(
-                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *dup_start),
                         dup_end,
                         sv_len,
                         event_af,
+                        requested_af,
                         gene,
                         gt,
                     ),
@@ -239,12 +266,13 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *inv_start,
                     format!(
-                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *inv_start),
                         inv_end,
                         sv_len,
                         event_af,
+                        requested_af,
                         gene,
                         gt,
                     ),
@@ -276,12 +304,13 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *pos,
                     format!(
-                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         anchor,
                         alt,
                         ins_len,
                         event_af,
+                        requested_af,
                         gene,
                         gt,
                     ),
@@ -300,11 +329,12 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     pos + 1,
                     format!(
-                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         String::from_utf8_lossy(ref_allele),
                         String::from_utf8_lossy(alt_allele),
                         event_af,
+                        requested_af,
                         gene,
                         gt,
                     ),
@@ -440,7 +470,7 @@ mod tests {
             del("chr1", 2, 5),
         ];
         let path = std::env::temp_dir().join(format!("spike_truth_{}.vcf", std::process::id()));
-        write_truth_vcf(&events, 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -527,7 +557,7 @@ mod tests {
         }];
         let path = std::env::temp_dir()
             .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
-        write_truth_vcf(&events, 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -563,5 +593,91 @@ mod tests {
         // truth must uppercase too or the ALT is not the reads' sequence.
         let r = ins_record("lowercase", Some(b"ggtt".to_vec()), 4);
         assert_eq!(r[4], "AGGTT");
+    }
+
+    /// A one-DEL truth VCF for a request of `af`, with `simulated` saying what
+    /// the tiling actually planted (`None` when the request stands). `tag`
+    /// keeps concurrently running callers off each other's temporary file.
+    fn af_truth_text(tag: &str, af: f64, simulated: Option<f64>) -> String {
+        let reference = SharedReference::from_sequences(
+            [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
+        );
+        let contigs = vec![("chr1".to_string(), 14)];
+        let events = vec![SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 2,
+            del_end: 5,
+            gene: "G".to_string(),
+            exons: vec![],
+            allele_fraction: Some(af),
+        }];
+        let path = std::env::temp_dir()
+            .join(format!("spike_truth_af_{}_{}.vcf", std::process::id(), tag));
+        write_truth_vcf(
+            &events,
+            &[simulated],
+            0.5,
+            path.to_str().unwrap(),
+            "ref.fa",
+            &reference,
+            &contigs,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        text
+    }
+
+    /// The INFO column of the single record in `text`.
+    fn only_info(text: &str) -> String {
+        let line = text
+            .lines()
+            .find(|l| !l.starts_with('#'))
+            .expect("one record");
+        line.split('\t').nth(7).expect("an INFO column").to_string()
+    }
+
+    #[test]
+    fn test_truth_records_the_simulated_fraction_and_the_request() {
+        // The two-fragment floor planted 0.317 where 0.05 was asked for.
+        let text = af_truth_text("floored", 0.05, Some(0.31746031746031744));
+        let info = only_info(&text);
+        assert!(
+            info.contains("SIM_VAF=0.317;SIM_REQ_VAF=0.050"),
+            "SIM_VAF must be what was simulated and SIM_REQ_VAF the request, got {}",
+            info
+        );
+    }
+
+    #[test]
+    fn test_truth_keeps_sim_vaf_at_the_request_when_nothing_moved_it() {
+        // Neither cap nor floor applied, so SIM_VAF is exactly the text it
+        // has always been, and the new field repeats it.
+        let text = af_truth_text("unadjusted", 0.5, None);
+        let info = only_info(&text);
+        assert!(
+            info.contains("SIM_VAF=0.500;SIM_REQ_VAF=0.500"),
+            "an unadjusted event's SIM_VAF must not move, got {}",
+            info
+        );
+    }
+
+    #[test]
+    fn test_truth_header_declares_the_requested_fraction() {
+        let text = af_truth_text("header", 0.5, None);
+        assert!(
+            text.contains("##INFO=<ID=SIM_REQ_VAF,Number=1,Type=Float,"),
+            "SIM_REQ_VAF must be declared, header was:\n{}",
+            text
+        );
+        let sim_vaf = text
+            .lines()
+            .find(|l| l.starts_with("##INFO=<ID=SIM_VAF,"))
+            .expect("a SIM_VAF header line");
+        assert!(
+            sim_vaf.contains("SIM_REQ_VAF"),
+            "SIM_VAF's description must point at the request, got {}",
+            sim_vaf
+        );
     }
 }

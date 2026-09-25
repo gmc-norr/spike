@@ -211,7 +211,7 @@ fn simulate_event_with_copies(
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
     // to avoid inflating flank coverage.
-    let chimeric = tile_haplotype_reads(
+    let (chimeric, adjusted_vaf) = tile_haplotype_reads(
         haplotype,
         other_haplotype.as_ref().map(|other| (other, p_other_copy)),
         synth_gen,
@@ -271,6 +271,7 @@ fn simulate_event_with_copies(
         suppressed_count: suppressed.len(),
         suppressed_names: suppressed,
         uncovered_breakpoint_sides,
+        adjusted_vaf,
     })
 }
 
@@ -535,6 +536,22 @@ fn donor_coverage_for_tiling(
     );
 }
 
+/// The number of fragments to tile, and the fraction they actually plant
+/// when spike could not plant the one that was asked for.
+struct TilingCount {
+    /// Fragments to tile.
+    count: usize,
+    /// The fraction `count` fragments realize, when the additive cap or the
+    /// two-fragment floor moved the count off the requested VAF; `None` when
+    /// the request stands and `SIM_VAF` keeps it unchanged.
+    ///
+    /// Detection is on the two mechanisms, not on the two numbers differing:
+    /// the `round()` below moves the realized fraction off the request by a
+    /// hair on nearly every event, so comparing numbers would report rounding
+    /// on almost every record and drown the two mechanisms this field is for.
+    adjusted_vaf: Option<f64>,
+}
+
 /// Compute the number of fragments to tile across a haplotype.
 ///
 /// For non-additive events (DEL, INV, INS): uses the reference-mapped length
@@ -551,9 +568,13 @@ fn compute_tiling_count(
     vaf: f64,
     mean_frag: f64,
     breakpoint_only: bool,
-) -> usize {
+) -> TilingCount {
+    let plain = |count| TilingCount {
+        count,
+        adjusted_vaf: None,
+    };
     if haplotype.total_len == 0 {
-        return 0;
+        return plain(0);
     }
 
     // Every count below is coverage x VAF, so at zero coverage the formula
@@ -564,7 +585,7 @@ fn compute_tiling_count(
     // other side) can fill the pool without covering the event. Refuse here
     // instead, where the coverage is actually measured.
     if coverage.is_nan() || coverage <= 0.0 {
-        return 0;
+        return plain(0);
     }
 
     let breakpoints = haplotype.breakpoints();
@@ -573,16 +594,31 @@ fn compute_tiling_count(
         // An additive event can't reach vaf = 1 (it would need infinitely
         // many added fragments), so cap it.
         const MAX_ADDITIVE_VAF: f64 = 0.95;
-        if vaf > MAX_ADDITIVE_VAF {
+        let capped = vaf > MAX_ADDITIVE_VAF;
+        if capped {
             log::warn!(
-                "additive event: VAF {:.2} capped at {:.2} (original reads are kept)",
+                "additive event: VAF {:.2} capped at {:.2} (original reads are kept); \
+                 the truth VCF records the capped fraction as SIM_VAF and {:.2} as \
+                 SIM_REQ_VAF",
                 vaf,
-                MAX_ADDITIVE_VAF
+                MAX_ADDITIVE_VAF,
+                vaf
             );
         }
         let v = vaf.min(MAX_ADDITIVE_VAF);
         let n = (coverage * v / (1.0 - v) * breakpoints.len() as f64).round() as usize;
-        return floor_tiling_count(n, coverage, v);
+        let (count, floored) = floor_tiling_count(n, coverage, v);
+        // n junction fragments against the coverage kept at each breakpoint
+        // are n / (n + coverage * breakpoints) of the depth there -- the
+        // formula above, inverted for the count finally returned, so the
+        // fraction recorded is the one the fragments emitted make up.
+        let adjusted_vaf = (capped || floored).then(|| {
+            realized_fraction(
+                count as f64,
+                count as f64 + coverage * breakpoints.len() as f64,
+            )
+        });
+        return TilingCount { count, adjusted_vaf };
     }
 
     // Fragment starts are uniform over the starts whose fragment overlaps
@@ -602,7 +638,27 @@ fn compute_tiling_count(
     };
 
     let n = ((coverage * vaf * effective_len) / mean_frag).round() as usize;
-    floor_tiling_count(n, coverage, vaf)
+    let (count, floored) = floor_tiling_count(n, coverage, vaf);
+    // n = coverage * vaf * effective_len / mean_frag, inverted for the count
+    // finally returned.
+    let adjusted_vaf =
+        floored.then(|| realized_fraction(count as f64 * mean_frag, coverage * effective_len));
+    TilingCount { count, adjusted_vaf }
+}
+
+/// `numerator / denominator` as an allele fraction.
+///
+/// Only reached with `coverage > 0`, so the denominator is positive for any
+/// haplotype with reference-overlapping length to divide by. A haplotype
+/// shorter than one fragment has none -- the floor's own case -- and the
+/// fragments planted are then the whole of the event's support, a fraction of
+/// 1; the same clamp keeps a very short haplotype's fraction inside (0, 1].
+fn realized_fraction(numerator: f64, denominator: f64) -> f64 {
+    if denominator > 0.0 {
+        (numerator / denominator).min(1.0)
+    } else {
+        1.0
+    }
 }
 
 /// Smallest number of tiled fragments spike will plant an event with.
@@ -613,25 +669,31 @@ const MIN_TILED_FRAGMENTS: usize = 2;
 /// The floor is right for a thin-but-covered region: a haplotype shorter than
 /// one fragment asks for 0 however real the coverage is, and planting nothing
 /// would leave a truth VCF with no reads behind it. But when the floor raises
-/// the count, the realized allele fraction is above the one `SIM_VAF` records
-/// -- at low coverage by several times over, in the direction that flatters a
-/// caller. Callers only reach here with `coverage > 0`, so this is never the
-/// zero-coverage case, which `compute_tiling_count` refuses outright.
-fn floor_tiling_count(requested: usize, coverage: f64, vaf: f64) -> usize {
+/// the count, the realized allele fraction is above the one that was asked
+/// for -- at low coverage by several times over, in the direction that
+/// flatters a caller -- so the caller records the realized fraction as
+/// `SIM_VAF` and keeps the request in `SIM_REQ_VAF`. Callers only reach here
+/// with `coverage > 0`, so this is never the zero-coverage case, which
+/// `compute_tiling_count` refuses outright.
+///
+/// Returns the count to tile and whether the floor raised it.
+fn floor_tiling_count(requested: usize, coverage: f64, vaf: f64) -> (usize, bool) {
     if requested >= MIN_TILED_FRAGMENTS {
-        return requested;
+        return (requested, false);
     }
     log::warn!(
         "coverage {:.1}x at VAF {:.3} asks for {} tiled fragment(s); spike emits the \
-         {} it needs to plant the event at all, so the realized allele fraction will \
-         be above the {:.3} recorded as SIM_VAF in the truth VCF",
+         {} it needs to plant the event at all, so the realized allele fraction is \
+         above the {:.3} requested; the truth VCF records the realized fraction as \
+         SIM_VAF and the {:.3} requested as SIM_REQ_VAF",
         coverage,
         vaf,
         requested,
         MIN_TILED_FRAGMENTS,
+        vaf,
         vaf
     );
-    MIN_TILED_FRAGMENTS
+    (MIN_TILED_FRAGMENTS, true)
 }
 
 /// The fragment starts in `[0, max_start]` whose fragment overlaps reference
@@ -716,6 +778,10 @@ fn sample_ref_overlapping_start(
 ///
 /// `other_copy` is the same haplotype with the other sample copy's alleles,
 /// and the chance a fragment comes from it (above VAF 0.5).
+///
+/// Returns the pairs, and the fraction they actually plant when the additive
+/// cap or the two-fragment floor moved the count off `vaf` (see
+/// [`TilingCount`]).
 #[allow(clippy::too_many_arguments)]
 fn tile_haplotype_reads(
     haplotype: &VariantHaplotype,
@@ -727,10 +793,10 @@ fn tile_haplotype_reads(
     breakpoint_only: bool,
     name_prefix: &str,
     rng: &mut StdRng,
-) -> Vec<ReadPair> {
+) -> (Vec<ReadPair>, Option<f64>) {
     let hap_len = haplotype.total_len;
     if hap_len == 0 {
-        return Vec::new();
+        return (Vec::new(), None);
     }
 
     // Use the library's real mean fragment length; fall back only when the
@@ -743,7 +809,8 @@ fn tile_haplotype_reads(
     let read_length = synth_gen.read_length() as u64;
     let breakpoints = haplotype.breakpoints();
 
-    let n_frags = compute_tiling_count(haplotype, coverage, vaf, mean_frag, breakpoint_only);
+    let plan = compute_tiling_count(haplotype, coverage, vaf, mean_frag, breakpoint_only);
+    let n_frags = plan.count;
 
     log::info!(
         "Tiling {} synthetic reads across {}bp haplotype (cov={:.1}, vaf={:.2}, bp_only={})",
@@ -838,7 +905,7 @@ fn tile_haplotype_reads(
         }
     }
 
-    pairs
+    (pairs, plan.adjusted_vaf)
 }
 
 /// Estimate fragment depth at a reference position on `chrom`.
@@ -1002,7 +1069,7 @@ mod tests {
         // 30x coverage, 0.5 VAF, 400bp mean frag. Fragment starts are uniform
         // over [0, L - f], so interior depth is n * f / (L - f); for v * cov
         // that is n = cov * v * (L - f) / f = 30 * 0.5 * 3600 / 400 = 135.
-        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false).count;
         assert_eq!(count, 135);
     }
 
@@ -1021,7 +1088,7 @@ mod tests {
         // Fragment starts that overlap reference: (4500 - 400) minus the
         // 500 - 400 = 100 starts that would lie wholly in the insertion.
         // n = 30 * 0.5 * 4000 / 400 = 150.
-        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false).count;
         assert_eq!(count, 150);
 
         // 1000 bp insertion: (5000 - 400) - (1000 - 400) = 4000 starts -> 150.
@@ -1030,7 +1097,7 @@ mod tests {
             novel_segment(1000),
             ref_segment(2000, 2000),
         ]);
-        assert_eq!(compute_tiling_count(&long, 30.0, 0.5, 400.0, false), 150);
+        assert_eq!(compute_tiling_count(&long, 30.0, 0.5, 400.0, false).count, 150);
     }
 
     #[test]
@@ -1054,7 +1121,7 @@ mod tests {
         assert_eq!(hap.total_len, 9000);
         assert_eq!(hap.ref_mapped_len(), 9000);
 
-        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false).count;
         // Expected: 30 * 0.5 * (9000 - 400) / 400 = 322.5 → 323
         assert_eq!(count, 323);
     }
@@ -1069,7 +1136,7 @@ mod tests {
         ]);
 
         // 1 breakpoint, all originals kept: 30 * 0.5 / (1 - 0.5) = 30.
-        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, true);
+        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, true).count;
         assert_eq!(count, 30);
     }
 
@@ -1079,15 +1146,15 @@ mod tests {
         // so n junction fragments make up n / (cov + n) of it. For fraction v,
         // n = cov * v / (1 - v) per breakpoint.
         let one_bp = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
-        assert_eq!(compute_tiling_count(&one_bp, 40.0, 0.2, 400.0, true), 10);
-        assert_eq!(compute_tiling_count(&one_bp, 100.0, 0.05, 400.0, true), 5);
+        assert_eq!(compute_tiling_count(&one_bp, 40.0, 0.2, 400.0, true).count, 10);
+        assert_eq!(compute_tiling_count(&one_bp, 100.0, 0.05, 400.0, true).count, 5);
 
         let two_bp = make_haplotype(vec![
             ref_segment(0, 2000),
             ref_segment(5000, 2000),
             ref_segment(9000, 2000),
         ]);
-        assert_eq!(compute_tiling_count(&two_bp, 40.0, 0.2, 400.0, true), 20);
+        assert_eq!(compute_tiling_count(&two_bp, 40.0, 0.2, 400.0, true).count, 20);
     }
 
     #[test]
@@ -1095,8 +1162,8 @@ mod tests {
         // v = 1 would need infinitely many added fragments; the count must
         // stay finite (an unbounded usize would abort on allocation).
         let hap = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
-        let count = compute_tiling_count(&hap, 40.0, 1.0, 400.0, true);
-        assert!(count > compute_tiling_count(&hap, 40.0, 0.9, 400.0, true));
+        let count = compute_tiling_count(&hap, 40.0, 1.0, 400.0, true).count;
+        assert!(count > compute_tiling_count(&hap, 40.0, 0.9, 400.0, true).count);
         assert!(count <= 40 * 100, "count {} is unbounded", count);
     }
 
@@ -1104,7 +1171,7 @@ mod tests {
     fn test_tiling_count_minimum() {
         // Very low coverage → at least 2 reads.
         let hap = make_haplotype(vec![ref_segment(0, 100)]);
-        let count = compute_tiling_count(&hap, 0.1, 0.1, 400.0, false);
+        let count = compute_tiling_count(&hap, 0.1, 0.1, 400.0, false).count;
         assert_eq!(count, 2); // min of 2
     }
 
@@ -1114,18 +1181,58 @@ mod tests {
         // against, so the floor of 2 would invent reads rather than simulate
         // them. Both branches must return 0 and let the caller refuse.
         let hap = make_haplotype(vec![ref_segment(0, 4000)]);
-        assert_eq!(compute_tiling_count(&hap, 0.0, 0.5, 400.0, false), 0);
+        assert_eq!(compute_tiling_count(&hap, 0.0, 0.5, 400.0, false).count, 0);
 
         let additive = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
-        assert_eq!(compute_tiling_count(&additive, 0.0, 0.2, 400.0, true), 0);
+        assert_eq!(compute_tiling_count(&additive, 0.0, 0.2, 400.0, true).count, 0);
     }
 
     #[test]
     fn test_tiling_count_empty_haplotype() {
         let hap = make_haplotype(vec![]);
         assert_eq!(hap.total_len, 0);
-        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        let count = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false).count;
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_tiling_count_capped_additive_reports_the_fraction_it_planted() {
+        // An additive request above the 0.95 cap plants the capped count, so
+        // the fraction to record is the one those fragments make up, not the
+        // 0.99 that was asked for.
+        let hap = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
+        let plan = compute_tiling_count(&hap, 40.0, 0.99, 400.0, true);
+        // 40 * 0.95 / 0.05 * 1 breakpoint = 760 junction fragments, which are
+        // 760 / (760 + 40) of the depth at that junction.
+        assert_eq!(plan.count, 760);
+        let adjusted = plan.adjusted_vaf.expect("the cap moved the fraction");
+        assert_eq!(format!("{:.3}", adjusted), "0.950");
+        assert!(adjusted < 0.99, "recorded {} is still the request", adjusted);
+    }
+
+    #[test]
+    fn test_tiling_count_floored_event_reports_the_fraction_it_planted() {
+        // 0.7x coverage at VAF 0.05 asks for 0 fragments; the floor plants 2,
+        // which are a far larger share of the depth than 0.05.
+        let hap = make_haplotype(vec![ref_segment(0, 4000)]);
+        let plan = compute_tiling_count(&hap, 0.7, 0.05, 400.0, false);
+        assert_eq!(plan.count, 2);
+        let adjusted = plan.adjusted_vaf.expect("the floor moved the fraction");
+        // 2 * 400 / (0.7 * (4000 - 400)) = 0.3175.
+        assert_eq!(format!("{:.3}", adjusted), "0.317");
+        assert!(adjusted > 0.05, "recorded {} is still the request", adjusted);
+    }
+
+    #[test]
+    fn test_tiling_count_rounding_alone_does_not_move_the_recorded_fraction() {
+        // 30 * 0.5 * (9000 - 400) / 400 = 322.5 fragments, rounded to 323 --
+        // a realized fraction a hair off 0.5. Only the cap and the floor are
+        // reported; rounding would move nearly every record and say nothing
+        // about either mechanism.
+        let hap = make_haplotype(vec![ref_segment(0, 9000)]);
+        let plan = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        assert_eq!(plan.count, 323);
+        assert_eq!(plan.adjusted_vaf, None);
     }
 
     // ---------------------------------------------------------------
@@ -1442,7 +1549,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng).0;
         assert!(!pairs.is_empty(), "Should produce some read pairs");
 
         // Discordant pairs (R1 in left, R2 in right) should still exist.
@@ -1466,7 +1573,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng).0;
 
         let mut discordant_count = 0;
         for pair in &pairs {
@@ -1531,7 +1638,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "test", &mut rng).0;
         assert!(!pairs.is_empty());
 
         // Some pairs should span the junction (R1 ref near 6000, R2 ref near 1000)
@@ -1560,10 +1667,10 @@ mod tests {
 
         let pairs_a = tile_haplotype_reads(
             &hap, None, &gen, &pool, 30.0, 0.5, false, "ev0001", &mut rng_a,
-        );
+        ).0;
         let pairs_b = tile_haplotype_reads(
             &hap, None, &gen, &pool, 30.0, 0.5, false, "ev0002", &mut rng_b,
-        );
+        ).0;
 
         assert!(!pairs_a.is_empty());
         assert!(!pairs_b.is_empty());
@@ -1630,7 +1737,7 @@ mod tests {
 
         let pairs = tile_haplotype_reads(
             &hap, None, &gen, &pool, 30.0, 0.5, false, "sv", &mut rng,
-        );
+        ).0;
 
         assert!(
             !pairs.is_empty(),
@@ -1707,7 +1814,7 @@ mod tests {
         // breakpoint_only=false for full tandem model
         let pairs = tile_haplotype_reads(
             &hap, None, &gen, &pool, 30.0, 0.5, false, "dup", &mut rng,
-        );
+        ).0;
         assert!(!pairs.is_empty(), "Should produce reads from full tandem haplotype");
 
         // Some pairs should have discordant reference mapping at the junction:
@@ -1746,7 +1853,7 @@ mod tests {
         assert_eq!(hap.ref_mapped_len(), 5000);
 
         // breakpoint_only=false: uses ref_mapped_len as effective_len
-        let n = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false);
+        let n = compute_tiling_count(&hap, 30.0, 0.5, 400.0, false).count;
         // Expected: 30 * 0.5 * 5000 / 400 = 187.5 → 188
         assert!(n > 100, "Full tandem DUP should produce many reads, got {}", n);
     }
@@ -2541,7 +2648,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         let pairs =
-            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "ins", &mut rng);
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "ins", &mut rng).0;
         assert!(!pairs.is_empty(), "the insertion haplotype should be tiled");
 
         // The flanks are A, so a read off them carries A (T when the mate is
@@ -2771,6 +2878,7 @@ mod tests {
             suppressed_count: suppressed.len(),
             suppressed_names: suppressed.iter().map(|n| n.to_string()).collect(),
             uncovered_breakpoint_sides: Vec::new(),
+            adjusted_vaf: None,
         }
     }
 
