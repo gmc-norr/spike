@@ -456,7 +456,7 @@ The records kept because spike never extracted them (PCR duplicates, non-proper 
 
 #### Reads spike cannot edit
 
-spike counts those kept reads for every event and reports them (CR4). Which reads it edits does not change; it only says how many it could not. Per event, the log prints `Reads over the event spike cannot edit: <resistant> of <counted>`, the run README gets a **Resistant reads** column, and `truth.vcf` records the share as `SIM_RESIST`. Above **0.10** spike also warns, and the run README names the event:
+spike counts those kept reads for every event and reports them (CR4). Which reads it edits does not change; it only says how many it could not. Per event, the log prints `Reads over the event spike cannot edit: <resistant> of <counted>`, the run README gets a **Resistant reads** column, and `truth.vcf` records the share as `SIM_RESIST`, which `spike validate` reads back as its advisory `resistant` row. Above **0.10** spike also warns, and the run README names the event:
 
 ```
 DEL  chrT:10001-14000 (4000bp): 1038 of 2074 reads over it (50%) are ones spike cannot edit (below --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the merged BAM as they are, so the event is weaker than requested; truth.vcf records the share as SIM_RESIST (CR4).
@@ -497,6 +497,7 @@ spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
   --min-mapq       Minimum MAPQ for counting reads (default: 20)
   --flank          Flanking bp for coverage comparison (default: 5000)
   --json           Output JSON instead of text table
+  --strict         Count the advisory checks in the exit status
 ```
 
 The same table of checks-by-event-type is printed by `spike validate --help`.
@@ -550,6 +551,34 @@ events it was given. Which check covers which type:
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
+Two further rows are **advisory**, and a record gets each one whenever it
+carries that row's field, whatever the event's type. `resistant` reports the record's
+`SIM_RESIST` and `depth_fold` its `SIM_DEPTH_FOLD`, each against the threshold
+spike already warns at: `<=0.100` for the resistant share, `<=1.50` for the
+depth fold. A record carrying neither field -- an older spike's truth VCF --
+gets neither row, and that is not a failure; a field that is there and cannot be
+read is an advisory FAIL, because a census that cannot be read has not been
+checked. An advisory row is never a check *of* the event either: an event no
+check covers still reports `event_checked` FAIL beside its two advisory rows.
+
+Such a row prints as `PASS (advisory)` or `FAIL (advisory)` in the Status
+column, counts in the `Result:` line with every other row, and is summarised on
+a line of its own below it:
+
+```
+Result: 6/8 PASS
+Advisory: 2 checks, 1 PASS, 1 FAIL (not in the exit status; --strict includes them)
+```
+
+The advisory rows are **out of the exit status** unless `--strict` is given: the
+error that run exits with counts the six real checks alone (`1/6 validation
+checks failed`), so a run that failed one check before these rows existed still
+exits with exactly that. `--strict` counts every row instead (`2/8 validation
+checks failed`), and the summary line then reads `(in the exit status:
+--strict)`. A truth VCF carrying no census prints no `Advisory:` line at all. In
+`--json` every check object carries `"advisory": true` or `"advisory": false`
+beside its `"pass"`.
+
 #### What each check establishes, and what it does not
 
 Each check above is evidence at one locus, and each is narrower than the claim
@@ -564,14 +593,14 @@ the review's reproduction script (`scripts/review_sv_model.py`) on a synthetic
 probe, a het DUP of `chrT:10000-28000` over a donor whose interior section is
 18.75x PASSed at an observed **1.32** against an expected **1.50** while that
 interior read **81.09x** -- 4.32x, where a locally proportional CN2->CN3
-predicts 28.13x (`CR2` in `REVIEW.md` for the depth, `CR9` for the check passing). spike itself now measures that mismatch at simulation time, as `SIM_DEPTH_FOLD` in the truth VCF (3.88 on that probe; see [One depth for the whole event](#one-depth-for-the-whole-event)), but `spike validate` does not read it yet. Nor does the check see a read its own
+predicts 28.13x (`CR2` in `REVIEW.md` for the depth, `CR9` for the check passing). spike itself now measures that mismatch at simulation time, as `SIM_DEPTH_FOLD` in the truth VCF (3.88 on that probe; see [One depth for the whole event](#one-depth-for-the-whole-event)), and `spike validate` now reports it as the advisory `depth_fold` row beside this one. Nor does the check see a read its own
 MAPQ filter rejects: on the same probes, with half the donor pairs at MAPQ 0, a
 deletion requested at AF=1 kept **37.5x** of its reads inside the deletion and
 still PASSed at an observed **0.00**, because `--min-mapq` (default 20) hides
 exactly the reads that survived (`CR4`). spike itself now counts those reads
 at simulation time, as `SIM_RESIST` in the truth VCF (0.500 on that probe; see
-[Reads spike cannot edit](#reads-spike-cannot-edit)), but `spike validate`
-does not read it yet.
+[Reads spike cannot edit](#reads-spike-cannot-edit)), and `spike validate` now
+reports it as the advisory `resistant` row beside this one.
 
 `split_reads` establishes that at least **two** distinct read names, pooled
 over the two breakpoints, sit within 500 bp of one breakpoint and carry an
@@ -604,6 +633,20 @@ whatever it spells. Like `split_reads` it is a count, not a fraction.
 `allele_freq` is the one per-event check that measures a fraction rather than
 counting evidence; the table below says what it can and cannot read off a truth
 record.
+
+`resistant` and `depth_fold` establish nothing at all about the BAM. Both
+numbers are **read back from the truth VCF**, not recomputed from the reads:
+`resistant` is the `SIM_RESIST` share spike counted while it was editing the
+donor, `depth_fold` the `SIM_DEPTH_FOLD` fold it measured while it was scaling
+the event's fragments. So the two rows report what spike measured at simulation
+time, and they inherit its blind spots -- `SIM_DEPTH_FOLD`'s donor pool holds
+only reads at `--min-mapq` or above, so a bin thin only in mappable reads still
+counts as a fold. They also believe the file they read: a truth VCF edited
+between the run that wrote it and the validation that reads it is taken at its
+word, because nothing here re-derives either number. What a failing row does
+establish is that spike's own census of the run went past the threshold spike
+warns at, which is a reason to read that run's log and README rather than this
+BAM.
 
 The three `[global]` checks are **fixed library heuristics, not comparisons
 against the donor**. `insert_size` passes when the sampled mean is 50-1000 bp
@@ -845,8 +888,8 @@ The truth VCF contains one record per simulated event with:
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
 - `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split
 - `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
-- `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. See [Reads spike cannot edit](#reads-spike-cannot-edit)
-- `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. See [One depth for the whole event](#one-depth-for-the-whole-event)
+- `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. `spike validate` reports it as the advisory `resistant` row. See [Reads spike cannot edit](#reads-spike-cannot-edit)
+- `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. `spike validate` reports it as the advisory `depth_fold` row. See [One depth for the whole event](#one-depth-for-the-whole-event)
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
 
@@ -1217,7 +1260,7 @@ The number of synthetic reads to tile is:
 
 ### One depth for the whole event
 
-That one `coverage` scales every fragment the event tiles, wherever it lands. Where the donor's own depth differs from it, the event's depth there is wrong: a het DUP over a stretch at a quarter of the breakpoint's depth came out **81.09x** where a local CN2 -> CN3 is **28.13x** (`CR2` in `REVIEW.md`). spike does not fix that yet, but it measures it (CR2 option B). Each reference interval the event's fragments are drawn from is cut into ~1 kb bins, and each bin's donor depth `D` is measured the same way as `coverage` (`C`). The event's **depth fold** is the largest `max((D+1)/(C+1), (C+1)/(D+1))` over its bins. The log prints it with the bin it came from, the run README has a **Depth fold** column, and `truth.vcf` records it as `SIM_DEPTH_FOLD`. Above **1.5** spike warns:
+That one `coverage` scales every fragment the event tiles, wherever it lands. Where the donor's own depth differs from it, the event's depth there is wrong: a het DUP over a stretch at a quarter of the breakpoint's depth came out **81.09x** where a local CN2 -> CN3 is **28.13x** (`CR2` in `REVIEW.md`). spike does not fix that yet, but it measures it (CR2 option B). Each reference interval the event's fragments are drawn from is cut into ~1 kb bins, and each bin's donor depth `D` is measured the same way as `coverage` (`C`). The event's **depth fold** is the largest `max((D+1)/(C+1), (C+1)/(D+1))` over its bins. The log prints it with the bin it came from, the run README has a **Depth fold** column, and `truth.vcf` records it as `SIM_DEPTH_FOLD`, which `spike validate` reads back as its advisory `depth_fold` row. Above **1.5** spike warns:
 
 ```
 DUP  chrT:10001-28000 (18000bp): the donor's depth over chrT:17000-18000 is 25.0x, but every fragment this event tiles is scaled by the 100.0x measured at one of its breakpoints (3.88-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).

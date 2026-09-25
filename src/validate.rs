@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use noodles::sam::alignment::record::cigar::op::Kind;
 use noodles::sam::alignment::record::Cigar as CigarTrait;
 
+use crate::census;
 use crate::extract::record_is_on_queried_reference;
 
 /// Parsed command-line arguments for `spike validate`.
@@ -20,6 +21,8 @@ struct ValidateArgs {
     min_mapq: u8,
     flank_bp: u64,
     json_output: bool,
+    /// Whether the advisory checks count towards the exit status.
+    strict: bool,
 }
 
 /// The event label the three whole-sample checks are reported under.
@@ -44,6 +47,38 @@ struct TruthEvent {
     /// span, so `end == start` and the length cannot be read off the
     /// coordinates the way every other type's can. None for every other type.
     ins_len: Option<u64>,
+    /// The census numbers spike recorded for this event, as INFO holds them.
+    census: CensusInfo,
+}
+
+/// The census numbers spike wrote into one truth record's INFO, as text.
+///
+/// `SIM_RESIST` is the share of the reads over the event spike could not edit
+/// (CR4); `SIM_DEPTH_FOLD` is how far the donor's depth departs from the one
+/// depth the event was scaled by (CR2). The text is kept unparsed so that a
+/// field that is not there -- an older spike's truth VCF -- can be told from
+/// one that is there and unreadable: the first is no row at all, the second an
+/// advisory failure.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct CensusInfo {
+    resist: Option<String>,
+    depth_fold: Option<String>,
+}
+
+impl CensusInfo {
+    /// The two fields read off one record's INFO column. A field that is
+    /// absent and VCF's own `.` are both `None`: neither is a number spike
+    /// measured, and neither is a malformed one.
+    fn from_info(info: &str) -> Self {
+        let field = |key: &str| match parse_info_field(info, key) {
+            None | Some(".") => None,
+            Some(value) => Some(value.to_string()),
+        };
+        CensusInfo {
+            resist: field("SIM_RESIST"),
+            depth_fold: field("SIM_DEPTH_FOLD"),
+        }
+    }
 }
 
 /// Result of a single validation check.
@@ -53,6 +88,11 @@ struct CheckResult {
     expected: String,
     observed: String,
     pass: bool,
+    /// An advisory row reports something spike measured rather than something
+    /// this run verified. It is printed and counted with the rest, but it
+    /// stays out of the exit status unless `--strict` is given, and it never
+    /// stands in for a check of the event (M11).
+    advisory: bool,
 }
 
 /// A check's result; a check that could not run is a failed result, so an
@@ -66,6 +106,7 @@ fn check_outcome(label: &str, check_name: &str, result: Result<CheckResult>) -> 
             expected: "check runs".to_string(),
             observed: format!("error: {:#}", e),
             pass: false,
+            advisory: false,
         }
     })
 }
@@ -120,16 +161,81 @@ pub fn run() -> Result<()> {
     }
 
     // Print results.
-    print_results(&results, args.json_output)?;
+    print_results(&results, args.json_output, args.strict)?;
 
-    let n_pass = results.iter().filter(|r| r.pass).count();
-    let n_fail = results.len() - n_pass;
-
-    if n_fail > 0 {
-        bail!("{}/{} validation checks failed", n_fail, results.len());
+    if let Some(message) = failure_message(&results, args.strict) {
+        bail!("{}", message);
     }
 
     Ok(())
+}
+
+/// Report what spike recorded for one event: `SIM_RESIST` as `resistant` and
+/// `SIM_DEPTH_FOLD` as `depth_fold`, each against the threshold spike warns
+/// at.
+///
+/// Both numbers are read back from the truth VCF, not measured from the BAM,
+/// so both rows are advisory: they say what spike saw at simulation time, and
+/// they inherit whatever that measurement could not see. A record carrying
+/// neither field -- an older spike's truth VCF -- gets neither row.
+fn push_census_rows(label: &str, event: &TruthEvent, results: &mut Vec<CheckResult>) {
+    if let Some(raw) = event.census.resist.as_deref() {
+        results.push(census_row(label, "resistant", raw, census::WARN_ABOVE, 3));
+    }
+    if let Some(raw) = event.census.depth_fold.as_deref() {
+        results.push(census_row(
+            label,
+            "depth_fold",
+            raw,
+            census::DEPTH_FOLD_WARN_ABOVE,
+            2,
+        ));
+    }
+}
+
+/// One advisory row: `raw` read as a number, printed to `decimals` places and
+/// passed iff it is at or below `warn_above`. The expectation is formatted
+/// from `warn_above` itself, so moving the constant spike warns at moves the
+/// printed expectation with it.
+///
+/// A value that cannot be read is a failed row quoting what was there, never a
+/// dropped one: a truth VCF whose census is unreadable has not been checked.
+fn census_row(
+    label: &str,
+    check_name: &str,
+    raw: &str,
+    warn_above: f64,
+    decimals: usize,
+) -> CheckResult {
+    let (observed, pass) = match raw.parse::<f64>() {
+        Ok(value) => (format!("{:.*}", decimals, value), value <= warn_above),
+        Err(_) => (format!("unreadable: {:?}", raw), false),
+    };
+    CheckResult {
+        event_label: label.to_string(),
+        check_name: check_name.to_string(),
+        expected: format!("<={:.*}", decimals, warn_above),
+        observed,
+        pass,
+        advisory: true,
+    }
+}
+
+/// The failures the run exits on, as the message it exits with, or `None` when
+/// none of the rows it counts failed.
+///
+/// The advisory rows stay out of the count by default, against a total that
+/// leaves them out too: a run that fails three of five real checks says so
+/// whether or not advisory rows were printed beside them. `--strict` counts
+/// every row instead.
+fn failure_message(results: &[CheckResult], strict: bool) -> Option<String> {
+    let counted = results.iter().filter(|r| strict || !r.advisory);
+    let n_total = counted.clone().count();
+    let n_fail = counted.filter(|r| !r.pass).count();
+    if n_fail == 0 {
+        return None;
+    }
+    Some(format!("{}/{} validation checks failed", n_fail, n_total))
 }
 
 /// Run every check that applies to one truth event, pushing one result per
@@ -176,7 +282,13 @@ fn check_event(
         results.push(check_outcome(&label, "allele_freq", r));
     }
 
-    if results.len() == n_before {
+    push_census_rows(&label, event, results);
+
+    // An advisory row is not a check of the event, so it cannot stand in for
+    // one: an INS-only truth VCF carrying SIM_RESIST must still report
+    // `event_checked FAIL` (M11).
+    let n_checked = results[n_before..].iter().filter(|r| !r.advisory).count();
+    if n_checked == 0 {
         // No check applies to this event type -- an INS has no coverage
         // ratio, no split reads and no allele frequency -- so nothing about
         // the event was verified. An unverified event is a failed result, not
@@ -189,6 +301,7 @@ fn check_event(
             expected: "a check applies".to_string(),
             observed: format!("none for {}", event.sv_type),
             pass: false,
+            advisory: false,
         });
     }
 
@@ -199,7 +312,13 @@ fn check_event(
 /// Parse validate-specific arguments from std::env::args().
 fn parse_validate_args() -> Result<ValidateArgs> {
     let raw: Vec<String> = std::env::args().collect();
-    // raw[0] = binary, raw[1] = "validate", rest = flags.
+    parse_validate_args_from(&raw)
+}
+
+/// The flags of one `spike validate` command line, so that the parsing can be
+/// tested without a process to run. `raw[0]` is the binary and `raw[1]` is
+/// `validate`; the rest are flags.
+fn parse_validate_args_from(raw: &[String]) -> Result<ValidateArgs> {
 
     if raw.len() < 3 {
         print_usage();
@@ -212,6 +331,7 @@ fn parse_validate_args() -> Result<ValidateArgs> {
     let mut min_mapq: u8 = 20;
     let mut flank_bp: u64 = 5000;
     let mut json_output = false;
+    let mut strict = false;
 
     let args = &raw[2..];
     let mut i = 0;
@@ -260,6 +380,9 @@ fn parse_validate_args() -> Result<ValidateArgs> {
             "--json" => {
                 json_output = true;
             }
+            "--strict" => {
+                strict = true;
+            }
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -278,6 +401,7 @@ fn parse_validate_args() -> Result<ValidateArgs> {
         min_mapq,
         flank_bp,
         json_output,
+        strict,
     })
 }
 
@@ -291,6 +415,7 @@ fn print_usage() {
     eprintln!("  --min-mapq       Minimum MAPQ for counting reads (default: 20)");
     eprintln!("  --flank          Flanking bp for coverage comparison (default: 5000)");
     eprintln!("  --json           Output JSON instead of text table");
+    eprintln!("  --strict         Count the advisory checks in the exit status");
     eprintln!("  --help, -h       Show this help");
     eprintln!();
     eprintln!("Checks, by truth-event type:");
@@ -380,6 +505,8 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
         let gene = parse_info_field(info, "SIM_GENE")
             .unwrap_or("unknown")
             .to_string();
+        // One record takes one arm below, so each arm may move this.
+        let census_info = CensusInfo::from_info(info);
 
         match sv_type_str {
             Some("DEL") => {
@@ -396,6 +523,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    census: census_info,
                 });
             }
             Some("DUP") => {
@@ -412,6 +540,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    census: census_info,
                 });
             }
             Some("INV") => {
@@ -428,6 +557,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    census: census_info,
                 });
             }
             Some("INS") => {
@@ -447,6 +577,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len,
+                    census: census_info,
                 });
             }
             Some("BND") => {
@@ -469,6 +600,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    census: census_info,
                 });
             }
             Some(other) => {
@@ -497,6 +629,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    census: census_info,
                 });
             }
             None => {
@@ -517,6 +650,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: Some(ref_allele),
                     alt_allele: Some(alt_allele),
                     ins_len: None,
+                    census: census_info,
                 });
             }
         }
@@ -605,6 +739,7 @@ fn coverage_ratio_result(
             expected: "N/A".to_string(),
             observed: "no flanking coverage".to_string(),
             pass: false, // can't evaluate: don't report it as a pass
+            advisory: false,
         };
     }
 
@@ -637,6 +772,7 @@ fn coverage_ratio_result(
         expected: expected_str,
         observed: format!("{:.2}", ratio),
         pass,
+        advisory: false,
     }
 }
 
@@ -686,6 +822,7 @@ fn check_split_reads(
         expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_SPLIT_READS,
+        advisory: false,
     })
 }
 
@@ -743,6 +880,7 @@ fn check_ins_reads(
         ),
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_INS_READS,
+        advisory: false,
     })
 }
 
@@ -925,6 +1063,7 @@ fn allele_freq_result(event: &TruthEvent, alt: u32, total: u32) -> CheckResult {
             expected,
             observed: "no coverage".to_string(),
             pass: false,
+            advisory: false,
         };
     }
     if total < MIN_PILEUP_DEPTH {
@@ -969,6 +1108,7 @@ fn allele_freq_result(event: &TruthEvent, alt: u32, total: u32) -> CheckResult {
         expected,
         observed: format!("{:.2}", observed_vaf),
         pass: alt >= floor && in_range,
+        advisory: false,
     }
 }
 
@@ -1867,6 +2007,7 @@ fn event_not_evaluable(
         expected: expected.to_string(),
         observed: observed.to_string(),
         pass: false,
+        advisory: false,
     }
 }
 
@@ -1891,6 +2032,7 @@ fn check_insert_size(sample: &GlobalSample) -> CheckResult {
         expected: expected.to_string(),
         observed: format!("{:.0}+/-{:.0}", mean, stddev),
         pass,
+        advisory: false,
     }
 }
 
@@ -1934,6 +2076,7 @@ fn check_dup_rate(sample: &GlobalSample) -> CheckResult {
         expected: "<50%".to_string(),
         observed: format!("{:.1}%", rate * 100.0),
         pass,
+        advisory: false,
     }
 }
 
@@ -1952,6 +2095,7 @@ fn check_mapq(sample: &GlobalSample) -> CheckResult {
         expected: ">20".to_string(),
         observed: format!("{:.1}", mean_mapq),
         pass,
+        advisory: false,
     }
 }
 
@@ -2630,7 +2774,7 @@ fn format_event_label(event: &TruthEvent) -> String {
     format!("{} {} ({})", event.sv_type, region, event.gene)
 }
 
-fn print_results(results: &[CheckResult], json: bool) -> Result<()> {
+fn print_results(results: &[CheckResult], json: bool, strict: bool) -> Result<()> {
     let n_pass = results.iter().filter(|r| r.pass).count();
     let n_total = results.len();
     let stdout = std::io::stdout();
@@ -2639,7 +2783,7 @@ fn print_results(results: &[CheckResult], json: bool) -> Result<()> {
     if json {
         print_results_json(&mut out, results, n_total, n_pass)?;
     } else {
-        print_results_text(&mut out, results, n_total, n_pass)?;
+        print_results_text(&mut out, results, n_total, n_pass, strict)?;
     }
 
     Ok(())
@@ -2650,6 +2794,7 @@ fn print_results_text(
     results: &[CheckResult],
     n_total: usize,
     n_pass: usize,
+    strict: bool,
 ) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "spike validate -- {} checks", n_total)?;
@@ -2662,7 +2807,14 @@ fn print_results_text(
     writeln!(out, "{}", "-".repeat(100))?;
 
     for r in results {
-        let status = if r.pass { "PASS" } else { "FAIL" };
+        // Only the last column changes: an advisory row is marked where it
+        // stands, so every other column keeps the width it had.
+        let status = match (r.pass, r.advisory) {
+            (true, false) => "PASS",
+            (false, false) => "FAIL",
+            (true, true) => "PASS (advisory)",
+            (false, true) => "FAIL (advisory)",
+        };
         writeln!(
             out,
             "{:<35} {:<18} {:<25} {:<15} {}",
@@ -2676,6 +2828,25 @@ fn print_results_text(
 
     writeln!(out)?;
     writeln!(out, "Result: {}/{} PASS", n_pass, n_total,)?;
+
+    // Only when there is one: a truth VCF with no census carries no advisory
+    // row, and its report reads as it always did.
+    let n_advisory = results.iter().filter(|r| r.advisory).count();
+    if n_advisory > 0 {
+        let n_advisory_pass = results.iter().filter(|r| r.advisory && r.pass).count();
+        writeln!(
+            out,
+            "Advisory: {} checks, {} PASS, {} FAIL {}",
+            n_advisory,
+            n_advisory_pass,
+            n_advisory - n_advisory_pass,
+            if strict {
+                "(in the exit status: --strict)"
+            } else {
+                "(not in the exit status; --strict includes them)"
+            },
+        )?;
+    }
 
     Ok(())
 }
@@ -2701,12 +2872,13 @@ fn print_results_json(
         let comma = if i + 1 < results.len() { "," } else { "" };
         writeln!(
             out,
-            "    {{ \"event\": \"{}\", \"check\": \"{}\", \"expected\": \"{}\", \"observed\": \"{}\", \"pass\": {} }}{}",
+            "    {{ \"event\": \"{}\", \"check\": \"{}\", \"expected\": \"{}\", \"observed\": \"{}\", \"pass\": {}, \"advisory\": {} }}{}",
             escape_json(&r.event_label),
             escape_json(&r.check_name),
             escape_json(&r.expected),
             escape_json(&r.observed),
             r.pass,
+            r.advisory,
             comma,
         )?;
     }
@@ -2856,6 +3028,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "DEL chr7:55000-56000 (EGFR)");
     }
@@ -2873,6 +3046,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "INS chr7:55200 (EGFR)");
     }
@@ -3233,6 +3407,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            census: CensusInfo::default(),
         }
     }
 
@@ -3334,6 +3509,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: None,
             alt_allele: None,
             ins_len: Some(300),
+            census: CensusInfo::default(),
         }
     }
 
@@ -3345,6 +3521,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             min_mapq: 20,
             flank_bp: 5_000,
             json_output: false,
+            strict: false,
         }
     }
 
@@ -3457,6 +3634,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: Some(reference.to_vec()),
             alt_allele: Some(alt.to_vec()),
             ins_len: None,
+            census: CensusInfo::default(),
         }
     }
 
@@ -4670,5 +4848,327 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             r.expected
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    // --- T1: the census numbers spike recorded, reported as advisory rows ---
+
+    /// The advisory rows one truth record's INFO column leaves behind.
+    fn census_rows(info: &str) -> Vec<CheckResult> {
+        let event = TruthEvent {
+            census: CensusInfo::from_info(info),
+            ..ins_event("chrA", 10_000)
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+        push_census_rows(&format_event_label(&event), &event, &mut results);
+        results
+    }
+
+    fn row_names(rows: &[CheckResult]) -> Vec<&str> {
+        rows.iter().map(|r| r.check_name.as_str()).collect()
+    }
+
+    /// One result with the pass/advisory shape a printing test needs.
+    fn row(check_name: &str, pass: bool, advisory: bool) -> CheckResult {
+        CheckResult {
+            event_label: "DEL chrA:100-200 (unknown)".to_string(),
+            check_name: check_name.to_string(),
+            expected: "expected".to_string(),
+            observed: "observed".to_string(),
+            pass,
+            advisory,
+        }
+    }
+
+    fn text_report(results: &[CheckResult], strict: bool) -> String {
+        let n_pass = results.iter().filter(|r| r.pass).count();
+        let mut out: Vec<u8> = Vec::new();
+        print_results_text(&mut out, results, results.len(), n_pass, strict).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// The table line for one check, by name.
+    fn line_for<'a>(report: &'a str, check_name: &str) -> &'a str {
+        report
+            .lines()
+            .find(|l| l.contains(check_name))
+            .unwrap_or_else(|| panic!("no line for {} in:\n{}", check_name, report))
+    }
+
+    #[test]
+    fn test_a_resistant_share_above_the_warn_threshold_is_an_advisory_fail() {
+        let rows = census_rows("SVTYPE=INS;SIM_VAF=0.500;SIM_RESIST=0.500");
+
+        assert_eq!(row_names(&rows), vec!["resistant"]);
+        assert_eq!(rows[0].expected, "<=0.100");
+        assert_eq!(rows[0].observed, "0.500");
+        assert!(!rows[0].pass, "0.500 is above census::WARN_ABOVE");
+        assert!(rows[0].advisory, "the census rows are advisory");
+    }
+
+    #[test]
+    fn test_a_resistant_share_at_the_warn_threshold_is_an_advisory_pass() {
+        // spike warns above the threshold, not at it, so the row passes at it.
+        let rows = census_rows("SVTYPE=INS;SIM_RESIST=0.100");
+
+        assert_eq!(row_names(&rows), vec!["resistant"]);
+        assert_eq!(rows[0].observed, "0.100");
+        assert!(rows[0].pass, "0.100 is census::WARN_ABOVE itself");
+        assert!(rows[0].advisory);
+    }
+
+    #[test]
+    fn test_a_depth_fold_above_the_warn_threshold_is_an_advisory_fail() {
+        // 3.88 is the fold spike measured on the review's CR2 probe.
+        let rows = census_rows("SVTYPE=DUP;SIM_DEPTH_FOLD=3.88");
+
+        assert_eq!(row_names(&rows), vec!["depth_fold"]);
+        assert_eq!(rows[0].expected, "<=1.50");
+        assert_eq!(rows[0].observed, "3.88");
+        assert!(!rows[0].pass, "3.88 is above census::DEPTH_FOLD_WARN_ABOVE");
+        assert!(rows[0].advisory);
+    }
+
+    #[test]
+    fn test_a_depth_fold_at_the_warn_threshold_is_an_advisory_pass() {
+        let rows = census_rows("SVTYPE=DUP;SIM_DEPTH_FOLD=1.50");
+
+        assert_eq!(row_names(&rows), vec!["depth_fold"]);
+        assert_eq!(rows[0].observed, "1.50");
+        assert!(rows[0].pass, "1.50 is census::DEPTH_FOLD_WARN_ABOVE itself");
+    }
+
+    #[test]
+    fn test_the_two_expectations_are_the_thresholds_spike_warns_at() {
+        // The printed expectation is derived from the constant, so moving the
+        // constant moves the expectation with it.
+        let rows = census_rows("SIM_RESIST=0.010;SIM_DEPTH_FOLD=1.00");
+
+        assert_eq!(row_names(&rows), vec!["resistant", "depth_fold"]);
+        assert_eq!(rows[0].expected, format!("<={:.3}", census::WARN_ABOVE));
+        assert_eq!(
+            rows[1].expected,
+            format!("<={:.2}", census::DEPTH_FOLD_WARN_ABOVE)
+        );
+    }
+
+    #[test]
+    fn test_a_truth_record_without_the_census_fields_gets_no_row() {
+        // An older spike's truth VCF carries neither field. That is nothing to
+        // report, not a failure.
+        assert!(census_rows("SVTYPE=INS;SVLEN=300;SIM_VAF=0.500").is_empty());
+        // `.` is VCF's own missing value -- spike writes it when it has no
+        // number -- so it is absent too, not a malformed number.
+        assert!(census_rows("SIM_RESIST=.;SIM_DEPTH_FOLD=.").is_empty());
+    }
+
+    #[test]
+    fn test_a_malformed_census_field_is_an_advisory_fail_not_a_dropped_row() {
+        let rows = census_rows("SIM_RESIST=lots");
+
+        assert_eq!(row_names(&rows), vec!["resistant"]);
+        assert!(!rows[0].pass, "a number that cannot be read is not a pass");
+        assert!(rows[0].advisory);
+        assert!(
+            rows[0].observed.contains("lots"),
+            "the row must quote what it found; got {:?}",
+            rows[0].observed
+        );
+    }
+
+    #[test]
+    fn test_load_truth_events_carries_the_census_numbers() {
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chr7\t55000\tsim_del_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=56000;SIM_VAF=0.500;SIM_RESIST=0.010;SIM_DEPTH_FOLD=3.88;SIM_GENE=EGFR\tGT\t0/1
+chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
+";
+        let dir = std::env::temp_dir().join("spike_test_validate");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("truth_census.vcf");
+        std::fs::write(&path, vcf).unwrap();
+
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].census.resist.as_deref(), Some("0.010"));
+        assert_eq!(events[0].census.depth_fold.as_deref(), Some("3.88"));
+        assert_eq!(
+            events[1].census,
+            CensusInfo::default(),
+            "a record without the fields carries neither"
+        );
+    }
+
+    #[test]
+    fn test_an_advisory_row_alone_is_not_a_check_of_the_event() {
+        // M11: an event no check covers must still report `event_checked
+        // FAIL`, whether or not spike recorded a census for it. An advisory
+        // row says what spike measured, not that this run verified anything.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event = TruthEvent {
+            sv_type: "CNV".to_string(),
+            census: CensusInfo::from_info("SIM_RESIST=0.010;SIM_DEPTH_FOLD=1.00"),
+            ..ins_event("chrA", 10_000)
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &event, &NearbyRecords::default(), &mut results);
+
+        assert_eq!(
+            row_names(&results),
+            vec!["resistant", "depth_fold", "event_checked"]
+        );
+        let fallback = results.last().unwrap();
+        assert!(!fallback.pass, "an event no check covers may not pass");
+        assert!(!fallback.advisory, "the fallback is a real failure");
+    }
+
+    #[test]
+    fn test_advisory_failures_stay_out_of_the_exit_status_until_strict() {
+        let results = vec![
+            row("coverage_ratio", true, false),
+            row("split_reads", false, false),
+            row("resistant", false, true),
+        ];
+
+        assert_eq!(
+            failure_message(&results, false).as_deref(),
+            Some("1/2 validation checks failed"),
+            "by default the exit status counts the real checks alone"
+        );
+        assert_eq!(
+            failure_message(&results, true).as_deref(),
+            Some("2/3 validation checks failed"),
+            "--strict counts every row"
+        );
+
+        let only_advisory_fails = vec![row("coverage_ratio", true, false), row("resistant", false, true)];
+        assert_eq!(
+            failure_message(&only_advisory_fails, false),
+            None,
+            "an advisory failure alone leaves the run passing"
+        );
+        assert_eq!(
+            failure_message(&only_advisory_fails, true).as_deref(),
+            Some("1/2 validation checks failed")
+        );
+    }
+
+    #[test]
+    fn test_the_text_table_marks_the_advisory_rows_and_counts_them_apart() {
+        let results = vec![
+            row("coverage_ratio", true, false),
+            row("resistant", false, true),
+            row("depth_fold", true, true),
+        ];
+
+        let report = text_report(&results, false);
+
+        assert!(
+            line_for(&report, "coverage_ratio").ends_with(" PASS"),
+            "a real check keeps its bare status; got {:?}",
+            line_for(&report, "coverage_ratio")
+        );
+        assert!(
+            line_for(&report, "resistant").ends_with(" FAIL (advisory)"),
+            "got {:?}",
+            line_for(&report, "resistant")
+        );
+        assert!(
+            line_for(&report, "depth_fold").ends_with(" PASS (advisory)"),
+            "got {:?}",
+            line_for(&report, "depth_fold")
+        );
+        assert!(
+            report.contains("\nResult: 2/3 PASS\n"),
+            "the result line counts every row; got:\n{}",
+            report
+        );
+        assert!(
+            report.contains(
+                "\nAdvisory: 2 checks, 1 PASS, 1 FAIL (not in the exit status; \
+                 --strict includes them)\n"
+            ),
+            "got:\n{}",
+            report
+        );
+    }
+
+    #[test]
+    fn test_the_advisory_summary_says_when_strict_counts_them() {
+        let results = vec![row("resistant", false, true)];
+
+        let report = text_report(&results, true);
+
+        assert!(
+            report.contains("\nAdvisory: 1 checks, 0 PASS, 1 FAIL (in the exit status: --strict)\n"),
+            "got:\n{}",
+            report
+        );
+    }
+
+    #[test]
+    fn test_a_report_with_no_advisory_row_prints_no_advisory_line() {
+        // An older spike's truth VCF must print what master printed, to the
+        // byte.
+        let results = vec![row("coverage_ratio", true, false), row("split_reads", false, false)];
+
+        for strict in [false, true] {
+            let report = text_report(&results, strict);
+            assert!(!report.contains("Advisory"), "got:\n{}", report);
+            assert!(!report.contains("(advisory)"), "got:\n{}", report);
+            assert!(line_for(&report, "split_reads").ends_with(" FAIL"));
+        }
+    }
+
+    #[test]
+    fn test_json_says_of_every_check_whether_it_is_advisory() {
+        let results = vec![row("coverage_ratio", true, false), row("resistant", false, true)];
+        let mut out: Vec<u8> = Vec::new();
+
+        print_results_json(&mut out, &results, results.len(), 1).unwrap();
+
+        let json = String::from_utf8(out).unwrap();
+        assert!(
+            json.contains("\"pass\": true, \"advisory\": false }"),
+            "advisory follows pass; got:\n{}",
+            json
+        );
+        assert!(
+            json.contains("\"pass\": false, \"advisory\": true }"),
+            "got:\n{}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_strict_is_off_unless_it_is_asked_for() {
+        let argv = |extra: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = [
+                "spike",
+                "validate",
+                "--bam",
+                "b.bam",
+                "--truth",
+                "t.vcf",
+                "--reference",
+                "r.fa",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            v.extend(extra.iter().map(|s| s.to_string()));
+            v
+        };
+
+        assert!(
+            !parse_validate_args_from(&argv(&[])).unwrap().strict,
+            "--strict is off by default"
+        );
+        assert!(parse_validate_args_from(&argv(&["--strict"])).unwrap().strict);
+        assert!(
+            parse_validate_args_from(&argv(&["--strict=yes"])).is_err(),
+            "--strict takes no value"
+        );
     }
 }
