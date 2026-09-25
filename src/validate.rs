@@ -749,9 +749,26 @@ fn pileup_base_index(base: u8) -> Option<usize> {
 /// are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass.
 const MIN_PILEUP_DEPTH: u32 = 5;
 
-/// How far an observed allele fraction may sit from the truth record's own
-/// `SIM_VAF` and still pass.
-const ALLELE_FREQ_TOLERANCE: f64 = 0.15;
+/// Chance that a read of the reference shows the alt allele anyway
+/// (sequencing error, mismapping). Sets the floor of alt reads that errors
+/// alone can't explain.
+const ALT_ERROR_RATE: f64 = 0.001;
+
+/// Chance that a read of the alt allele shows the reference instead.
+const REF_ERROR_RATE: f64 = 0.01;
+
+/// "Outside what a correct run gives": below 0.5% on either side.
+const AF_TAIL: f64 = 0.005;
+
+/// A correct run must clear the error floor this often, or the depth is too
+/// shallow to tell a spike-in from none.
+const AF_POWER: f64 = 0.99;
+
+/// Fewest alt reads that count as evidence at any depth.
+const MIN_ALT_READS: u32 = 3;
+
+/// Deepest pileup the "depth it needs" hint searches up to.
+const AF_MAX_DEPTH_HINT: u32 = 1_000_000;
 
 /// How far from the junction an aligner may place a small indel's operation.
 /// An aligner left-aligns an indel to the start of the repeat it sits in, so a
@@ -792,9 +809,75 @@ fn small_variant_shape(reference: &[u8], alt: &[u8]) -> Option<SmallVariantShape
     }
 }
 
-/// One allele-fraction verdict from an alt count and a total. The depth floor
-/// and the tolerance are the same whichever counting rule produced the two
-/// numbers, so every shape of small variant is graded here.
+/// P(X = k) for every k in 0..=n, X ~ Bin(n, p), for 0 < p < 1. Summed in
+/// log space: `(1 - p)^n` underflows long before depths validate sees.
+fn binomial_pmf(n: u32, p: f64) -> Vec<f64> {
+    let step = p.ln() - (1.0 - p).ln();
+    let mut ln = n as f64 * (1.0 - p).ln();
+    let mut out = Vec::with_capacity(n as usize + 1);
+    for k in 0..=n {
+        out.push(ln.exp());
+        ln += ((n - k) as f64).ln() - ((k + 1) as f64).ln() + step;
+    }
+    out
+}
+
+/// The fewest alt reads (never under `MIN_ALT_READS`) that reference reads
+/// misread at `ALT_ERROR_RATE` reach less than `AF_TAIL` of the time.
+fn alt_error_floor(n: u32) -> u32 {
+    let mut at_least = 1.0; // P(X >= k), from k = 0
+    for (k, prob) in binomial_pmf(n, ALT_ERROR_RATE).iter().enumerate() {
+        if at_least < AF_TAIL {
+            return (k as u32).max(MIN_ALT_READS);
+        }
+        at_least -= prob;
+    }
+    n + 1
+}
+
+/// The alt fraction a correct run shows once error reads are counted in.
+fn observed_fraction_model(expected_vaf: f64) -> f64 {
+    expected_vaf * (1.0 - REF_ERROR_RATE) + (1.0 - expected_vaf) * ALT_ERROR_RATE
+}
+
+/// Whether a correct run at depth `n` clears the error floor `AF_POWER` of
+/// the time, i.e. whether the reads can tell the spike-in from none.
+fn af_evaluable(n: u32, p_obs: f64) -> bool {
+    let floor = alt_error_floor(n) as usize;
+    binomial_pmf(n, p_obs).iter().skip(floor).sum::<f64>() >= AF_POWER
+}
+
+/// Roughly the shallowest depth at which `af_evaluable` holds, for the
+/// "too shallow" message; None past `AF_MAX_DEPTH_HINT`.
+fn af_depth_needed(from: u32, p_obs: f64) -> Option<u32> {
+    let mut hi = from.max(MIN_PILEUP_DEPTH);
+    while !af_evaluable(hi, p_obs) {
+        if hi >= AF_MAX_DEPTH_HINT {
+            return None;
+        }
+        hi = hi.saturating_mul(2).min(AF_MAX_DEPTH_HINT);
+    }
+    let mut lo = from.max(MIN_PILEUP_DEPTH);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if af_evaluable(mid, p_obs) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(hi)
+}
+
+/// One allele-fraction verdict from an alt count and a total. The same
+/// grading applies whichever counting rule produced the two numbers, so
+/// every shape of small variant is graded here.
+///
+/// It passes only when the reads could tell the spike-in from none (the
+/// alt count clears what errors alone reach, at a depth where a correct run
+/// does that 99% of the time) and the count sits inside the central 99% of
+/// what a correct run gives. A fixed tolerance can do neither: +-0.15
+/// passed every SIM_VAF under 0.15 on zero alt reads.
 fn allele_freq_result(event: &TruthEvent, alt: u32, total: u32) -> CheckResult {
     let label = format_event_label(event);
     let expected = format!("{:.2}", event.expected_vaf);
@@ -818,13 +901,38 @@ fn allele_freq_result(event: &TruthEvent, alt: u32, total: u32) -> CheckResult {
         );
     }
 
+    let p_obs = observed_fraction_model(event.expected_vaf);
     let observed_vaf = alt as f64 / total as f64;
+    let floor = alt_error_floor(total);
+    let pmf = binomial_pmf(total, p_obs);
+    if pmf.iter().skip(floor as usize).sum::<f64>() < AF_POWER {
+        let needed = match af_depth_needed(total, p_obs) {
+            Some(n) => format!("about {} reads", n),
+            None => format!("more than {} reads", AF_MAX_DEPTH_HINT),
+        };
+        return event_not_evaluable(
+            &label,
+            "allele_freq",
+            &expected,
+            &format!(
+                "too shallow ({:.2} at {} reads; needs {})",
+                observed_vaf, total, needed
+            ),
+            "a correct spike-in would too often show no more alt reads than errors do",
+        );
+    }
+
+    let x = alt.min(total) as usize;
+    let at_most: f64 = pmf[..=x].iter().sum();
+    let at_least: f64 = pmf[x..].iter().sum();
+    // A hom truth has no "too many alt reads".
+    let in_range = at_most >= AF_TAIL && (event.expected_vaf >= 1.0 || at_least >= AF_TAIL);
     CheckResult {
         event_label: label,
         check_name: "allele_freq".to_string(),
         expected,
         observed: format!("{:.2}", observed_vaf),
-        pass: (observed_vaf - event.expected_vaf).abs() < ALLELE_FREQ_TOLERANCE,
+        pass: alt >= floor && in_range,
     }
 }
 
@@ -3113,6 +3221,111 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn af_event(expected_vaf: f64) -> TruthEvent {
+        TruthEvent {
+            expected_vaf,
+            ..small_variant_event(b"G", b"A")
+        }
+    }
+
+    /// P(X = k) for k = 0..=n, X ~ Bin(n, p), summed in log space. Written
+    /// here rather than borrowed from the code under test.
+    fn binomial_pmf(n: u32, p: f64) -> Vec<f64> {
+        if p >= 1.0 {
+            let mut v = vec![0.0; n as usize + 1];
+            v[n as usize] = 1.0;
+            return v;
+        }
+        let mut ln = n as f64 * (1.0 - p).ln();
+        let mut out = Vec::with_capacity(n as usize + 1);
+        for k in 0..=n {
+            out.push(ln.exp());
+            ln += ((n - k) as f64).ln() - ((k + 1) as f64).ln() + p.ln() - (1.0 - p).ln();
+        }
+        out
+    }
+
+    #[test]
+    fn test_allele_freq_never_passes_on_zero_alt_reads() {
+        // REVIEW N14: 44 reads, not one carrying the alt, passed for every
+        // SIM_VAF below 0.15 -- a correct spike-in and no spike-in at all
+        // looked the same to the check.
+        for vaf in [0.02, 0.05, 0.10, 0.1499, 0.15, 0.20, 0.50, 1.0] {
+            let r = allele_freq_result(&af_event(vaf), 0, 44);
+            assert!(!r.pass, "SIM_VAF {} passed on 0 of 44 alt reads ({:?})", vaf, r.observed);
+        }
+    }
+
+    #[test]
+    fn test_allele_freq_too_shallow_to_tell_says_so() {
+        // 44 reads at VAF 0.05 expect ~2 alt reads: fewer than sequencing
+        // errors can explain, so a correct run can't be told from none.
+        let r = allele_freq_result(&af_event(0.05), 2, 44);
+        assert!(!r.pass);
+        assert!(r.observed.contains("too shallow"), "observed {:?}", r.observed);
+    }
+
+    #[test]
+    fn test_allele_freq_grades_against_the_binomial_range() {
+        // 36 of 100 at VAF 0.5 is outside the central 99% (P(X <= 36) is
+        // 0.0033), though it sits within the old +-0.15 of 0.5.
+        assert!(!allele_freq_result(&af_event(0.5), 36, 100).pass);
+        assert!(allele_freq_result(&af_event(0.5), 50, 100).pass);
+        // A hom truth takes a stray reference read, not many; and a perfect
+        // hom run passes at any depth.
+        assert!(allele_freq_result(&af_event(1.0), 39, 40).pass);
+        assert!(!allele_freq_result(&af_event(1.0), 30, 40).pass);
+        assert!(allele_freq_result(&af_event(1.0), 3000, 3000).pass);
+    }
+
+    #[test]
+    fn test_allele_freq_needs_three_alt_reads_even_inside_the_range() {
+        // 44 reads at VAF 0.19: P(X <= 2) is 0.0063, inside the central 99%,
+        // so only the three-read floor keeps 2 alt reads from passing.
+        assert!(!allele_freq_result(&af_event(0.19), 2, 44).pass);
+        assert!(allele_freq_result(&af_event(0.19), 8, 44).pass);
+    }
+
+    #[test]
+    fn test_allele_freq_passes_correct_runs_and_not_empty_ones() {
+        // The N14 pass criteria locked in REVIEW.md, computed exactly:
+        // wherever the check is evaluable, a correct run (x ~ Bin(n, p'))
+        // passes >= 98% of the time and a run that planted nothing (only
+        // 0.1% error reads) passes <= 0.5% of the time.
+        let mut evaluable = Vec::new();
+        for n in [20u32, 44, 100, 300, 1000, 3000] {
+            for p in [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0] {
+                let event = af_event(p);
+                let p_eff = p * (1.0 - 0.01) + (1.0 - p) * 0.001;
+                let (correct_pmf, empty_pmf) = (binomial_pmf(n, p_eff), binomial_pmf(n, 0.001));
+                // Counts neither run gives more than 1e-12 of the time move
+                // either probability by < 3001e-12: skip grading them.
+                let passes: Vec<bool> = (0..=n)
+                    .map(|x| {
+                        let i = x as usize;
+                        (correct_pmf[i] > 1e-12 || empty_pmf[i] > 1e-12)
+                            && allele_freq_result(&event, x, n).pass
+                    })
+                    .collect();
+                if !passes.contains(&true) {
+                    continue; // too shallow at this depth: nothing passes
+                }
+                evaluable.push((n, p));
+                let pass_prob = |pmf: &[f64]| -> f64 {
+                    pmf.iter().zip(&passes).filter(|(_, &ok)| ok).map(|(q, _)| q).sum()
+                };
+                let correct = pass_prob(&correct_pmf);
+                let empty = pass_prob(&empty_pmf);
+                assert!(correct >= 0.98, "n={} p={}: a correct run passes only {:.4}", n, p, correct);
+                assert!(empty <= 0.005, "n={} p={}: an empty run passes {:.4}", n, p, empty);
+            }
+        }
+        // A rule that never passes would satisfy both bounds vacuously.
+        for cell in [(44, 0.5), (1000, 0.02), (3000, 0.01), (20, 1.0)] {
+            assert!(evaluable.contains(&cell), "{:?} should be evaluable", cell);
+        }
+    }
+
     #[test]
     fn test_unrecognised_svtype_is_not_read_as_a_small_variant() {
         // `<CNV>` has no REF/ALT alleles to compare, but the SVTYPE fallback
@@ -3501,7 +3714,10 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             records.push(record(&name, start0 + 200, &mate_ops, mate_bases, false));
         };
 
-        for i in 0..6usize {
+        // Eight alt and eight reference pairs per site: at VAF 0.5 the
+        // allele_freq check needs ~14 reads before it can tell a spike-in
+        // from none (N14), so twelve would grade "too shallow".
+        for i in 0..8usize {
             // `ACG` > `A` at chrA:5001: the two reference bases after the
             // anchor are gone, so the `D` operation starts at 0-based 5001.
             let s = 4951 + i;
@@ -3552,8 +3768,9 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             let (ops, bases) = plain(s);
             push_pair(format!("mnv_ref{}", i), s, ops, bases);
         }
-        // chrA:14001: twelve reference reads and nothing planted.
-        for i in 0..12usize {
+        // chrA:14001: sixteen reference reads and nothing planted -- deep
+        // enough that "no alt read" is a measured FAIL, not "too shallow".
+        for i in 0..16usize {
             let s = 13941 + 3 * i;
             let (ops, bases) = plain(s);
             push_pair(format!("clean_ref{}", i), s, ops, bases);
