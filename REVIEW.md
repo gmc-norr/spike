@@ -2691,3 +2691,144 @@ now with a warning naming the realized-vs-recorded fraction.)
 5. **H7**: long insertions.
 6. **M6**, **M10**–**M12**: make the truth VCF indexable and make `validate` able to fail.
 7. The rest as time allows.
+
+## Codex clinical SV review (2026-09-25)
+
+A second, independent review of `4efa0f4` for germline WGS SV use, kept verbatim in
+[CLINICAL_SV_REVIEW.md](CLINICAL_SV_REVIEW.md) with its reproduction script
+[scripts/review_sv_model.py](scripts/review_sv_model.py). Its findings R1-R9 are CR1-CR9 here
+so they do not clash with the IDs above. Every finding was reproduced before anything was
+changed; **none was refuted**, and every number the review printed came back identical.
+
+| ID | Priority | Finding | Status |
+| --- | --- | --- | --- |
+| CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, not fixed |
+| CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
+| CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note |
+| CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
+| CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, not fixed |
+| CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
+| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed |
+| CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, not fixed |
+| CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
+| CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, not fixed |
+| CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, not fixed |
+
+Statuses are updated as each fix lands.
+
+### CR1 -- nearby non-overlapping events cancel each other
+
+**Claim.** The overlap check compares event *spans*, but each event replaces reads over a
+larger footprint (span + 2 kb flanks + a fragment). Two deletions 1 kb apart are therefore
+accepted, and each one's synthetic flank restores what the other deleted.
+
+**Measured.** `del:chrT:10000-11000` + `del:chrT:12000-13000` on a 75x uniform donor:
+the two deletion interiors read **70.21x and 74.34x** at AF=1 (alone: 0.00x), and
+**52.27x / 53.33x** at AF=0.5 (alone: 34.59x). `spike validate` on the merged BAM fails both
+coverage checks (observed 0.79 and 0.81 against an expected 0.00). Code:
+`validate_event_overlaps` (`src/main.rs:631`) versus `haplotype.ref_range()`
+(`src/simulate.rs:180`) and `combine_event_outputs` (`src/simulate.rs:301`).
+
+### CR2 -- one depth estimate flattens the donor's coverage profile
+
+**Claim.** Fragment depth is measured once in a 2 kb window at the first covered breakpoint
+and applied across the whole variant haplotype.
+
+**Measured.** A het DUP of `chrT:10000-28000` over a donor whose interior is 18.75x makes
+that interior **81.09x** -- a **4.32x** rise where a locally proportional CN2->CN3 predicts
+**28.13x**. The 75x section becomes 110.92x against an expected 112.5x, so the error is
+confined to the mismatched section.
+
+### CR3 -- synthetic haplotypes erase background indels
+
+**Claim.** `SampleCopies` stores one base per reference position, so an indel cannot be
+represented; the gVCF path drops non-SNP alleles outright.
+
+**Measured.** A homozygous 2 bp background deletion under a het DUP falls from AF 1.0 to
+**AF 0.360** (32 deletion-supporting vs 57 reference-supporting reads). Code:
+`src/loh.rs:34` (`HashMap<u64, u8>`), `src/loh.rs:513` (`if ref_allele.len() != 1 || alt_allele.len() != 1 { return; }`).
+
+### CR4 -- the training filter also decides what can be edited
+
+**Claim.** Only proper pairs passing the MAPQ/flag filters enter the donor pool, so every
+other molecule survives the event untouched.
+
+**Measured.** With half the donor pairs at MAPQ 0, an AF=1 deletion leaves **37.5x** inside
+it -- exactly the MAPQ-0 half of a 75x input -- and `spike validate` still reports
+`coverage_ratio observed 0.00, pass`, because its own default MAPQ filter hides the same
+reads. Code: `src/extract.rs:104`, `src/extract.rs:777`.
+
+### CR5 -- long-insertion placement breaks its own reference-overlap constraint
+
+**Claim.** The fragment count excludes starts lying wholly inside inserted sequence, but the
+placement loop redraws at most ten times and then accepts its last start anyway.
+
+**Measured.** Synthetic pairs carrying a reference 31-mer, out of 500 emitted:
+**498 (1 kb), 485 (10 kb), 171 (100 kb), 17 (1 Mb)**. The run logs confirm the intended
+budget is 500 *reference-overlapping* fragments at both extremes. Code:
+`src/simulate.rs:591` (the exclusion), `src/simulate.rs:727` (the ten-try loop),
+`src/synth.rs:818` (the nearest-reference fallback that lets an invalid start through).
+
+### CR6 -- fusion mode is additive junction evidence, not a balanced translocation
+
+**Claim.** A fusion keeps every original pair and adds fragments crossing one new adjacency.
+
+**Measured (code).** `is_additive` is true for `SimEvent::Fusion` (`src/simulate.rs:144`),
+which short-circuits all suppression; the count is
+`n = coverage * v/(1-v) * breakpoints.len()` (`src/simulate.rs:584`), i.e. `C` added
+fragments on top of `C` retained originals at v=0.5. `from_fusion` (`src/haplotype.rs:345`)
+builds one join with flanks, not a derivative chromosome pair, so copy number is not
+conserved.
+
+### CR7 -- truth lacks what germline genotype and sequence validation need
+
+**Claim, in five parts,** all confirmed:
+- **Input GT ignored.** An input `GT=1/1` DEL emits `SIM_VAF=0.500; GT=0/1`, measured.
+  `genotype_from_vaf` (`src/truth.rs:321`) is `if vaf >= 0.9 {"1/1"} else {"0/1"}`.
+- **No ploidy or CN model.** `genotype_from_vaf` has no haploid or CN>2 path.
+- **`af=het` moves the event fraction,** not just the observation:
+  `Beta(40,40)` (`src/main.rs:430`) feeds `resolved_af`, which drives both suppression and
+  generation.
+- **Insertion sequence is lost.** Truth writes `<INS>` with SVLEN only (`src/truth.rs:264`);
+  a generated sequence is a local value in `src/main.rs:1252` and is never stored in the
+  event.
+- **Requested AF is written despite caps.** `MAX_ADDITIVE_VAF = 0.95`
+  (`src/simulate.rs:575`) and `MIN_TILED_FRAGMENTS = 2` (`src/simulate.rs:608`) change the
+  simulated fraction; only a `log::warn!` records it, and truth keeps the request.
+
+### CR8 -- unmatched R1 is removed before mate recovery
+
+**Claim.** `(read1_map.remove(&name), read2_map.remove(&name))` builds its tuple eagerly, so
+R1 is removed even when R2 is absent and pass 2 can never recover it.
+
+**Measured.** Boundary pair `p003200` (R1 at 12900, R2 at 13150) is absent from the replaced
+set for a `[8000,13000)` query, although pass 2's widened query does see R2. The same line
+appears in the BAM path (`src/extract.rs:140`) and the CRAM path (`src/extract.rs:389`).
+The pass-1 loop iterates `read1_map`'s keys only, so an orphan R2 is left alone -- the
+asymmetry the review describes.
+
+### CR9 -- QC passes are weaker than the truth claims made from them
+
+**Claim.** Event-average depth ratios, SA-proximity split counts and `I`/soft-clip INS counts
+are evidence-presence checks, not event validation.
+
+**Measured.** CR2's 4.32x interior error passes the DUP check at ratio 1.32 against an
+expected 1.50; CR4's 37.5x resistant depth passes at observed 0.00. Every probe's global exit
+is 1, from `insert_size 400+/-0` and `dup_rate no dup flags` -- library heuristics, not event
+failures. Code: `src/validate.rs:587`, `:636`, `:698`.
+
+### CR-FRAG -- the fragment model and the generator use different ranges
+
+**Measured (code).** `FragmentDist::from_read_pairs` keeps every insert size in `(0, 10_000)`
+(`src/stats.rs:32`) and takes `mean`/`stddev` over that set, but every generator call samples
+in `[read_length, MAX_FRAGMENT_LEN = 1500]` (`src/stats.rs:12`, `src/simulate.rs:705`,
+`src/synth.rs:643`). `compute_tiling_count` normalises by that wider `mean`
+(`src/simulate.rs:667`), so the fragment count does not match the distribution emitted.
+
+### CR-BUILD -- the `bcftools` test dependency is undeclared
+
+**Measured.** With `bcftools` off PATH the suite is `420 passed; 1 failed; 1 ignored`. The
+failure is
+`loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup`
+(`src/loh.rs:1435`), and its message is `assertion left == right failed: []` -- it never
+mentions `bcftools`.
