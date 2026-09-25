@@ -856,6 +856,61 @@ tested n.
   do. That is a model problem outside N7, so it is recorded, and there is no
   warning.
 
+#### N7 result: N* = 1000, so spike warns below 1000 donor pairs
+
+Run as committed (`measure_n7_quality_drift` at `9347123`), in 5 s:
+`SPIKE_N7_BAM=<HG002 35x BAM> cargo test --release -- --ignored
+measure_n7_quality_drift --nocapture`. The test pool held 4,559 pairs, split
+2,342 train / 2,217 held-out.
+
+Tolerance, from the ten other windows (M1 in Phred units; M2 and M3 are
+fractions):
+
+| window | pairs | M1 | M2 | M3 |
+| --- | --- | --- | --- | --- |
+| 32 Mb | 4,417 | 0.165 | 0.0047 | 0.043 |
+| 33 Mb | 4,665 | 0.123 | 0.0011 | 0.014 |
+| 34 Mb | 4,373 | 0.152 | 0.0039 | 0.049 |
+| 35 Mb | 4,535 | 0.097 | 0.0008 | 0.012 |
+| 36 Mb | 4,373 | 0.263 | 0.0075 | 0.038 |
+| 37 Mb | 4,544 | 0.621 | 0.0192 | 0.104 |
+| 40 Mb | 4,174 | 0.112 | 0.0024 | 0.003 |
+| 41 Mb | 4,501 | 0.128 | 0.0028 | 0.024 |
+| 42 Mb | 4,230 | 0.091 | 0.0010 | 0.016 |
+| 43 Mb | 4,135 | 0.092 | 0.0001 | 0.002 |
+| **T (largest)** | | **0.621** | **0.0192** | **0.104** |
+
+Medians over 20 repeats (a value over T is in bold):
+
+| pool pairs | M1 | M2 | M3 |
+| --- | --- | --- | --- |
+| 30 | **0.685** | 0.0060 | **0.153** |
+| 60 | 0.506 | 0.0073 | **0.153** |
+| 125 | 0.393 | 0.0040 | **0.151** |
+| 250 | 0.310 | 0.0058 | **0.153** |
+| 500 | 0.245 | 0.0051 | **0.149** |
+| 1,000 | 0.164 | 0.0008 | 0.044 |
+| 2,342 | 0.140 | 0.0018 | 0.005 |
+
+**Supported: N* = 1000.**
+- **M3 decides it.** Up to 500 pairs, the fake reads' low-quality bases are
+  followed by another low-quality base 0.15 less often than in the real reads.
+  Real reads' low-quality bases come in runs; the fake ones scatter.
+- **Why it steps.** The Markov transition bins that follow a low-quality base
+  need `MIN_MARKOV_OBS` = 30 observations. A small pool rarely has that many
+  low-quality bases at one cycle, so sampling falls back to the levels with no
+  memory of the previous quality. Between 500 and 1,000 pairs the bins fill,
+  and M3 drops from 0.149 to 0.044.
+- **M1** is outside only at 30 pairs, and **M2** never is.
+
+**Not driven by the odd window.** The 37 Mb window alone sets T, and it is far
+above the other nine. With the second-largest value as T instead (0.263 /
+0.0075 / 0.049), N* is still 1000: 500 pairs fail M3 (0.149) either way, and
+1,000 pairs pass all three.
+
+N* is the smallest *tested* size inside the tolerance. The true crossover lies
+somewhere in 501-1,000.
+
 ### N8 · Any truth VCF holding an INS loses one check to "not evaluable"
 
 *Found while reviewing the L15 fix pass (`af9d9fa`). Recorded unfixed at the
