@@ -294,7 +294,8 @@ fn print_usage() {
     eprintln!("                   reference at POS -- an I operation, or a soft clip");
     eprintln!("                   once the insertion is 50 bp or longer)");
     eprintln!("  SNP, small indel allele_freq (a substitution from the pileup; a small");
-    eprintln!("  and MNV          indel from an I/D operation of its own length at POS");
+    eprintln!("  and MNV          indel from an I/D operation of its own length at the");
+    eprintln!("                   junction just past the anchor base, within 10bp,");
     eprintln!("                   against the reads spanning it without one; an MNV");
     eprintln!("                   from the whole alt run, read by read)");
     eprintln!("  every event      insert_size, dup_rate, mean_mapq, over the whole sample");
@@ -723,7 +724,9 @@ fn check_ins_reads(
             MIN_INS_READS,
             min_len,
             event.chrom,
-            event.start + 1
+            // `load_truth_events` reads an INS as `start: vcf_pos`, so `start`
+            // is already the POS the truth record names.
+            event.start
         ),
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_INS_READS,
@@ -3744,5 +3747,24 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             None,
             "a different indel over the anchor base is evidence for neither allele"
         );
+    }
+
+    #[test]
+    fn test_ins_check_names_the_truth_records_own_pos() {
+        // `load_truth_events` reads an INS as `start: vcf_pos` -- `start` is
+        // already the insertion point the truth record names -- so
+        // `event.start + 1` labelled the check with a base one past the POS
+        // it was measured at.
+        let (dir, fasta, cram) = small_variant_cram("ins_pos_label");
+        let event = ins_event("chrA", 10_000);
+
+        let r = check_ins_reads(&cram, &fasta, &event, 20).unwrap();
+
+        assert!(
+            r.expected.ends_with("chrA:10000"),
+            "the check must name the truth record's own POS; got {:?}",
+            r.expected
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

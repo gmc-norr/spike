@@ -77,6 +77,28 @@ pub enum SimEvent {
 }
 
 impl SimEvent {
+    /// Whether this event's donor pool is drawn from more than one locus.
+    ///
+    /// `extract_pool_for_event` searches two windows for a multi-locus event
+    /// and one for everything else, and `donor_coverage_for_tiling` demands
+    /// donor coverage at *every* breakpoint side of a multi-locus event but
+    /// only *somewhere* around a single-locus one. Those two rules have to
+    /// agree, and they used to be two independent `SimEvent::Fusion` patterns
+    /// in two files with nothing linking them: a new multi-locus event type
+    /// would silently take the permissive branch (an N5-class hole). The
+    /// match below is exhaustive, so a new variant will not compile until
+    /// someone answers this question for it.
+    pub fn is_multi_locus(&self) -> bool {
+        match self {
+            SimEvent::Fusion { .. } => true,
+            SimEvent::Deletion { .. }
+            | SimEvent::Duplication { .. }
+            | SimEvent::Inversion { .. }
+            | SimEvent::Insertion { .. }
+            | SimEvent::SmallVariant { .. } => false,
+        }
+    }
+
     /// Get the per-event allele fraction override, if any.
     pub fn allele_fraction(&self) -> Option<f64> {
         match self {

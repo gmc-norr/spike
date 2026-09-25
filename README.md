@@ -487,8 +487,8 @@ the counting rule that fits its shape, and fails outright when none does:
 | Truth record | Counted as | Observed |
 | --- | --- | --- |
 | `A` > `T` (a substitution) | the alt base against the pileup depth at POS | a fraction |
-| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length at POS, against the reads spanning that junction without one | a fraction |
-| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length at POS, against the reads spanning that junction without one | a fraction |
+| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
+| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
 | `AT` > `GC` (an MNV) | reads whose bases are the *whole* alt run, against reads whose bases are the whole ref run | a fraction |
 | `AC` > `GTT` (a complex allele) | nothing -- no single operation or allele run to count | `N/A (complex allele)` FAIL |
 | depth below 5 | nothing | `low depth (n)` FAIL |
@@ -776,7 +776,7 @@ the message is the exact text spike prints, measured by running it.
 | An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
 | Two events overlapping without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 overlap on chr20 (38412500-38422500 vs 38415000-38420000)` | `main.rs` |
-| A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 record(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
+| A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 read pair(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
 | No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
 | A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
@@ -1061,7 +1061,7 @@ Every simulated read is built from the donor pool extracted for its event -- the
 
 ```
 Error: event DEL  chr20:30000001-30010000 (10000bp) has too few usable donor reads: 0 read
-pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike needs (0 record(s) in
+pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike needs (0 read pair(s) in
 those windows were dropped for unusable base qualities and are not in that count). ...
 ```
 
@@ -1070,8 +1070,8 @@ a CRAM that stores its qualities as read features has every record dropped by
 the quality check below, and the pool is then 0 through no fault of the region
 or of `--min-mapq`. Measured on the chr20 slice with every `QUAL` set to `*`:
 `0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike
-needs (2097 record(s) in those windows were dropped for unusable base
-qualities ...)`. When nothing was dropped the count is `0` and the other three
+needs (2097 read pair(s) in those windows were dropped for unusable
+base qualities ...)`. When nothing was dropped the count is `0` and the other three
 causes the message lists are the ones to look at.
 
 Without that check a starved window is silent. spike logs `Built read pool: 0 pairs`, then falls through to every substitute in turn -- the constant Q20 last resort above for every base, the default 400 +/- 80 fragment distribution, coverage 0 with the 2-read tiling floor -- and exits **0** with a truth VCF and two invented read pairs beside it. An event in a zero-coverage region, an off-target panel BAM and a mistyped `--region` all reach it.

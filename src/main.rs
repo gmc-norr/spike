@@ -1069,7 +1069,16 @@ fn extract_pool_for_event(
         windows_searched.extend(window_labels(chrom_b, &windows_b));
         pool_chrom = chrom_a.clone();
     } else {
-        // Single-region events (DEL, DUP, INV, INS).
+        // Single-region events (DEL, DUP, INV, INS). The two rules that key
+        // on how many loci an event is drawn from live in two files, so tie
+        // them together here: a multi-locus event that reached this branch
+        // would fill its pool from one window and then be graded by
+        // `donor_coverage_for_tiling`'s permissive rule.
+        debug_assert!(
+            !event.is_multi_locus(),
+            "a multi-locus event must extract one window per locus: {:?}",
+            event.primary_region()
+        );
         let (chrom, start, end) = event.primary_region().unwrap();
         let windows = extraction_bounds(chrom, start, end, config.flank_bp, extraction_region);
         extract_windows(config, chrom, &windows, &mut all_pairs, unusable_qual_names)?;
@@ -1147,8 +1156,9 @@ fn finish_donor_pool(
     if all_pairs.len() < MIN_DONOR_PAIRS {
         bail!(
             "event {} has too few usable donor reads: {} read pair(s) extracted from \
-             {}, fewer than the {} spike needs ({} record(s) in those windows were \
-             dropped for unusable base qualities and are not in that count). Every \
+             {}, fewer than the {} spike needs ({} read pair(s) in those windows \
+             were dropped for unusable base qualities and are not in that count). \
+             Every \
              simulated read is built from this pool -- its base qualities, its \
              fragment lengths and the coverage the tiling count is scaled by all come \
              from it -- so spike would invent reads rather than simulate them, and \
@@ -3063,8 +3073,18 @@ done"#,
         );
         assert!(
             err.contains("40") && err.contains("qualit"),
-            "the error must say how many records were dropped for unusable \
+            "the error must say how many read pairs were dropped for unusable \
              quality, since that is one way the pool empties: {}",
+            err
+        );
+        // `dropped_unusable_qual` counts `UnusableQualTally::pair_names()`,
+        // which is deduplicated across mates, so the number is pairs. Calling
+        // it records here and "read pair(s)" in the run README made one number
+        // read as two different quantities.
+        assert!(
+            err.contains("40 read pair(s) in those windows"),
+            "the drop count is a pair count everywhere else, so it must say so \
+             here too: {}",
             err
         );
     }

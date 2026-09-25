@@ -383,13 +383,26 @@ fn classify_pair_relation(pair: &ReadPair, sv_start: u64, sv_end: u64) -> PairRe
 /// A cut into novel sequence (the inserted bases of an INS) has no reference
 /// base on that side and contributes nothing -- there is no donor position to
 /// ask about.
+///
+/// Each position appears once. Two junctions a base apart -- a small
+/// variant's one-base alt segment -- name the same base from either side, and
+/// `bp.saturating_sub(1)` names the cut itself for a breakpoint at haplotype
+/// offset 0, where there is no base before it to step back to. One position
+/// is one question about donor coverage however many junctions touch it.
 fn breakpoint_sides(haplotype: &VariantHaplotype) -> Vec<(String, u64)> {
-    haplotype
+    let mut sides: Vec<(String, u64)> = Vec::new();
+    for hap_pos in haplotype
         .breakpoints()
         .iter()
         .flat_map(|&bp| [bp.saturating_sub(1), bp])
-        .filter_map(|hap_pos| haplotype.hap_to_ref(hap_pos))
-        .collect()
+    {
+        if let Some(side) = haplotype.hap_to_ref(hap_pos) {
+            if !sides.contains(&side) {
+                sides.push(side);
+            }
+        }
+    }
+    sides
 }
 
 /// The donor coverage the tiling count is scaled by, or an error if spike has
@@ -449,22 +462,20 @@ fn donor_coverage_for_tiling(
         .collect();
     let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
 
-    let is_fusion = matches!(event, SimEvent::Fusion { .. });
+    let is_fusion = event.is_multi_locus();
     let refuse = if is_fusion {
         !covs.iter().all(|&c| covered(c))
     } else {
         !covs.iter().any(|&c| covered(c))
     };
 
-    // Two junctions a base apart (a small variant's) name the same position
-    // twice; each one is listed once, in haplotype order.
-    let mut uncovered: Vec<String> = Vec::new();
-    for ((chrom, pos), _) in sides.iter().zip(&covs).filter(|(_, &c)| !covered(c)) {
-        let label = format!("{}:{}", chrom, pos);
-        if !uncovered.contains(&label) {
-            uncovered.push(label);
-        }
-    }
+    // `breakpoint_sides` already names each position once, in haplotype order.
+    let uncovered: Vec<String> = sides
+        .iter()
+        .zip(&covs)
+        .filter(|(_, &c)| !covered(c))
+        .map(|((chrom, pos), _)| format!("{}:{}", chrom, pos))
+        .collect();
 
     if !refuse {
         let cov = covs
@@ -492,11 +503,21 @@ fn donor_coverage_for_tiling(
     }
 
     let positions = uncovered.join(", ");
+    // "one side" only when it is one: the parenthesis lists them all, so the
+    // singular contradicted the message's own evidence.
     let scope = if is_fusion {
-        "on one side of its junction -- every read spike plants for a fusion spans \
-         the junction, so each partner needs donor reads of its own"
+        let how_many = if uncovered.len() == 1 {
+            "on one side of its junction".to_string()
+        } else {
+            format!("on {} sides of its junction", uncovered.len())
+        };
+        format!(
+            "{} -- every read spike plants for a fusion spans the junction, so each \
+             partner needs donor reads of its own",
+            how_many
+        )
     } else {
-        "at any of its breakpoints"
+        "at any of its breakpoints".to_string()
     };
     anyhow::bail!(
         "event {}:{}-{} has no donor coverage {} ({}): the pool holds {} read \
@@ -1681,6 +1702,144 @@ mod tests {
     }
 
     #[test]
+    fn test_only_a_fusion_is_drawn_from_more_than_one_locus() {
+        // `extract_pool_for_event` (main.rs) and `donor_coverage_for_tiling`
+        // (here) both key on this, in two files with no shared helper. The
+        // match behind it is exhaustive, so a new event type cannot be added
+        // without answering the question; this pins today's answers.
+        let fusion = SimEvent::Fusion {
+            chrom_a: "chr1".to_string(),
+            bp_a: 10000,
+            gene_a: "A".to_string(),
+            chrom_b: "chr2".to_string(),
+            bp_b: 20000,
+            gene_b: "B".to_string(),
+            join: FusionJoin::Forward,
+            allele_fraction: None,
+        };
+        assert!(fusion.is_multi_locus(), "a fusion is drawn from two loci");
+        for single in [
+            del_event(1000, 2000),
+            SimEvent::Duplication {
+                chrom: "chr1".to_string(),
+                dup_start: 1000,
+                dup_end: 2000,
+                gene: "T".to_string(),
+                allele_fraction: None,
+            },
+            SimEvent::Inversion {
+                chrom: "chr1".to_string(),
+                inv_start: 1000,
+                inv_end: 2000,
+                gene: "T".to_string(),
+                allele_fraction: None,
+            },
+            SimEvent::Insertion {
+                chrom: "chr1".to_string(),
+                pos: 1000,
+                ins_seq: None,
+                ins_len: 300,
+                gene: "T".to_string(),
+                allele_fraction: None,
+            },
+            SimEvent::SmallVariant {
+                chrom: "chr1".to_string(),
+                pos: 1000,
+                ref_allele: b"A".to_vec(),
+                alt_allele: b"T".to_vec(),
+                gene: "T".to_string(),
+                allele_fraction: None,
+            },
+        ] {
+            assert!(
+                !single.is_multi_locus(),
+                "{:?} is extracted from one window",
+                single.primary_region()
+            );
+        }
+    }
+
+    #[test]
+    fn test_breakpoint_sides_names_each_reference_position_once() {
+        // `bp.saturating_sub(1)` is the base before the cut, so two junctions
+        // a base apart -- a small variant's alt segment -- name the same
+        // reference position twice, and so does a breakpoint at haplotype
+        // offset 0, where there is no base before the cut to clamp away from.
+        // The refusal message deduplicates; the list the verdict is read off
+        // did not.
+        let hap = make_haplotype(vec![
+            ref_segment(0, 1000),
+            ref_segment(1000, 1),
+            ref_segment(1001, 999),
+        ]);
+        assert_eq!(
+            breakpoint_sides(&hap),
+            vec![
+                ("chr1".to_string(), 999),
+                ("chr1".to_string(), 1000),
+                ("chr1".to_string(), 1001),
+            ],
+            "each reference position is one side, however many junctions touch it"
+        );
+    }
+
+    #[test]
+    fn test_a_fusion_with_every_side_bare_does_not_claim_one_side() {
+        // The refusal then lists all of them, so "on one side of its junction"
+        // contradicts its own parenthesis.
+        let pool = make_covering_pool(500_000, 540_000, 200);
+        let mut hap = make_haplotype(vec![
+            HaplotypeSegment {
+                sequence: vec![b'A'; 1000],
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: 9000,
+                    ref_end: 10000,
+                    is_reverse: false,
+                }),
+                hap_offset: 0,
+            },
+            HaplotypeSegment {
+                sequence: vec![b'C'; 1000],
+                origin: Some(SegmentOrigin {
+                    chrom: "chr1".to_string(),
+                    ref_start: 20000,
+                    ref_end: 21000,
+                    is_reverse: false,
+                }),
+                hap_offset: 1000,
+            },
+        ]);
+        let event = SimEvent::Fusion {
+            chrom_a: "chr1".to_string(),
+            bp_a: 10000,
+            gene_a: "GENE_A".to_string(),
+            chrom_b: "chr1".to_string(),
+            bp_b: 20000,
+            gene_b: "GENE_B".to_string(),
+            join: FusionJoin::Forward,
+            allele_fraction: Some(0.2),
+        };
+        let mut rng = StdRng::seed_from_u64(99);
+        let msg = match simulate_event(
+            1, &event, &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.2, &mut rng,
+        ) {
+            Ok(_) => panic!("a fusion with no donor coverage anywhere must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("chr1:9999") && msg.contains("chr1:20000"),
+            "the refusal must list every bare side; got: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("on one side of its junction"),
+            "two bare sides are not one side; got: {}",
+            msg
+        );
+    }
+
+    #[test]
     fn test_simulate_event_keeps_del_whose_far_breakpoint_side_is_uncovered() {
         // A DEL that straddles the edge of a sliced or panel BAM has donor
         // reads on one side of its junction and none on the other. That is
@@ -2047,6 +2206,13 @@ mod tests {
                 .iter()
                 .filter(|n| n.starts_with("edge_"))
                 .collect::<Vec<_>>()
+        );
+        // `all` is vacuously true on an empty set, so the assertion above
+        // would still hold if suppression had stopped entirely. Pin that it
+        // happened at all.
+        assert!(
+            out.suppressed_names.iter().any(|n| n.starts_with("in_")),
+            "pairs inside the footprint must still be suppressed; nothing was"
         );
     }
 

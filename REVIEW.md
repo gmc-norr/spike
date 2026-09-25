@@ -19,10 +19,15 @@ and is never edited. The two right columns were added later (bookkeeping fix,
 commits — measure both at the row's own command, not by scaling the "At
 review" figure.
 
-| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `6e0aa57`+, the whole-branch fix pass) |
+The **Current** column is a *live* number, not a record: it went stale twice
+already, because a commit that adds tests does not think to come back here.
+Re-run the row's own command and update it in any commit that moves the test
+count, the clippy counts or the build warnings.
+
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` tip -- re-measure in any commit that moves it) |
 | --- | --- | --- | --- |
 | `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | OK, **1** warning (unused `is_within_single_segment` in `haplotype.rs`) |
-| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **394** passed, 0 failed |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **411** passed, 0 failed |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run and in the whole-branch pass held the line here |
 | `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
@@ -70,6 +75,10 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N12 | Medium | **Fixed** (found while closing N10). N5's donor-coverage refusal measured the **first** breakpoint only, so the same fusion was refused or accepted depending on which partner was named first. Now every breakpoint side is measured, scoped to the loci the pool was extracted from: both sides for a fusion, at least one for a single-locus event | `simulate.rs:196-220` (at `ad9881e`); `simulate.rs:203-210, 379-495` (now) |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
+| N14 | High | **Not fixed** (found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
+| N15 | Medium | **Not fixed** (found by the verification review). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
+| N16 | Low | **Not fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
+| N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
 
 ## High severity
 
@@ -1229,6 +1238,165 @@ does not touch -- the weak-test shape [Test gaps](#test-gaps) names. Four
 direct tests now pin the whole shift range: every shift in +/-10 votes
 `Carries` for a deletion and for an insertion, +/-11 votes `Spans`, and a
 clipped read or a different-length `D` over the anchor still votes neither way.
+
+### N14 · The allele-fraction tolerance is absolute, so every low-VAF truth set passes on no evidence
+
+*Found by the verification review. **Not fixed** -- the reviewer's top follow-up
+after N13.*
+
+`allele_freq_result` grades with `(observed - expected).abs() < 0.15`
+(`validate.rs:751, 824`). The tolerance is absolute, so any `SIM_VAF` below
+0.15 passes at an observed fraction of **0.00** -- the check cannot tell a
+correct spike-in from no spike-in at all.
+
+Measured on the chr20 37.5-41.5 Mb HG002 slice at chr20:38600002 (`G` > `A`;
+`samtools mpileup` shows 44 reads there and **not one** carries `A`, so the
+observed fraction is 0.00 by construction), one truth record per `SIM_VAF`:
+
+| `SIM_VAF` | observed | verdict |
+| --- | --- | --- |
+| 0.02 | 0.00 | **PASS** |
+| 0.05 | 0.00 | **PASS** |
+| 0.10 | 0.00 | **PASS** |
+| 0.1499 | 0.00 | **PASS** |
+| 0.15 | 0.00 | FAIL |
+| 0.20 | 0.00 | FAIL |
+| 0.50 | 0.00 | FAIL |
+
+`--allele-fraction` accepts `(0.0, 1.0]` and N11's own help text says so, so a
+truth set at VAF 0.02 is legal input -- and a low-VAF truth set is the *main*
+use case for a spike-in simulator (subclonal variant benchmarks). For exactly
+those runs `allele_freq` is a check that cannot fail on a run that planted
+nothing.
+
+This is pre-existing for substitutions, but `ad9881e` routed the three new
+rules -- deletions, insertions, MNVs -- through the same `allele_freq_result`,
+so it now covers four variant classes, inside the commit pair whose stated
+principle is "a check that did not measure may not pass".
+
+A relative tolerance (`|observed - expected| < max(0.15 * expected, k/sqrt(n))`,
+or a binomial interval at the measured depth) would grade a 0.02 truth set
+against 0.02 rather than against 0.15. Not attempted here: it changes the
+verdict of every existing `allele_freq` row and wants its own before/after on
+real data.
+
+### N15 · Two rules for the same physical mark, 250 lines apart
+
+*Found by the verification review. **Not fixed**.*
+
+`check_ins_reads` (N8) and `cigar_indel_vote` (N10) both ask "does this read
+carry an insertion here?" and answer it differently:
+
+| | `check_ins_reads` | `cigar_indel_vote` |
+| --- | --- | --- |
+| how far from POS | +/-100 bp (`PAD`) | +/-10 bp (`INDEL_POS_PAD`) |
+| what counts | any `I` **or soft clip** of >= `min(SVLEN, 50)` bp | an operation of *exactly* the allele's length |
+
+Measured at unit level (the tests added with N13 pin it): a 2 bp `D` operation
+**8 bp** from the junction votes `Carries` for a 2 bp truth deletion, and a
+4 bp `I` operation **9 bp** away votes `Carries` for a 4 bp truth insertion --
+whether or not it is the same variant. Inside a short tandem repeat that is the
+whole point (the aligner left-aligns, so the operation genuinely moves), but it
+also means an *unrelated* indel of the right length within the window is
+counted as support. That inflates the numerator, which is the **false-PASS**
+direction, and it is the opposite bias from N13's dead zone.
+
+Nobody has measured it on a deliberately repeat-rich locus. The honest
+experiment is a truth record in an STR array with a second, real indel a few
+bases away, comparing `cigar_indel_vote`'s carriers against `samtools mpileup`
+indel calls at the exact position. Until then the size of the effect is
+unknown, which is why this is recorded rather than tuned.
+
+### N16 · One depth floor, three different denominators
+
+*Found by the verification review. **Not fixed**.*
+
+`MIN_PILEUP_DEPTH = 5` (`validate.rs:747`) is applied by `allele_freq_result`
+to whatever `total` the counting rule handed it, and the three rules count
+three different things:
+
+- **Substitution:** `pileup_region` does `allele_counts.entry(rp)...[idx] += 1`
+  per base observation (`validate.rs:2172`), so a read pair whose mates overlap
+  the variant contributes **two**.
+- **Small indel:** `count_indel_reads` visits every *record* via
+  `for_each_alignment` and each record votes once, so the denominator is
+  records -- also two per overlapping pair, but of whole alignments rather than
+  of one column's bases.
+- **MNV:** `read_alleles` is keyed by read **name**, and both mates arrive
+  under one name, so the denominator is **fragments** -- one per pair.
+
+So "depth 5" means five base observations, five alignments, or five fragments
+depending on the REF/ALT shape, and the observed fraction has the same
+ambiguity. On a 35x PCR-free library with 400 bp fragments and 151 bp reads the
+mates rarely overlap, so the three agree in practice; on a short-insert library
+they do not. Low impact, easy to get wrong later: recorded, not changed.
+
+### N17 · The two rules keyed on "how many loci" had no link between them
+
+*Found by the verification review, **fixed here**.*
+
+`donor_coverage_for_tiling` (`simulate.rs`) demanded donor coverage at *every*
+breakpoint side of a fusion and only *somewhere* around anything else, via
+`matches!(event, SimEvent::Fusion { .. })`. `extract_pool_for_event`
+(`main.rs`) searched two windows for a fusion and one for anything else, via an
+independent `if let SimEvent::Fusion`. Two files, no shared helper, nothing the
+compiler could check: a future multi-locus event type would extract one window
+and then be graded by the permissive branch -- a silent N5-class hole, the
+exact shape N12 had just closed.
+
+**Fixed.** `SimEvent::is_multi_locus()` (`types.rs`) answers the question once,
+behind an **exhaustive** match, so a new variant does not compile until someone
+answers it. `donor_coverage_for_tiling` calls it, and
+`extract_pool_for_event`'s single-window branch carries a `debug_assert!` that
+the event is not multi-locus -- so the link is checked on every `cargo test`
+run rather than left to a reader. Behaviour is unchanged: `Fusion` is the only
+`true`, pinned by `test_only_a_fusion_is_drawn_from_more_than_one_locus`.
+
+### Small corrections made alongside N14-N17
+
+*Found by the verification review, all **fixed** in the same commit. Each is a
+message, a document or a test assertion -- none changes a verdict.*
+
+- **A vacuously true test assertion.**
+  `test_simulate_event_keeps_pairs_straddling_footprint_edge` asserted
+  `suppressed_names.iter().all(|n| n.starts_with("in_"))`, which holds on an
+  **empty** set: the test would still pass if suppression had stopped
+  entirely. An `any(...)` companion now pins that suppression happened.
+- **`check_ins_reads` named the wrong base.** It printed `event.start + 1`,
+  but `load_truth_events` reads an INS as `start: vcf_pos`, so `start` is
+  already the POS the truth record names. Measured on the chr20 slice,
+  `ins:chr20:38600000:300` -> truth VCF `POS 38600000`; the check's own label
+  read `>=2 reads with >=50bp inserted at chr20:38600001` and now reads
+  `chr20:38600000`.
+- **One number, two units.** `finish_donor_pool` said "N record(s) ... dropped
+  for unusable base qualities", but the number is
+  `unusable_qual_names.len()`, which `extract.rs` builds from
+  `UnusableQualTally::pair_names()` -- pair names deduplicated across mates.
+  `write_readme` already called the same number "read pair(s)". The refusal
+  and README's refusal table now say "read pair(s)" too; the numbers are
+  unchanged, only the unit they are labelled with. (`extract.rs`'s own two
+  `record(s)` warnings count `tally.missing.len()` /
+  `tally.out_of_range.len()`, which really are records, and are left alone.)
+- **README's `allele_freq` table contradicted its own prose.** The table said
+  the `D`/`I` operation is "at POS"; the prose and the code say the junction
+  just past the anchor base, within 10 bp. The prose is right, and
+  `spike validate --help` said "at POS" as well. Both corrected.
+- **`breakpoint_sides` listed one reference position twice.** Two junctions a
+  base apart -- a small variant's one-base alt segment -- name the same base
+  from either side, and `bp.saturating_sub(1)` names the cut itself for a
+  breakpoint at haplotype offset 0. Measured: the sides for a
+  `ref[0,1000) | ref[1000,1001) | ref[1001,2000)` haplotype were
+  `[999, 1000, 1000, 1001]`. **A correction to what was reported:** the
+  duplicate did *not* mis-weight the verdict -- `all()` and `any()` are
+  unchanged by a repeated element, and so is the `find` that picks the
+  coverage to scale by. What it did was ask `estimate_coverage_at` the same
+  question twice and offer a list the message then had to deduplicate. The
+  dedup now lives in `breakpoint_sides`, so the list the verdict is read off
+  and the list the message prints are the same list.
+- **The fusion refusal said "one side" when it meant several.** It then
+  listed them all in its own parenthesis. Measured, a fusion whose whole pool
+  is elsewhere: `... has no donor coverage on one side of its junction ...
+  (chr1:9999, chr1:20000)`. It now says "on 2 sides of its junction".
 
 ## Low severity
 
