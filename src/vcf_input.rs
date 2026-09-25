@@ -13,23 +13,127 @@ use crate::types::{FusionJoin, SimEvent};
 ///
 /// Supports both plain `.vcf` and bgzip-compressed `.vcf.gz` files.
 /// BND records are paired by MATEID to produce single Fusion events.
-pub fn load_events_from_vcf(path: &str) -> Result<Vec<SimEvent>> {
+/// `use_info_af` is `--vcf-info-af`: see [`extract_af`].
+pub fn load_events_from_vcf(path: &str, use_info_af: bool) -> Result<Vec<SimEvent>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open VCF: {}", path))?;
 
-    let records = if path.ends_with(".gz") {
+    let (events, stats) = if path.ends_with(".gz") {
         let decoder = noodles::bgzf::Reader::new(file);
-        let reader = BufReader::new(decoder);
-        parse_vcf_records(reader)?
+        ingest_vcf(BufReader::new(decoder), use_info_af)?
     } else {
-        let reader = BufReader::new(file);
-        parse_vcf_records(reader)?
+        ingest_vcf(BufReader::new(file), use_info_af)?
     };
 
-    let events = records_to_events(records)?;
-
     log::info!("Loaded {} events from VCF: {}", events.len(), path);
+    stats.log_summary();
     Ok(events)
+}
+
+/// Read events, and the per-reason tally of what was not turned into one,
+/// from an open VCF stream. Split out of [`load_events_from_vcf`] so the
+/// counting can be tested without a file on disk.
+fn ingest_vcf<R: BufRead>(reader: R, use_info_af: bool) -> Result<(Vec<SimEvent>, VcfIngestStats)> {
+    let mut stats = VcfIngestStats::default();
+    let records = parse_vcf_records(reader, &mut stats)?;
+    let events = records_to_events(records, use_info_af, &mut stats)?;
+    Ok((events, stats))
+}
+
+/// Per-reason tally of what a VCF ingest did not turn into a simulated event,
+/// so that a record spike drops is reported rather than silently missing from
+/// the truth set (L11). The FILTER/GT counters are not drops: spike ignores
+/// both columns, and they are counted only so the summary says how many
+/// records that affects.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct VcfIngestStats {
+    /// Lines with fewer than the 8 mandatory VCF columns.
+    short_line: usize,
+    /// POS that is not a positive integer.
+    bad_pos: usize,
+    /// More than one ALT allele; spike simulates one allele per record.
+    multi_allelic: usize,
+    /// An SVTYPE spike does not simulate, e.g. CNV.
+    unsimulated_sv_type: usize,
+    /// No SVTYPE, and alleles that are not plain DNA to fall back on.
+    not_a_small_variant: usize,
+    /// No length or span could be read from END, SVLEN or the alleles.
+    no_length: usize,
+    /// An INS whose ALT is not its REF plus inserted bases.
+    not_an_insertion: usize,
+    /// Alleles that start the event before the chromosome's first base.
+    before_first_base: usize,
+    /// Records whose VAF came from neither the INFO nor a drop: INFO `AF` was
+    /// present but left unused because `--vcf-info-af` was not given.
+    af_info_ignored: usize,
+    /// A VAF INFO key was present but its value was not a usable fraction.
+    af_unusable: usize,
+    /// Parsed records whose FILTER is neither PASS nor `.`.
+    non_pass: usize,
+    /// Parsed records whose first sample's GT is homozygous reference.
+    hom_ref: usize,
+}
+
+impl VcfIngestStats {
+    /// The drop reasons with their counts, in the order a record meets them.
+    fn drop_reasons(&self) -> [(&'static str, usize); 8] {
+        [
+            ("short line (fewer than 8 columns)", self.short_line),
+            ("POS not a positive integer", self.bad_pos),
+            ("multi-allelic ALT", self.multi_allelic),
+            ("SVTYPE spike does not simulate", self.unsimulated_sv_type),
+            ("no SVTYPE and alleles that are not plain DNA", self.not_a_small_variant),
+            ("no length or span could be resolved", self.no_length),
+            ("ALT is not REF plus inserted bases", self.not_an_insertion),
+            ("event would start before the chromosome's first base", self.before_first_base),
+        ]
+    }
+
+    fn total_dropped(&self) -> usize {
+        self.drop_reasons().iter().map(|(_, n)| n).sum()
+    }
+
+    /// Log everything the ingest passed over. One warning per reason that
+    /// fired, so a run whose truth set is short of records says why.
+    fn log_summary(&self) {
+        let dropped = self.total_dropped();
+        if dropped > 0 {
+            let by_reason: Vec<String> = self
+                .drop_reasons()
+                .iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(reason, n)| format!("{} {}", n, reason))
+                .collect();
+            log::warn!(
+                "skipped {} VCF record(s): {}",
+                dropped,
+                by_reason.join("; ")
+            );
+        }
+        if self.af_info_ignored > 0 {
+            log::warn!(
+                "{} VCF record(s) carry INFO AF and no SIM_VAF or VAF; AF is the population \
+                 allele frequency, not a VAF to simulate, so --allele-fraction was used \
+                 instead. Pass --vcf-info-af to read AF as the VAF",
+                self.af_info_ignored
+            );
+        }
+        if self.af_unusable > 0 {
+            log::warn!(
+                "{} VCF record(s) state a VAF that is not a fraction in (0, 1]; \
+                 --allele-fraction was used for them",
+                self.af_unusable
+            );
+        }
+        if self.non_pass > 0 || self.hom_ref > 0 {
+            log::info!(
+                "VCF ingest ignores FILTER and GT: {} record(s) it read are not PASS and {} \
+                 are homozygous reference; all are simulated like any other",
+                self.non_pass,
+                self.hom_ref
+            );
+        }
+    }
 }
 
 /// Raw parsed VCF record for SV processing.
@@ -54,7 +158,7 @@ enum SvTypeTag {
     SmallVar,
 }
 
-fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
+fn parse_vcf_records<R: BufRead>(reader: R, stats: &mut VcfIngestStats) -> Result<Vec<SvRecord>> {
     let mut records = Vec::new();
 
     for line in reader.lines() {
@@ -65,6 +169,7 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
 
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() < 8 {
+            stats.short_line += 1;
             continue;
         }
 
@@ -72,14 +177,20 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
         let ref_col = fields[3];
         let alt_col = fields[4];
 
+        // One ALT allele per record: spike simulates a single allele, and
+        // taking the first of "A,T" would silently simulate half the record.
+        if alt_col.contains(',') {
+            stats.multi_allelic += 1;
+            continue;
+        }
+
         let sv_type = match parse_info_field(info, "SVTYPE") {
-            Some(t) => match t {
-                "DEL" => SvTypeTag::Del,
-                "INS" => SvTypeTag::Ins,
-                "DUP" => SvTypeTag::Dup,
-                "INV" => SvTypeTag::Inv,
-                "BND" => SvTypeTag::Bnd,
-                _ => continue,
+            Some(t) => match sv_type_tag(t) {
+                Some(tag) => tag,
+                None => {
+                    stats.unsimulated_sv_type += 1;
+                    continue;
+                }
             },
             None => {
                 // No SVTYPE: check if this is a standard SNP/indel record.
@@ -87,6 +198,7 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
                 if is_dna_allele(ref_col) && is_dna_allele(alt_col) {
                     SvTypeTag::SmallVar
                 } else {
+                    stats.not_a_small_variant += 1;
                     continue;
                 }
             }
@@ -97,13 +209,27 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
         // For BND, POS is the actual breakpoint position (1-based), so subtract 1.
         let raw_pos: u64 = match fields[1].parse::<u64>() {
             Ok(p) if p > 0 => p,
-            _ => continue,
+            _ => {
+                stats.bad_pos += 1;
+                continue;
+            }
         };
         let pos = match sv_type {
             SvTypeTag::Bnd => raw_pos - 1, // BND: 1-based breakpoint → 0-based
             SvTypeTag::SmallVar => raw_pos - 1, // Small variant: 1-based → 0-based
             _ => raw_pos,                  // Others: 1-based preceding base == 0-based start
         };
+
+        // Neither column is acted on — a non-PASS or hom-ref record is
+        // simulated like any other — but both are counted, so a run whose
+        // input carries them says so rather than leaving it to be noticed
+        // in the truth VCF.
+        if !matches!(fields[6], "PASS" | ".") {
+            stats.non_pass += 1;
+        }
+        if fields.len() > 9 && is_hom_ref_gt(fields[8], fields[9]) {
+            stats.hom_ref += 1;
+        }
 
         records.push(SvRecord {
             chrom: fields[0].to_string(),
@@ -120,20 +246,24 @@ fn parse_vcf_records<R: BufRead>(reader: R) -> Result<Vec<SvRecord>> {
 }
 
 /// Convert raw VCF records into SimEvents.
-fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
+fn records_to_events(
+    records: Vec<SvRecord>,
+    use_info_af: bool,
+    stats: &mut VcfIngestStats,
+) -> Result<Vec<SimEvent>> {
     let mut events = Vec::new();
     let mut bnd_processed: HashSet<String> = HashSet::new();
 
     for record in &records {
         match record.sv_type {
             SvTypeTag::Del => {
-                let Some((start, end)) = resolve_sv_span_or_warn(record, "DEL") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "DEL", stats) else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
 
                 events.push(SimEvent::Deletion {
                     chrom: record.chrom.clone(),
@@ -145,13 +275,13 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Dup => {
-                let Some((start, end)) = resolve_sv_span_or_warn(record, "DUP") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "DUP", stats) else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
 
                 events.push(SimEvent::Duplication {
                     chrom: record.chrom.clone(),
@@ -162,13 +292,13 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Inv => {
-                let Some((start, end)) = resolve_sv_span_or_warn(record, "INV") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "INV", stats) else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
 
                 events.push(SimEvent::Inversion {
                     chrom: record.chrom.clone(),
@@ -185,7 +315,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
 
                 // ALT with explicit sequence (not symbolic <INS>) carries the
                 // inserted bases: the ones it adds to the flanks it shares
@@ -198,6 +328,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                         // insertion. Which bases are inserted and which are
                         // replaced is a guess, so drop it rather than write a
                         // plausible-looking wrong truth record.
+                        stats.not_an_insertion += 1;
                         log::warn!("{}", not_an_insertion_warning(record));
                         continue;
                     }
@@ -205,6 +336,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     if start == 0 {
                         // No base 0 to anchor the insertion to, exactly as
                         // for the spans resolve_sv_span_or_warn rejects.
+                        stats.before_first_base += 1;
                         log::warn!("{}", before_first_base_warning(record, "INS"));
                         continue;
                     }
@@ -218,9 +350,11 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 } else if ins_len > 0 {
                     ins_len
                 } else {
+                    stats.no_length += 1;
                     log::warn!(
-                        "INS record {} has no SVLEN and no explicit ALT sequence, skipping",
-                        record.id
+                        "INS record {} at {}:{} has no SVLEN and no explicit ALT sequence, \
+                         skipping",
+                        record.id, record.chrom, record.pos
                     );
                     continue;
                 };
@@ -248,7 +382,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     );
                 }
 
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
                     .to_string();
@@ -303,7 +437,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     (gene_b, gene_a)
                 };
 
-                let af = extract_af(&record.info);
+                let af = extract_af(record, use_info_af, stats);
 
                 events.push(SimEvent::Fusion {
                     chrom_a: bnd.chrom_a,
@@ -388,19 +522,50 @@ fn decode_bnd(chrom: &str, pos: u64, alt: &str) -> Result<BndFusion> {
     })
 }
 
-/// Extract allele fraction from INFO field.
-/// Checks SIM_VAF, VAF, AF in order.
-fn extract_af(info: &str) -> Option<f64> {
-    for key in &["SIM_VAF", "VAF", "AF"] {
-        if let Some(val) = parse_info_field(info, key) {
-            if let Ok(v) = val.parse::<f64>() {
-                if v > 0.0 && v <= 1.0 {
-                    return Some(v);
+/// Extract the allele fraction to simulate from a record's INFO field.
+/// Checks SIM_VAF then VAF, and AF last but only with `--vcf-info-af`: in a
+/// population VCF `AF` is the allele frequency in the population, not the
+/// fraction of this sample's reads that carry the allele, so reading it as a
+/// VAF silently writes a truth set at the wrong one (L11).
+///
+/// `None` means the caller's default (`--allele-fraction`) applies. Both
+/// ways of arriving there against a record that did state something — an
+/// unusable value, or an `AF` left unread — are counted, so the fallback is
+/// reported rather than silently substituted.
+fn extract_af(record: &SvRecord, use_info_af: bool, stats: &mut VcfIngestStats) -> Option<f64> {
+    let keys: &[&str] = if use_info_af {
+        &["SIM_VAF", "VAF", "AF"]
+    } else {
+        &["SIM_VAF", "VAF"]
+    };
+    for key in keys {
+        if let Some(val) = parse_info_field(&record.info, key) {
+            // Negated so NaN, for which both comparisons are false, is
+            // rejected rather than let through (L8).
+            match val.parse::<f64>() {
+                Ok(v) if v > 0.0 && v <= 1.0 => return Some(v),
+                _ => {
+                    stats.af_unusable += 1;
+                    log::warn!("{}", unusable_af_warning(record, key, val));
                 }
             }
         }
     }
+    if !use_info_af && parse_info_field(&record.info, "AF").is_some() {
+        stats.af_info_ignored += 1;
+    }
     None
+}
+
+/// Message logged when a record states a VAF that cannot be used. Names
+/// chrom:pos as well as the ID, for the same reason [`no_length_warning`]
+/// does: `ID=.` is common and identifies nothing.
+fn unusable_af_warning(record: &SvRecord, key: &str, value: &str) -> String {
+    format!(
+        "record {} at {}:{} has INFO {}={}, which is not a fraction in (0, 1]; ignoring it, \
+         so this record falls back to the next VAF key or --allele-fraction",
+        record.id, record.chrom, record.pos, key, value
+    )
 }
 
 /// Extract a key=value from a VCF INFO field.
@@ -573,17 +738,23 @@ fn inv_span(record: &SvRecord) -> Option<(u64, u64)> {
 
 /// Resolve a DEL/DUP/INV span, warning when the record has to be dropped.
 /// Shared by the three arms so a rejection reads the same whatever the type.
-fn resolve_sv_span_or_warn(record: &SvRecord, sv_type: &str) -> Option<(u64, u64)> {
+fn resolve_sv_span_or_warn(
+    record: &SvRecord,
+    sv_type: &str,
+    stats: &mut VcfIngestStats,
+) -> Option<(u64, u64)> {
     match resolve_sv_span(record) {
         // Reading the span off the alleles can move the start left of POS,
         // and at POS=1 that is base 0 — not a position a VCF record can
         // name, so the truth record would come out as POS=0 with REF=N.
         Some((0, _)) => {
+            stats.before_first_base += 1;
             log::warn!("{}", before_first_base_warning(record, sv_type));
             None
         }
         span @ Some(_) => span,
         None => {
+            stats.no_length += 1;
             log::warn!("{}", no_length_warning(record, sv_type));
             None
         }
@@ -624,6 +795,36 @@ fn before_first_base_warning(record: &SvRecord, sv_type: &str) -> String {
     )
 }
 
+/// Map a VCF `SVTYPE` value to the tag spike simulates it as, or `None` for
+/// a type spike has no model for (`CNV`). VCF v4.3 spells subtypes with a
+/// colon — `DUP:TANDEM`, `DEL:ME:ALU`, `INS:ME:L1` — and the base type before
+/// the first one is what decides the simulation, so a tandem duplication is
+/// a duplication rather than an unknown type to drop (L11).
+fn sv_type_tag(sv_type: &str) -> Option<SvTypeTag> {
+    match sv_type.split(':').next()? {
+        "DEL" => Some(SvTypeTag::Del),
+        "INS" => Some(SvTypeTag::Ins),
+        "DUP" => Some(SvTypeTag::Dup),
+        "INV" => Some(SvTypeTag::Inv),
+        "BND" => Some(SvTypeTag::Bnd),
+        _ => None,
+    }
+}
+
+/// True when the sample column's GT is homozygous reference (`0/0`, `0|0`).
+/// `format` gives GT's position among the colon-separated subfields; a
+/// sample with no GT at all is not hom-ref.
+fn is_hom_ref_gt(format: &str, sample: &str) -> bool {
+    let Some(idx) = format.split(':').position(|f| f == "GT") else {
+        return false;
+    };
+    let Some(gt) = sample.split(':').nth(idx) else {
+        return false;
+    };
+    let mut alleles = gt.split(['/', '|']).peekable();
+    alleles.peek().is_some() && alleles.all(|a| a == "0")
+}
+
 /// Check if a VCF allele string contains only valid DNA bases (A, C, G, T).
 /// Returns false for symbolic alleles like `<DEL>`, empty strings, or alleles with non-DNA chars.
 fn is_dna_allele(allele: &str) -> bool {
@@ -637,6 +838,43 @@ fn is_dna_allele(allele: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse a VCF body with a throwaway counter, for the tests that care
+    /// only about the records. The counting tests use [`ingest`].
+    fn parse_records(vcf: &str) -> Result<Vec<SvRecord>> {
+        parse_vcf_records(vcf.as_bytes(), &mut VcfIngestStats::default())
+    }
+
+    /// Turn records into events with a throwaway counter and plain `AF`
+    /// off, which is spike's default.
+    fn to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
+        records_to_events(records, false, &mut VcfIngestStats::default())
+    }
+
+    /// Read a whole VCF body the way `load_events_from_vcf` does, keeping
+    /// the per-reason counts.
+    fn ingest(vcf: &str) -> (Vec<SimEvent>, VcfIngestStats) {
+        ingest_vcf(vcf.as_bytes(), false).unwrap()
+    }
+
+    /// A record carrying just an INFO field, for the AF tests.
+    fn info_record(info: &str) -> SvRecord {
+        SvRecord {
+            chrom: "chr1".to_string(),
+            pos: 99,
+            id: "t".to_string(),
+            ref_allele: "A".to_string(),
+            alt: "T".to_string(),
+            info: info.to_string(),
+            sv_type: SvTypeTag::SmallVar,
+        }
+    }
+
+    /// The AF `extract_af` reads from `info` with `--vcf-info-af` off.
+    fn af_of(info: &str) -> Option<f64> {
+        extract_af(&info_record(info), false, &mut VcfIngestStats::default())
+    }
+
 
     /// Decode one ALT form for a record at chr1 POS 100, partner chr2:200.
     fn decode(alt: &str) -> BndFusion {
@@ -729,19 +967,19 @@ mod tests {
     #[test]
     fn test_extract_af_sim_vaf() {
         assert_eq!(
-            extract_af("SVTYPE=BND;SIM_VAF=0.050;GENE_A=BCR"),
+            af_of("SVTYPE=BND;SIM_VAF=0.050;GENE_A=BCR"),
             Some(0.05)
         );
     }
 
     #[test]
     fn test_extract_af_vaf() {
-        assert_eq!(extract_af("SVTYPE=DEL;VAF=0.121"), Some(0.121));
+        assert_eq!(af_of("SVTYPE=DEL;VAF=0.121"), Some(0.121));
     }
 
     #[test]
     fn test_extract_af_none() {
-        assert_eq!(extract_af("SVTYPE=DEL;END=100"), None);
+        assert_eq!(af_of("SVTYPE=DEL;END=100"), None);
     }
 
     #[test]
@@ -761,8 +999,8 @@ mod tests {
     fn test_parse_snp_record() {
         // SNP: no SVTYPE, REF=A, ALT=T at POS=100 (1-based) → 0-based pos=99
         let vcf = "chr1\t100\ttest_snp\tA\tT\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::SmallVariant {
@@ -787,8 +1025,8 @@ mod tests {
         // VCF ingest path had no such check at all, so a REF=A ALT=A record
         // silently became a no-op "variant" in the truth VCF.
         let vcf = "chr1\t100\ttest_snp\tA\tA\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        assert!(records_to_events(records).is_err());
+        let records = parse_records(vcf).unwrap();
+        assert!(to_events(records).is_err());
     }
 
     #[test]
@@ -797,16 +1035,16 @@ mod tests {
         // (e.g. soft-masked casing) must be caught too, not just an exact
         // byte-for-byte match.
         let vcf = "chr1\t100\ttest_snp\tA\ta\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        assert!(records_to_events(records).is_err());
+        let records = parse_records(vcf).unwrap();
+        assert!(to_events(records).is_err());
     }
 
     #[test]
     fn test_parse_small_deletion_record() {
         // Small del: REF=ACG, ALT=A at POS=100 (1-based) → 0-based pos=99
         let vcf = "chr1\t100\ttest_del\tACG\tA\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::SmallVariant {
@@ -827,8 +1065,8 @@ mod tests {
     fn test_parse_small_insertion_record() {
         // Small ins: REF=A, ALT=ACGT at POS=100 (1-based) → 0-based pos=99
         let vcf = "chr1\t100\ttest_ins\tA\tACGT\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::SmallVariant {
@@ -848,8 +1086,8 @@ mod tests {
     #[test]
     fn test_parse_small_variant_with_af() {
         let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=0.25\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::SmallVariant {
                 allele_fraction, ..
@@ -879,8 +1117,8 @@ mod tests {
     #[test]
     fn test_small_variant_alleles_are_uppercased_like_the_event_spec() {
         let vcf = "chr1\t100\tsnp1\ta\tc\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         let (spec_event, _) = crate::exon::parse_event_spec("snp:chr1:100:a:c", &[]).unwrap();
         assert_eq!(
             small_variant_alleles(&events[0]),
@@ -897,7 +1135,7 @@ mod tests {
     fn test_symbolic_alt_skipped() {
         // Symbolic ALT without SVTYPE should be skipped.
         let vcf = "chr1\t100\ttest\tA\t<DEL>\t.\t.\t.\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let records = parse_records(vcf).unwrap();
         assert!(records.is_empty());
     }
 
@@ -918,8 +1156,8 @@ mod tests {
     fn test_vcf_coordinate_parsing() {
         // DEL: POS=100 (preceding base), END=200 → 0-based [100, 200)
         let vcf = "chr1\t100\ttest_del\tN\t<DEL>\t.\t.\tSVTYPE=DEL;END=200\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Deletion {
                 del_start, del_end, ..
@@ -932,8 +1170,8 @@ mod tests {
 
         // DUP: POS=500, END=1000 → 0-based [500, 1000)
         let vcf = "chr1\t500\ttest_dup\tN\t<DUP>\t.\t.\tSVTYPE=DUP;END=1000\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Duplication {
                 dup_start, dup_end, ..
@@ -946,8 +1184,8 @@ mod tests {
 
         // BND: t[p[ at POS=100 keeps base 100 of chr1, then chr2 from base 200
         let vcf = "chr1\t100\ttest_bnd\tN\tN[chr2:200[\t.\t.\tSVTYPE=BND\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Fusion {
                 bp_a,
@@ -964,8 +1202,8 @@ mod tests {
 
         // INS: POS=300 (preceding base) → 0-based pos = 300
         let vcf = "chr1\t300\ttest_ins\tN\t<INS>\t.\t.\tSVTYPE=INS;SVLEN=50\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Insertion { pos, ins_len, .. } => {
                 assert_eq!(*pos, 300);
@@ -984,8 +1222,8 @@ mod tests {
     fn test_del_no_end_no_svlen_derives_length_from_ref() {
         // REF=ACGT, ALT=A: 3 deleted bases (ACGT minus the anchor A).
         let vcf = "chr1\t100\ttest_del\tACGT\tA\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::Deletion {
@@ -1001,8 +1239,8 @@ mod tests {
     #[test]
     fn test_dup_no_end_no_svlen_derives_length_from_ref() {
         let vcf = "chr1\t100\ttest_dup\tACGT\tA\t.\t.\tSVTYPE=DUP\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::Duplication {
@@ -1018,8 +1256,8 @@ mod tests {
     #[test]
     fn test_inv_no_end_no_svlen_derives_length_from_ref() {
         let vcf = "chr1\t100\ttest_inv\tACGT\tA\t.\t.\tSVTYPE=INV\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
             SimEvent::Inversion {
@@ -1037,24 +1275,24 @@ mod tests {
         // Symbolic ALT, single-base REF, no END, no SVLEN: no length
         // information exists. Must not silently become a 1 bp deletion.
         let vcf = "chr1\t100\ttest_del\tN\t<DEL>\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty());
     }
 
     #[test]
     fn test_dup_no_end_no_svlen_single_base_ref_is_rejected() {
         let vcf = "chr1\t100\ttest_dup\tN\t<DUP>\t.\t.\tSVTYPE=DUP\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty());
     }
 
     #[test]
     fn test_inv_no_end_no_svlen_single_base_ref_is_rejected() {
         let vcf = "chr1\t100\ttest_inv\tN\t<INV>\t.\t.\tSVTYPE=INV\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty());
     }
 
@@ -1072,8 +1310,8 @@ mod tests {
     #[test]
     fn test_del_sequence_resolved_multibase_alt_strips_the_shared_prefix() {
         let vcf = format!("chr20\t38412500\t.\t{}\tGTTAAAG\t.\t.\tSVTYPE=DEL\n", REF21);
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one DEL event, got {:?}", events);
         match &events[0] {
             SimEvent::Deletion {
@@ -1089,8 +1327,8 @@ mod tests {
 
         // The same span must come back out of the truth VCF's END form.
         let round = "chr20\t38412506\t.\tG\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=38412520;SVLEN=-14\n";
-        let records = parse_vcf_records(round.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(round).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Deletion {
                 del_start, del_end, ..
@@ -1114,8 +1352,8 @@ mod tests {
             "chr20\t38412500\t.\t{}\t{}\t.\t.\tSVTYPE=INV\n",
             REF21, RC21
         );
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
         match &events[0] {
             SimEvent::Inversion {
@@ -1141,8 +1379,8 @@ mod tests {
             "chr20\t38412500\t.\t{}\t{}\t.\t.\tSVTYPE=INV\n",
             REF21, not_rc
         );
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(
             events.is_empty(),
             "an equal-length pair that is not an inversion must not decode: {:?}",
@@ -1156,8 +1394,8 @@ mod tests {
     #[test]
     fn test_dup_no_end_no_svlen_derives_length_from_alt_sequence() {
         let vcf = format!("chr20\t38412499\t.\tT\tT{}\t.\t.\tSVTYPE=DUP\n", REF21);
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
         match &events[0] {
             SimEvent::Duplication {
@@ -1177,8 +1415,8 @@ mod tests {
     #[test]
     fn test_dup_multibase_ref_and_alt_is_rejected() {
         let vcf = "chr20\t38412499\t.\tTGTT\tTGTTTGTT\t.\t.\tSVTYPE=DUP\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(
             events.is_empty(),
             "REF and ALT both carrying sequence must not be read as a length: {:?}",
@@ -1192,8 +1430,8 @@ mod tests {
     #[test]
     fn test_derived_sv_end_round_trips_through_end_info() {
         let vcf = format!("chr20\t38412499\t.\tT\tT{}\t.\t.\tSVTYPE=DUP\n", REF21);
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
         let (start, end) = match &events[0] {
             SimEvent::Duplication {
@@ -1209,8 +1447,8 @@ mod tests {
             end,
             end - start
         );
-        let records = parse_vcf_records(round.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(&round).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Duplication {
                 dup_start, dup_end, ..
@@ -1228,8 +1466,8 @@ mod tests {
     #[test]
     fn test_sequence_ins_strips_the_prefix_ref_and_alt_share() {
         let vcf = "chr1\t100\ttest_ins\tAT\tATGGG\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one INS event, got {:?}", events);
         match &events[0] {
             SimEvent::Insertion {
@@ -1254,8 +1492,8 @@ mod tests {
     #[test]
     fn test_sequence_ins_strips_a_shared_suffix_too() {
         let vcf = "chr1\t100\ttest_ins\tAT\tAGGGT\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one INS event, got {:?}", events);
         match &events[0] {
             SimEvent::Insertion {
@@ -1276,8 +1514,8 @@ mod tests {
     #[test]
     fn test_sequence_ins_with_single_base_ref_is_unchanged() {
         let vcf = "chr1\t100\ttest_ins\tA\tAGGG\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Insertion {
                 pos,
@@ -1299,8 +1537,8 @@ mod tests {
     #[test]
     fn test_sequence_ins_with_ref_bases_alt_drops_is_rejected() {
         let vcf = "chr1\t100\ttest_ins\tATT\tATGGG\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(
             events.is_empty(),
             "a complex REF/ALT pair must not decode as an insertion: {:?}",
@@ -1313,7 +1551,7 @@ mod tests {
     #[test]
     fn test_not_an_insertion_warning_identifies_record_by_chrom_and_pos() {
         let vcf = "chr20\t38412500\t.\tATT\tATGGG\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let records = parse_records(vcf).unwrap();
         let msg = not_an_insertion_warning(&records[0]);
         assert!(
             msg.contains("chr20:38412500"),
@@ -1333,7 +1571,7 @@ mod tests {
     #[test]
     fn test_no_length_warning_identifies_record_by_chrom_and_pos() {
         let vcf = "chr20\t38412500\t.\tN\t<DEL>\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let records = parse_records(vcf).unwrap();
         let msg = no_length_warning(&records[0], "DEL");
         assert!(
             msg.contains("chr20:38412500"),
@@ -1356,8 +1594,8 @@ mod tests {
     #[test]
     fn test_del_single_base_alt_that_is_not_the_anchor_strips_the_shared_suffix() {
         let vcf = "chr1\t100\ttest_del\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one DEL event, got {:?}", events);
         match &events[0] {
             SimEvent::Deletion {
@@ -1372,8 +1610,8 @@ mod tests {
         // The normalised spelling of the same event still decodes the way it
         // always did: REF=ACGT ALT=A is the 3 bases after the anchor.
         let normalised = "chr1\t100\ttest_del\tACGT\tA\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(normalised.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(normalised).unwrap();
+        let events = to_events(records).unwrap();
         match &events[0] {
             SimEvent::Deletion {
                 del_start, del_end, ..
@@ -1391,21 +1629,21 @@ mod tests {
     fn test_alleles_that_place_the_event_before_the_first_base_are_rejected() {
         // DEL: shared suffix only, so the preceding base would be 0.
         let del = "chr1\t1\ttest_del\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(del.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(del).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty(), "DEL before base 1 must not decode: {:?}", events);
 
         // INV written as an equal-length substitution: POS is the first
         // inverted base, so the preceding base would be 0.
         let inv = "chr1\t1\ttest_inv\tAGTT\tAACT\t.\t.\tSVTYPE=INV\n";
-        let records = parse_vcf_records(inv.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(inv).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty(), "INV before base 1 must not decode: {:?}", events);
 
         // INS whose alleles share only a suffix, same story.
         let ins = "chr1\t1\ttest_ins\tAT\tGGGAT\t.\t.\tSVTYPE=INS\n";
-        let records = parse_vcf_records(ins.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(ins).unwrap();
+        let events = to_events(records).unwrap();
         assert!(events.is_empty(), "INS before base 1 must not decode: {:?}", events);
     }
 
@@ -1414,7 +1652,7 @@ mod tests {
     #[test]
     fn test_before_first_base_warning_identifies_record_by_chrom_and_pos() {
         let vcf = "chr20\t1\t.\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let records = parse_records(vcf).unwrap();
         let msg = before_first_base_warning(&records[0], "DEL");
         assert!(
             msg.contains("chr20:1"),
@@ -1437,8 +1675,8 @@ mod tests {
     #[test]
     fn test_inv_equal_length_self_complementary_ends_span_the_whole_record() {
         let vcf = "chr1\t100\ttest_inv\tAGTT\tAACT\t.\t.\tSVTYPE=INV\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
         match &events[0] {
             SimEvent::Inversion {
@@ -1461,8 +1699,8 @@ mod tests {
     #[test]
     fn test_inv_equal_length_with_a_padding_base_inverts_ref_past_the_anchor() {
         let vcf = "chr1\t100\ttest_inv\tTAGTT\tTAACT\t.\t.\tSVTYPE=INV\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
         match &events[0] {
             SimEvent::Inversion {
@@ -1483,8 +1721,8 @@ mod tests {
     #[test]
     fn test_dup_single_base_ref_that_is_not_alts_first_base_is_rejected() {
         let vcf = "chr1\t100\ttest_dup\tT\tGGGT\t.\t.\tSVTYPE=DUP\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert!(
             events.is_empty(),
             "an ALT that does not start with the REF anchor must not decode: {:?}",
@@ -1499,8 +1737,8 @@ mod tests {
     #[test]
     fn test_dup_alt_shorter_than_ref_spans_the_bases_ref_keeps() {
         let vcf = "chr1\t100\ttest_dup\tTGTT\tTG\t.\t.\tSVTYPE=DUP\n";
-        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
-        let events = records_to_events(records).unwrap();
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
         assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
         match &events[0] {
             SimEvent::Duplication {
@@ -1510,5 +1748,197 @@ mod tests {
             }
             _ => panic!("expected Duplication"),
         }
+    }
+
+    // ---- L11: every skipped record is counted, and INFO AF is not a VAF ----
+
+    /// VCF v4.3 writes SV subtypes with a colon, and `DUP:TANDEM` is exactly
+    /// the tandem duplication spike simulates — dropping it was the bug, not
+    /// something merely to report.
+    #[test]
+    fn test_dup_tandem_subtype_is_simulated_as_a_duplication() {
+        let vcf = "chr1\t100\tdup1\tN\t<DUP>\t.\t.\tSVTYPE=DUP:TANDEM;END=200\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(stats.unsimulated_sv_type, 0);
+        assert_eq!(events.len(), 1, "DUP:TANDEM must be simulated, not dropped");
+        match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => assert_eq!((*dup_start, *dup_end), (100, 200)),
+            other => panic!("expected Duplication, got {:?}", other),
+        }
+    }
+
+    /// A mobile-element deletion is still a deletion; the base type before
+    /// the first colon is what decides how spike simulates the record.
+    #[test]
+    fn test_mobile_element_del_subtype_is_simulated_as_a_deletion() {
+        let vcf = "chr1\t100\tdel1\tN\t<DEL>\t.\t.\tSVTYPE=DEL:ME:ALU;END=200\n";
+        let (events, _) = ingest(vcf);
+        assert_eq!(events.len(), 1, "DEL:ME:ALU must be simulated, not dropped");
+    }
+
+    #[test]
+    fn test_unsimulated_svtype_is_counted() {
+        let vcf = "chr1\t100\tcnv1\tN\t<CNV>\t.\t.\tSVTYPE=CNV;END=200\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.unsimulated_sv_type, 1);
+        assert_eq!(stats.total_dropped(), 1);
+    }
+
+    /// Taking the first of several ALT alleles would silently simulate part
+    /// of the record, so a multi-allelic line is dropped — and counted under
+    /// its own reason, since "multi-allelic" is what the user has to fix.
+    #[test]
+    fn test_multi_allelic_record_is_counted() {
+        let vcf = "chr1\t100\tsnp1\tA\tT,G\t.\t.\t.\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.multi_allelic, 1);
+    }
+
+    #[test]
+    fn test_short_line_is_counted() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.short_line, 1);
+    }
+
+    #[test]
+    fn test_unparseable_pos_is_counted() {
+        let vcf = "chr1\tnot_a_pos\tsnp1\tA\tT\t.\t.\t.\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.bad_pos, 1);
+    }
+
+    #[test]
+    fn test_symbolic_allele_without_svtype_is_counted() {
+        let vcf = "chr1\t100\tx1\tA\t<DEL>\t.\t.\t.\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.not_a_small_variant, 1);
+    }
+
+    /// L7's rejection: a DEL with no END, no SVLEN and alleles that state no
+    /// span. It warns already; L11 is that it was not counted.
+    #[test]
+    fn test_record_with_no_resolvable_span_is_counted() {
+        let vcf = "chr1\t100\tdel1\tAC\tGT\t.\t.\tSVTYPE=DEL\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.no_length, 1);
+    }
+
+    /// The other no-length shape: an INS with neither SVLEN nor an ALT that
+    /// spells out the inserted bases.
+    #[test]
+    fn test_ins_with_no_length_anywhere_is_counted() {
+        let vcf = "chr1\t100\tins1\tN\t<INS>\t.\t.\tSVTYPE=INS\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.no_length, 1);
+    }
+
+    /// L10's rejection: an INS whose REF keeps bases its ALT drops.
+    #[test]
+    fn test_ins_that_is_not_an_insertion_is_counted() {
+        let vcf = "chr1\t100\tins1\tAT\tAGG\t.\t.\tSVTYPE=INS\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.not_an_insertion, 1);
+    }
+
+    /// L10's other rejection: alleles that put the event before base 0.
+    #[test]
+    fn test_event_before_the_first_base_is_counted() {
+        let vcf = "chr1\t1\tdel1\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.before_first_base, 1);
+    }
+
+    /// Several reasons in one file are tallied separately, which is the
+    /// point of a per-reason count over a single total.
+    #[test]
+    fn test_skip_reasons_are_counted_separately() {
+        let vcf = "chr1\t100\tsnp1\tA\tT,G\t.\t.\t.\n\
+                   chr1\t200\tcnv1\tN\t<CNV>\t.\t.\tSVTYPE=CNV;END=300\n\
+                   chr1\t300\tsnp2\tA\tT\n\
+                   chr1\t400\tsnp3\tA\tT\t.\t.\t.\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events.len(), 1, "the well-formed SNP is still simulated");
+        assert_eq!(
+            (stats.multi_allelic, stats.unsimulated_sv_type, stats.short_line),
+            (1, 1, 1)
+        );
+        assert_eq!(stats.total_dropped(), 3);
+    }
+
+    /// In a population VCF `AF` is the allele frequency in the population,
+    /// not the fraction of this sample's reads that carry the allele, so
+    /// reading it as a VAF silently writes a truth set at the wrong VAF.
+    #[test]
+    fn test_plain_info_af_is_not_read_as_a_vaf_by_default() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tAF=0.001\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events[0].allele_fraction(), None);
+        assert_eq!(stats.af_info_ignored, 1);
+    }
+
+    /// `--vcf-info-af` is how a VCF that really does state a VAF in `AF`
+    /// keeps working.
+    #[test]
+    fn test_plain_info_af_is_read_when_opted_in() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tAF=0.001\n";
+        let (events, stats) = ingest_vcf(vcf.as_bytes(), true).unwrap();
+        assert_eq!(events[0].allele_fraction(), Some(0.001));
+        assert_eq!(stats.af_info_ignored, 0);
+    }
+
+    /// SIM_VAF is spike's own key, so it is read either way; only `AF` is
+    /// behind the flag.
+    #[test]
+    fn test_sim_vaf_is_read_without_the_flag() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=0.25;AF=0.001\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events[0].allele_fraction(), Some(0.25));
+        assert_eq!(stats.af_info_ignored, 0);
+    }
+
+    /// A VAF the record states but that cannot be used falls back to
+    /// --allele-fraction. That fallback used to be silent, so a truth set
+    /// came out at the CLI default without saying so.
+    #[test]
+    fn test_unusable_vaf_value_is_counted() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=nan\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events[0].allele_fraction(), None);
+        assert_eq!(stats.af_unusable, 1);
+    }
+
+    /// spike acts on neither FILTER nor GT, so a non-PASS or hom-ref record
+    /// is simulated like any other; the counts are how the run says so.
+    #[test]
+    fn test_non_pass_and_hom_ref_records_are_counted_but_simulated() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\tLowQual\t.\tGT:DP\t0/0:30\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events.len(), 1, "FILTER and GT are ignored, not acted on");
+        assert_eq!((stats.non_pass, stats.hom_ref), (1, 1));
+        assert_eq!(stats.total_dropped(), 0, "neither is a drop");
+    }
+
+    /// A clean file reports nothing, so the summary only ever appears when
+    /// there is something to say.
+    #[test]
+    fn test_a_clean_vcf_counts_nothing() {
+        let vcf = "##fileformat=VCFv4.3\n\
+                   #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+                   chr1\t100\tsnp1\tA\tT\t.\tPASS\tSIM_VAF=0.3\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events.len(), 1);
+        assert_eq!(stats, VcfIngestStats::default());
     }
 }

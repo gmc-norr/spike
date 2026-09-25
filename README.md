@@ -237,9 +237,25 @@ Supported VCF records:
 - **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN. A DEL/DUP/INV with neither falls back to the alleles, but only where they give an unambiguous span. Except for an inversion (below), the flanks `REF` and `ALT` share are stripped first (the common prefix, then any common suffix left over), so the event starts after the last base both alleles keep, not at `POS`: `POS=38412500 REF=GTTAAAGTTTATCAGAAAATT ALT=GTTAAAG SVTYPE=DEL` is the 14 bp deletion 38412507-38412520, anchored at 38412506. A single-base `ALT` is stripped like any other — it is the anchor base only when it really is `REF`'s first base, so `REF=ACGT ALT=T` deletes `ACG` and is anchored at `POS`-1, not `CGT` anchored at `POS`. What is left of the alleles then has to spell the event — `REF` keeping bases `ALT` drops, in which case the span is those bases, for all three types (`REF=ACGT ALT=A` and `REF=TGTT ALT=TG` both state one); or, for DUP, a single-base `REF` anchor whose `ALT` is that anchor plus the duplicated copy (`REF=G ALT=GACGT...`, the same form a sequence-resolved INS uses). An INV written out base for base is read whole instead, because an inversion's span is *stated* by the record rather than derived from where its alleles differ: `REF` is either the inverted region itself with `ALT` its reverse complement (an equal-length substitution, which carries no padding base and so starts at `POS` itself) or a padding base followed by that pair. Stripping shared flanks here would read `REF=AGTT ALT=AACT`, whose ends are their own complements, as a 2 bp inversion of the middle. Anything else — a complex pair, an `ALT` that is not the reverse complement where an INV needs one, a DUP whose `ALT` is longer and carries sequence in both alleles (its copy could equally be `REF`'s own span) or whose `ALT` does not begin with the `REF` anchor, a record with no length anywhere, or alleles that would start the event before the chromosome's first base (`POS=1` with no shared prefix) — is rejected with a warning naming its type and `chrom:pos` (logged to stderr) instead of being silently treated as a 1 bp event. A sequence-resolved INS is read the same way: `REF=AT ALT=ATGGG` inserts the 3 bases `GGG` after the `T`, and a record whose `REF` keeps bases its `ALT` drops is not an insertion at all and is skipped with the same kind of warning
 - **BND** — breakend notation, paired by MATEID into Fusion events. All four forms are read (`t[p[`, `]p]t`, `t]p]`, `[p[t`); either record of a mate pair gives the same fusion
 - **SNP/indel** — standard REF/ALT records without SVTYPE; a record whose REF and ALT are identical once case is normalized (e.g. `A`/`a`) is rejected rather than turned into a no-op "variant" in the truth VCF
-- **AF from INFO** — reads `SIM_VAF`, `VAF`, or `AF` fields (checked in that order)
+- **AF from INFO** — reads `SIM_VAF` then `VAF`. Plain `AF` is **not** read by default: in a population VCF (gnomAD, 1000G) `AF` is the allele frequency in the population, not the fraction of this sample's reads that should carry the allele, so using it silently produces a truth set at the wrong VAF. A record with only `AF` falls back to `--allele-fraction`, and the run reports how many did. Pass `--vcf-info-af` to read `AF` as the VAF, for a VCF that really does state one there. A VAF key whose value is not a fraction in (0, 1] (`SIM_VAF=nan`, an unparseable number) is likewise reported and falls back to `--allele-fraction`, rather than being silently substituted
 
 Both plain `.vcf` and bgzip-compressed `.vcf.gz` files are supported.
+
+**Every record spike does not simulate is counted and reported on stderr**, per reason, so a truth set that is short of records says why rather than leaving it to be noticed downstream:
+
+```
+WARN skipped 3 VCF record(s): 1 short line (fewer than 8 columns); 1 multi-allelic ALT; 1 SVTYPE spike does not simulate
+```
+
+The reasons are: a short line (fewer than the 8 mandatory columns), a `POS` that is not a positive integer, a multi-allelic `ALT` (spike simulates one allele per record, and taking the first of `A,T` would silently simulate half of it), an `SVTYPE` spike has no model for (`CNV`), a record with no `SVTYPE` whose alleles are not plain DNA to fall back on, and the three allele-shape rejections described above (no length or span, an `INS` whose `ALT` is not its `REF` plus inserted bases, and an event that would start before the chromosome's first base).
+
+`SVTYPE` subtypes are read: VCF v4.3 writes them with a colon, and the base type before the first one decides the simulation, so `DUP:TANDEM` is simulated as a duplication and `DEL:ME:ALU` as a deletion, identically to the plain type.
+
+spike acts on neither `FILTER` nor `GT`, so a non-PASS or `0/0` record is simulated like any other. It counts them and says so, so that is visible rather than assumed:
+
+```
+INFO VCF ingest ignores FILTER and GT: 1 record(s) it read are not PASS and 0 are homozygous reference; all are simulated like any other
+```
 
 ### CRAM input
 
@@ -463,6 +479,11 @@ Options:
 
       --vcf <VCF>
           Input VCF file with variant records. Supports DEL, INS, DUP, INV, BND, and standard SNP/indel records (no SVTYPE, explicit REF/ALT alleles). Can be combined with --event. At least one of --event or --vcf required
+
+      --vcf-info-af
+          Read INFO/AF from --vcf records as the allele fraction to simulate.
+          
+          Off by default: in a population VCF (gnomAD, 1000G) AF is the allele frequency in the population, not the fraction of this sample's reads that should carry the allele, so using it silently produces a truth set at the wrong VAF. Without this flag only SIM_VAF and VAF are read and a record with only AF falls back to --allele-fraction, with a count of how many did on stderr.
 
       --exon-bed <EXON_BED>
           Exon BED file. Required when using gene-based --event specs (e.g. "del:GENE:exon4-exon8")

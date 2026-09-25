@@ -74,6 +74,17 @@ struct Args {
     #[arg(long)]
     vcf: Option<String>,
 
+    /// Read INFO/AF from --vcf records as the allele fraction to simulate.
+    ///
+    /// Off by default: in a population VCF (gnomAD, 1000G) AF is the allele
+    /// frequency in the population, not the fraction of this sample's reads
+    /// that should carry the allele, so using it silently produces a truth
+    /// set at the wrong VAF. Without this flag only SIM_VAF and VAF are read
+    /// and a record with only AF falls back to --allele-fraction, with a
+    /// count of how many did on stderr.
+    #[arg(long)]
+    vcf_info_af: bool,
+
     /// Exon BED file. Required when using gene-based --event specs (e.g. "del:GENE:exon4-exon8").
     #[arg(long)]
     exon_bed: Option<String>,
@@ -326,7 +337,7 @@ fn main() -> Result<()> {
 
     // Load events from --vcf if provided.
     let vcf_events: Vec<SimEvent> = if let Some(vcf_path) = &args.vcf {
-        vcf_input::load_events_from_vcf(vcf_path)?
+        vcf_input::load_events_from_vcf(vcf_path, args.vcf_info_af)?
     } else {
         Vec::new()
     };
