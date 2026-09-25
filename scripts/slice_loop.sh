@@ -50,6 +50,13 @@ bash "$out/run/merge.sh" "$out/slice.bam" "$ref" "$threads" > "$out/merge.log" 2
   --reference "$ref" "$@" > "$out/validate.txt" 2> "$out/validate.log"
 echo $? > "$out/validate.exit"
 
+# The same report as JSON. The text table is space-padded, so a scorer that
+# parses it has to guess where the event label ends; `--json` names every field.
+# Both come from the same merged BAM, which is deleted right after.
+"$spike" validate --bam "$out/run/merged.bam" --truth "$out/run/truth.vcf" \
+  --reference "$ref" --json "$@" > "$out/validate.json" 2> "$out/validate.json.log"
+echo $? > "$out/validate.json.exit"
+
 # Keep the disk use down: the merged BAM is the only large file and it has been
 # scored by the time we get here. `--keep-merged` in EXTRA is not a validate flag,
 # so a caller that needs it keeps it by copying before calling again.

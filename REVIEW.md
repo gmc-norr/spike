@@ -3414,7 +3414,7 @@ the exit status.
 | ID | What | Status |
 | --- | --- | --- |
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
-| T2 | `coverage_ratio` at every MAPQ, advisory | Plan locked |
+| T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Not started |
 | T4 | CR4 on a real hard locus (measurement only) | Not started |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
@@ -3665,3 +3665,85 @@ harder to read than a repeated one.
 donor pool and thick at any MAPQ whether or not the library is uneven, so this row cannot tell
 "spike could not edit these reads" from "this locus is hard". That is what C4 measures the cost
 of. It also double-counts work: three more region queries per DEL and DUP event.
+
+#### Result: T2 -- supported
+
+Code `c18eb9b`, reviewed and fixed in `6026fa3`. Binaries, each built in its own target dir and
+md5'd (NF4): base `985e50f` `2dd58097…`, T2 `c18eb9b` `880eef59…`, T2 fixed `6026fa3`
+`68fa912b…`. New scripts: `scripts/probe_donors.py` and `scripts/probe_loop.sh` (a review probe
+through the whole loop, on a real merged BAM -- the probes' own helper reconstructs `merge.sh` in
+Python and never makes a BAM, so the coverage checks could not be run on them before),
+`scripts/real_events.sh` and `scripts/real_events_score.py` (many real events through
+`slice_loop.sh`, scored from `--json` rather than from the space-padded text table).
+
+- **C1 pass -- it rejects the known case.** The `lowmap` probe through spike, `align.sh` and
+  `merge.sh`, `del:chrT:10000-14000;af=1`, validated at the **default** `--min-mapq`:
+
+  ```
+  DEL chrT:10000-14000 (unknown)      coverage_ratio     0.00                      0.00            PASS
+  DEL chrT:10000-14000 (unknown)      coverage_any_mapq  0.00                      0.50            FAIL (advisory)
+  ```
+
+  Observed 0.50, inside the locked [0.40, 0.60]. The two rows disagree on the same run, which is
+  the whole point of the row: `coverage_ratio` cannot see the MAPQ-0 half of the donor that spike
+  never edited, and the new row can. T1's `resistant` row reads 0.500 on the same event.
+- **C2 pass -- it accepts a correct control.** The `uniform` probe, same event:
+  `coverage_any_mapq 0.00 observed, PASS (advisory)`.
+- **C3 pass -- the default is unchanged.** On both probe runs and on the real control
+  (`del:chr20:1136743-1146743` through `scripts/slice_loop.sh`): the same exit status under
+  master's binary and T2's (probes 1 and 1, control 0 and 0), and with the advisory rows and the
+  summary line removed the tables are **identical** (`diff` empty in all three).
+  `spike --help` is byte-identical to master's, and `spike validate --help 2>&1` is
+  byte-identical to T1's -- no flag added. The real control now reads `Result: 8/8 PASS`.
+- **C4 pass -- its false-failure rate on correct real data.** The 40 seeded spans (list md5
+  `8f30486221e221e76c7a863ae0755c4b`, as locked) as `del:` events, each on its own ±100 kb slice
+  of the 35x HG002 BAM through `scripts/slice_loop.sh`. **All 40 ran, none refused**, and
+  `coverage_any_mapq` fired on **0 of 40** against a bar of 8. Observed: min 0.44, median 0.50,
+  max 0.56 -- tight around the expected 0.50, and tighter than `coverage_ratio`'s own spread on
+  the same runs (min 0.44, median 0.49, **max 0.72**).
+- **C5 pass -- the gates.** `cargo test`: `502 passed; 0 failed; 1 ignored` (T1 left 494).
+  Clippy `13` (bin) / `14` (test), unchanged.
+
+**Three things the 40-event run measured that T2 did not ask for**, all recorded because a
+verification that reddens nothing is a finding:
+
+- **`split_reads`, which is not advisory, fails on 4 of the 40 correct deletions** (events 15,
+  25, 33 and 34, each `observed 0`), so four correct real spike-ins exit 1 on master's binary as
+  well. Confirmed on master's binary on event 34 (`del:chr20:56107004-56117004`):
+  `split_reads >=2 joining chr20:561… 0 FAIL`, `Result: 4/5 PASS`, exit 1. A 10% false-failure
+  rate on an existing default check is the baseline T5's per-breakpoint version has to be judged
+  against, and it is filed as RF6.
+- **`depth_fold` fires on 2 of the 40 as deletions** (events 13 at 1.71 and 15 at 2.46), against
+  CR2's C4 measurement of 6 of 40 with the same spans as **duplications**. The metric is the
+  donor's own depth profile, so the difference is the haplotype the event draws from, not noise.
+- **`resistant` reproduces CR4's C4 exactly**: min 0.003→0.00, median 0.01, **max 0.083 at event
+  34**, the same event and the same value CR4 recorded. Two independent runs, two binaries, the
+  same number.
+
+**Reviewed and fixed (`6026fa3`).** The reviewer passed T2 on spec (every locked clause met,
+nothing extra but one forced README sentence) and raised one Important issue and six Minor ones,
+all fixed:
+
+- **Important:** `check_outcome`'s `Ok` arm overwrites `advisory`, so the flag threaded through
+  `check_coverage_ratio` into `coverage_ratio_result` was dead *and* untested -- flipping it at
+  the call site left all 501 tests green. T5 and T6 build on this mechanism, so an author could
+  have shipped a non-advisory row with nothing reddening, putting it in the exit status. The
+  parameter was removed; `check_outcome` is now the single source of truth, and flipping the one
+  remaining argument reddens 3 tests.
+- The `flank_depth < 1.0` early return was untested for the new name (re-hardcoding
+  `"coverage_ratio"` there left the suite green and would have printed two rows with the same
+  name and different verdicts); the Check-column fit was documented but unpinned (a 19-character
+  name moves Status and nothing failed -- measured: 17 and 18 both put Status at offset 97, 19
+  puts it at 98, so the doc comment's "18" was itself off by one and the test now carries both
+  assertions); `"coverage_ratio"` was a bare literal beside a const; ~70 lines of CRAM fixture
+  scaffolding were duplicated (extracted from **three** fixtures, not the two named, so T5 and T6
+  have one to call); a dead unit-tuple in a read plan; and README called a unit-test fixture "a
+  probe CRAM" two paragraphs from the chrT review probe.
+
+**What T2 does not establish.** The row cannot tell "spike could not edit these reads" from "this
+locus is hard": a real locus of low mappability reads thin in the donor pool and thick at any
+MAPQ whether or not the library is uneven. C4 measures the cost of that on ordinary benchmark
+loci and finds it zero there; it says nothing about a hard locus, which is T4's question. The row
+also does not share its record stream with `coverage_ratio` -- it runs three more region queries
+per DEL and DUP event -- so the two rows differ only in the floor **by construction of the same
+code**, not by construction of the same pass over the reads.
