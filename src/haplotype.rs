@@ -642,8 +642,10 @@ impl VariantHaplotype {
     /// Check if a haplotype range [start, start+len) overlaps any reference-mapped segment.
     ///
     /// Returns true if at least one base in the range comes from a reference segment
-    /// (i.e., is not novel insertion sequence). Used to reject tiling fragments that
-    /// would land entirely in novel sequence and not contribute to observable coverage.
+    /// (i.e., is not novel insertion sequence). Tiling placement no longer calls this
+    /// directly -- `sample_ref_overlapping_start` in simulate.rs draws only from starts
+    /// that satisfy this predicate -- but the tests use it as their oracle to check that
+    /// sampler's output.
     pub fn overlaps_ref_segment(&self, start: u64, len: u64) -> bool {
         let end = start + len;
         for seg in &self.segments {

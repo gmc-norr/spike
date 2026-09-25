@@ -587,7 +587,7 @@ fn compute_tiling_count(
 
     // Fragment starts are uniform over the starts whose fragment overlaps
     // reference sequence: [0, L - f] minus starts lying wholly inside inserted
-    // sequence (tiling redraws those). Interior depth is then n * f / starts;
+    // sequence (tiling never draws those). Interior depth is then n * f / starts;
     // matching the suppressed v * coverage needs n = coverage * v * starts / f.
     let novel_only: f64 = haplotype
         .segments
@@ -756,9 +756,11 @@ fn tile_haplotype_reads(
 
     let mut pairs = Vec::with_capacity(n_frags);
 
-    // Check if any novel (non-reference) segments exist. If so, we use
-    // rejection sampling to avoid placing fragments entirely within novel
-    // sequence (which wouldn't contribute to observable reference-aligned coverage).
+    // Check if any novel (non-reference) segments exist. If so, placement
+    // below draws the fragment start directly from the starts whose fragment
+    // overlaps reference sequence, so a fragment is never placed entirely
+    // within novel sequence (which wouldn't contribute to observable
+    // reference-aligned coverage).
     let has_novel = haplotype.segments.iter().any(|seg| seg.origin.is_none());
 
     // Attempt up to 2x the target count to compensate for rejected placements
@@ -802,6 +804,13 @@ fn tile_haplotype_reads(
             // anchor (CR5).
             match sample_ref_overlapping_start(haplotype, frag_len, max_start, rng) {
                 Some(start) => start,
+                // Unreachable for any haplotype the CLI can build:
+                // `validate_flank` forces `--flank >= HAP_FLANK` (2000) and
+                // `from_insertion` always yields at least one non-empty
+                // flank, so the reference-overlapping union is provably
+                // non-empty whenever frag_len <= hap_len. If it were ever
+                // empty regardless, skipping is still the safe choice -- an
+                // invalid start must never be emitted.
                 None => continue,
             }
         } else {
@@ -1283,6 +1292,61 @@ mod tests {
             "sampler favours one flank: {} left, {} right",
             left,
             right
+        );
+    }
+
+    #[test]
+    fn test_sample_ref_overlapping_start_weights_by_interval_length_for_unequal_flanks() {
+        // The test above uses two EQUAL flanks, so a sampler that picked an
+        // *interval* uniformly (ignoring how many starts it holds) would
+        // pass it too -- both give ~50/50. Unequal flanks tell the two
+        // apart. Reviewer's probe: ref[0,300) | 50 kb insertion | ref[300,1200),
+        // frag_len 400. The reference segments contribute [0,299] (300
+        // starts) on the left and [49901,50800] (900 starts) on the right --
+        // a 25%/75% split by length, not 50/50 by interval count.
+        let hap = make_haplotype(vec![
+            ref_segment(0, 300),
+            novel_segment(50_000),
+            ref_segment(300, 900),
+        ]);
+        let frag_len = 400;
+        let max_start = hap.total_len - frag_len;
+        assert_eq!(
+            ref_overlapping_start_intervals(&hap, frag_len, max_start),
+            vec![(0, 299), (49901, 50800)],
+            "the probe's own arithmetic for the two intervals"
+        );
+
+        let mut rng = StdRng::seed_from_u64(11);
+        let n = 10_000;
+        let mut left = 0;
+        for _ in 0..n {
+            let start = sample_ref_overlapping_start(&hap, frag_len, max_start, &mut rng)
+                .expect("a haplotype with reference flanks always has a valid start");
+            assert!(
+                hap.overlaps_ref_segment(start, frag_len),
+                "start {} puts the fragment wholly inside the insertion",
+                start
+            );
+            if start < 300 {
+                left += 1;
+            }
+        }
+
+        // Expected left fraction is 300 / 1200 = 0.25. At n = 10_000 the
+        // sampling standard error of that fraction is
+        // sqrt(0.25 * 0.75 / 10_000) ~= 0.0043, so a tolerance of 0.03 (three
+        // percentage points) is about seven standard errors -- effectively
+        // flake-proof for a correct, length-weighted draw -- while a sampler
+        // that instead picked one of the two intervals uniformly would land
+        // near 0.50, 25 points off and nowhere close to passing.
+        let left_frac = left as f64 / n as f64;
+        assert!(
+            (left_frac - 0.25).abs() < 0.03,
+            "expected ~25% of draws from the 300-start left interval, got {:.4} ({} of {})",
+            left_frac,
+            left,
+            n
         );
     }
 
@@ -2463,8 +2527,10 @@ mod tests {
     fn test_long_insertion_tiling_never_places_a_fragment_inside_the_insertion() {
         // ref (A) [0,1000) | 100 kb insertion (G) | ref (A) [1000,2000).
         // At the 400 bp mean fragment only 2000 of the 101601 starts put any
-        // reference base in the fragment -- about one in fifty -- so a uniform
-        // draw misses almost every time and the ten-redraw loop runs out.
+        // reference base in the fragment -- about one in fifty -- so this
+        // exercises `sample_ref_overlapping_start` where the
+        // reference-overlapping starts are a thin slice of the haplotype:
+        // every draw still has to land in that slice, not just most of them.
         let hap = make_haplotype(vec![
             ref_segment(0, 1000),
             novel_segment(100_000),
