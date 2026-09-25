@@ -2982,6 +2982,57 @@ it -- exactly the MAPQ-0 half of a 75x input -- and `spike validate` still repor
 `coverage_ratio observed 0.00, pass`, because its own default MAPQ filter hides the same
 reads. Code: `src/extract.rs:104`, `src/extract.rs:777`.
 
+#### Plan: CR4 option B, the resistant-read census (locked before any code or measurement)
+
+The user chose option B as **measure and warn**: no run that works today may start failing.
+Which reads are edited does not change.
+
+**Claim.** For every event spike can count the reads over the event that it cannot edit,
+write that fraction into the truth VCF, and warn when it is high, without changing anything
+it emits.
+
+**Metric.** For each event, `R = resistant / counted`, 0 when `counted` is 0.
+- *Counted:* every primary, mapped, non-duplicate, non-QC-fail record, at **any** MAPQ,
+  overlapping the event's span: `[start, end)` for DEL, DUP and INV; `[pos-1, pos+1)` for an
+  INS; `[pos, pos+len(REF))` for a small variant; `[bp-1, bp+1)` at each of a fusion's two
+  cuts, pooled.
+- *Editable:* a counted record whose read name is in that event's donor pool, or in its
+  unusable-quality set (merge.sh removes those by name, so they do not survive either).
+- *Resistant:* every other counted record: MAPQ below `--min-mapq`, not a proper pair, a mate
+  unmapped, or a mate that fails a filter.
+
+**Output.** `SIM_RESIST=<R to 3 decimals>` in the INFO of each truth record (with a header
+line), the same number per event in the run's `README.md`, and a `log::warn` when
+**R > 0.10**. The threshold is set here, before any `R` is seen: above it, the reads spike
+cannot touch are more than a tenth of the event's depth, so what it realises is off the
+request by more than a tenth.
+
+**Criteria.** Each is run and its output recorded in the result commit.
+- **C1, it fires on the known case.** The Codex script's `lowmap` BAM (half the pairs at
+  MAPQ 0), `del:chrT:10000-14000;af=1`: `SIM_RESIST` in **[0.45, 0.55]** and the warning is
+  printed.
+- **C2, it is silent on a clean donor.** The script's `uniform` BAM, same event:
+  `SIM_RESIST=0.000` and no warning.
+- **C3, it changes nothing else.** On both probes, `R1.fq.gz`, `R2.fq.gz` and
+  `replaced_reads.txt` are byte-identical to master's (`70ae5a0`, built in its own target
+  dir, md5-checked), and `truth.vcf` differs only by the new header line and INFO field.
+- **C4, it is not noise on ordinary loci.** The 40 deletions that
+  `scripts/cr4_placements.py` draws (10 kb, seeded, inside the HG002 T2T-Q100 SV benchmark
+  on chr20, md5 of its output `8f30486221e221e76c7a863ae0755c4b`), each run on its own on
+  `HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam` at the default AF: the warning
+  fires on **at most 8 of them (20%)**. An event spike refuses for another reason is reported
+  and left out of the count, and more than 4 refusals makes C4 inconclusive.
+
+**Outcome rules.**
+- C1-C4 pass: supported, keep.
+- C1, C2 or C3 fails: the census is wrong or changes the edit. Revert the code.
+- Only C4 fails: the threshold is refuted as locked. Keep `SIM_RESIST` (C1-C3 show it
+  measures what it says), remove the warning, record the distribution, and leave a new
+  threshold to a new plan on other chromosomes.
+
+Not in this step: `spike validate` reporting the fraction (that is CR9 option B), and editing
+any resistant read (option A).
+
 ### CR5 -- long-insertion placement breaks its own reference-overlap constraint
 
 **Claim.** The fragment count excludes starts lying wholly inside inserted sequence, but the
