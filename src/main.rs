@@ -468,13 +468,6 @@ fn main() -> Result<()> {
 
     let mut event_outputs = Vec::with_capacity(events.len());
 
-    // Per-event stats collected for README/log output.
-    struct EventStat {
-        vaf: f64,
-        kept: usize,
-        chimeric: usize,
-        suppressed: usize,
-    }
     let mut event_stats: Vec<EventStat> = Vec::new();
     // M14: pairs whose stored quality is unusable never reach a pool, so they
     // are in neither kept_originals nor suppressed_names.
@@ -488,7 +481,7 @@ fn main() -> Result<()> {
         log::info!("  Using VAF={:.3} for this event", vaf);
 
         // Extract reads and build pool.
-        let (pool, _extraction_chrom) = extract_pool_for_event(
+        let (pool, _extraction_chrom, dropped_unusable_qual) = extract_pool_for_event(
             event,
             &config,
             &extraction_region,
@@ -534,6 +527,7 @@ fn main() -> Result<()> {
             kept: output.kept_originals.len(),
             chimeric: output.chimeric_pairs.len(),
             suppressed: output.suppressed_count,
+            dropped_unusable_qual,
         });
 
         event_outputs.push(output);
@@ -594,12 +588,6 @@ fn main() -> Result<()> {
     // Write merge script.
     write_merge_script(&args.output, &args.bam, &args.reference, args.threads, &args.samtools)?;
 
-    // Collect per-event stats as (vaf, kept, chimeric, suppressed) tuples for README.
-    let stats_tuples: Vec<(f64, usize, usize, usize)> = event_stats
-        .iter()
-        .map(|s| (s.vaf, s.kept, s.chimeric, s.suppressed))
-        .collect();
-
     // Write README.md.
     let cmdline = std::env::args().collect::<Vec<_>>().join(" ");
     write_readme(
@@ -608,9 +596,10 @@ fn main() -> Result<()> {
         &args.bam,
         &args.reference,
         &events,
-        &stats_tuples,
+        &event_stats,
         all_output_pairs.len(),
         args.flank,
+        dropped_unreplaced,
     )?;
 
     // Summary.
@@ -1041,9 +1030,10 @@ fn extract_pool_for_event(
     config: &SimConfig,
     extraction_region: &Option<ExtractionRegion>,
     unusable_qual_names: &mut BTreeSet<String>,
-) -> Result<(ReadPool, String)> {
+) -> Result<(ReadPool, String, usize)> {
     let mut all_pairs: Vec<ReadPair> = Vec::new();
     let mut windows_searched: Vec<String> = Vec::new();
+    let unusable_before = unusable_qual_names.len();
     let pool_chrom;
 
     if let SimEvent::Fusion {
@@ -1086,8 +1076,11 @@ fn extract_pool_for_event(
         pool_chrom = chrom.to_string();
     }
 
-    let pool = finish_donor_pool(all_pairs, event, &windows_searched)?;
-    Ok((pool, pool_chrom))
+    // Names this event's windows added: `unusable_qual_names` is global, so
+    // the delta is what *this* event lost to unreadable qualities.
+    let dropped_unusable_qual = unusable_qual_names.len() - unusable_before;
+    let pool = finish_donor_pool(all_pairs, event, &windows_searched, dropped_unusable_qual)?;
+    Ok((pool, pool_chrom, dropped_unusable_qual))
 }
 
 /// Format one side's extraction windows as `chrom:start-end`, for messages.
@@ -1096,6 +1089,19 @@ fn window_labels(chrom: &str, windows: &[(u64, u64)]) -> Vec<String> {
         .iter()
         .map(|(start, end)| format!("{}:{}-{}", chrom, start, end))
         .collect()
+}
+
+/// One event's contribution to the run, for the log line and the run README.
+struct EventStat {
+    vaf: f64,
+    kept: usize,
+    chimeric: usize,
+    suppressed: usize,
+    /// Pairs this event's extraction dropped for unusable base qualities
+    /// (M14). They are in neither `kept` nor `suppressed`: `merge.sh` removes
+    /// them from the merged BAM and nothing replaces them, so they are a
+    /// depth dip in this event's window and nowhere else.
+    dropped_unusable_qual: usize,
 }
 
 /// Smallest donor pool spike will simulate one event from.
@@ -1125,6 +1131,7 @@ fn finish_donor_pool(
     mut all_pairs: Vec<ReadPair>,
     event: &SimEvent,
     windows_searched: &[String],
+    dropped_unusable_qual: usize,
 ) -> Result<ReadPool> {
     // Windows can share reads, and the same fragment must not enter the pool
     // -- or the fragment distribution -- twice. Dedup before counting: a
@@ -1133,17 +1140,22 @@ fn finish_donor_pool(
 
     if all_pairs.len() < MIN_DONOR_PAIRS {
         bail!(
-            "event {} has no usable donor reads: {} read pair(s) extracted from {}, \
-             fewer than the {} spike needs. Every simulated read is built from this \
-             pool -- its base qualities, its fragment lengths and the coverage the \
-             tiling count is scaled by all come from it -- so spike would invent reads \
-             rather than simulate them, and still write a truth VCF beside them. \
-             Check that the event lies in a covered region of the BAM, that --region \
-             (if given) covers it, and that --min-mapq is not filtering the window out.",
+            "event {} has too few usable donor reads: {} read pair(s) extracted from \
+             {}, fewer than the {} spike needs ({} record(s) in those windows were \
+             dropped for unusable base qualities and are not in that count). Every \
+             simulated read is built from this pool -- its base qualities, its \
+             fragment lengths and the coverage the tiling count is scaled by all come \
+             from it -- so spike would invent reads rather than simulate them, and \
+             still write a truth VCF beside them. Check that the event lies in a \
+             covered region of the BAM, that --region (if given) covers it, that \
+             --min-mapq is not filtering the window out, and -- if the drop count \
+             above accounts for the shortfall -- that the file's records carry base \
+             qualities spike can read (a CRAM storing them as read features does not).",
             event_label(event),
             all_pairs.len(),
             windows_searched.join(", "),
             MIN_DONOR_PAIRS,
+            dropped_unusable_qual,
         );
     }
 
@@ -1548,9 +1560,10 @@ fn write_readme(
     input_bam: &str,
     reference: &str,
     events: &[SimEvent],
-    event_stats: &[(f64, usize, usize, usize)],
+    event_stats: &[EventStat],
     total_pairs: usize,
     flank: u64,
+    dropped_unreplaced: usize,
 ) -> Result<()> {
     use std::fmt::Write as FmtWrite;
     use std::io::Write as IoWrite;
@@ -1594,22 +1607,43 @@ fn write_readme(
     writeln!(md)?;
     writeln!(md, "## Events")?;
     writeln!(md)?;
-    writeln!(md, "| # | Event | VAF | Kept reads | Chimeric reads | Suppressed reads |")?;
-    writeln!(md, "|---|-------|-----|-----------|----------------|-----------------|")?;
+    writeln!(
+        md,
+        "| # | Event | VAF | Kept reads | Chimeric reads | Suppressed reads | \
+         Dropped (unusable quality) |"
+    )?;
+    writeln!(
+        md,
+        "|---|-------|-----|-----------|----------------|-----------------|\
+         ---------------------------|"
+    )?;
     for (i, event) in events.iter().enumerate() {
         let label = event_label(event);
-        let (vaf, kept, chimeric, suppressed) = event_stats.get(i).copied().unwrap_or((0.0, 0, 0, 0));
+        let stat = event_stats.get(i);
         writeln!(
             md,
-            "| {} | {} | {:.3} | {} | {} | {} |",
+            "| {} | {} | {:.3} | {} | {} | {} | {} |",
             i + 1,
             label,
-            vaf,
-            kept,
-            chimeric,
-            suppressed,
+            stat.map_or(0.0, |s| s.vaf),
+            stat.map_or(0, |s| s.kept),
+            stat.map_or(0, |s| s.chimeric),
+            stat.map_or(0, |s| s.suppressed),
+            stat.map_or(0, |s| s.dropped_unusable_qual),
         )?;
     }
+    writeln!(md)?;
+    let dropped_total: usize = event_stats.iter().map(|s| s.dropped_unusable_qual).sum();
+    writeln!(
+        md,
+        "**Dropped (unusable quality):** {} read pair(s) across all events had no \
+         readable base qualities, so they are in neither the kept nor the suppressed \
+         column. {} of them are removed from the merged BAM by `merge.sh` with \
+         nothing put back in their place -- a depth dip confined to the event \
+         windows, which a depth-based caller can read as signal. 0 in both columns \
+         means the input's qualities were all readable.",
+        dropped_total, dropped_unreplaced
+    )?;
     writeln!(md)?;
     writeln!(md, "## Output files")?;
     writeln!(md)?;
@@ -2898,6 +2932,7 @@ done"#,
             Vec::new(),
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
+            0,
         ) {
             Ok(pool) => panic!(
                 "empty donor pool accepted; the run would write a truth VCF off {} pairs",
@@ -2928,6 +2963,7 @@ done"#,
             donor_pairs(MIN_DONOR_PAIRS - 1),
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
+            0,
         ) {
             Ok(_) => panic!("{} donor pairs accepted", MIN_DONOR_PAIRS - 1),
             Err(e) => e.to_string(),
@@ -2947,6 +2983,7 @@ done"#,
             donor_pairs(MIN_DONOR_PAIRS),
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
+            0,
         )
         .expect("a pool at the minimum must be usable");
         assert_eq!(pool.pairs.len(), MIN_DONOR_PAIRS);
@@ -2965,9 +3002,87 @@ done"#,
                 pairs,
                 &del("chr20", 30_000_000, 30_010_000),
                 &["chr20:29990000-30020000".to_string()],
+                0,
             )
             .is_err(),
             "a duplicated fragment must not lift a pool over the floor"
+        );
+    }
+
+    #[test]
+    fn test_donor_pool_error_names_the_quality_drops_and_does_not_contradict_itself() {
+        // Two problems in one message. (1) A CRAM that stores qualities via
+        // read features has every record dropped by `quality_is_missing`, so
+        // the pool is 0 and this guard fires -- the right outcome -- but the
+        // message lists three causes and none of them is quality. (2) It says
+        // "has no usable donor reads: 12 read pair(s) extracted", which
+        // contradicts itself whenever the pool is non-empty.
+        let err = match finish_donor_pool(
+            donor_pairs(12),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+            40,
+        ) {
+            Ok(_) => panic!("12 donor pairs accepted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            !err.contains("has no usable donor reads"),
+            "12 pairs were extracted, so \"no usable donor reads\" is false: {}",
+            err
+        );
+        assert!(
+            err.contains("40") && err.contains("qualit"),
+            "the error must say how many records were dropped for unusable \
+             quality, since that is one way the pool empties: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_run_readme_reports_the_pairs_removed_without_a_replacement() {
+        // M14 drops unusable-quality pairs from the pool and adds their names
+        // to replaced_reads.txt so merge.sh deletes them, but nothing in any
+        // output file distinguishes them from replaced pairs -- the only
+        // surface is a stderr INFO line. A localized depth dip the run README
+        // does not mention is a CNV caller's signal.
+        let dir = std::env::temp_dir().join(format!("spike_readme_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![del("chr20", 38_412_500, 38_422_500)];
+        let stats = vec![EventStat {
+            vaf: 0.5,
+            kept: 4000,
+            chimeric: 300,
+            suppressed: 500,
+            dropped_unusable_qual: 457,
+        }];
+        write_readme(
+            dir.to_str().unwrap(),
+            "spike -b x.bam",
+            "x.bam",
+            "ref.fa",
+            &events,
+            &stats,
+            4300,
+            10_000,
+            412,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            md.contains("457"),
+            "the per-event count of pairs dropped for unusable quality must be \
+             in the run README:\n{}",
+            md
+        );
+        assert!(
+            md.contains("412"),
+            "the total removed without a replacement must be in the run README:\n{}",
+            md
         );
     }
 
@@ -2982,6 +3097,7 @@ done"#,
                 "chr2:41990000-42010000".to_string(),
                 "chr2:28990000-29010000".to_string(),
             ],
+            0,
         ) {
             Ok(_) => panic!("empty fusion donor pool accepted"),
             Err(e) => e.to_string(),

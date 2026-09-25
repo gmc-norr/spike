@@ -595,7 +595,7 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
-| `README.md` | Run log: command, events table, read counts, next-step instructions |
+| `README.md` | Run log: command, events table (including pairs dropped for unusable quality, per event and in total), read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
 
@@ -734,7 +734,7 @@ the message is the exact text spike prints, measured by running it.
 | An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
 | Two events overlapping without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 overlap on chr20 (38412500-38422500 vs 38415000-38420000)` | `main.rs` |
-| A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0 read pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike needs. ...` | `finish_donor_pool` |
+| A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 record(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
 | No donor coverage at the event's first breakpoint ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at its first breakpoint chr20:29999999: the pool holds 6117 read pair(s) but none of them cover that position. ...` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
 | A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
@@ -1018,9 +1018,19 @@ Carrying Q2 forward costs the bases *after* an `N` nothing in practice. Measured
 Every simulated read is built from the donor pool extracted for its event -- the quality profile above, the fragment-length distribution and the coverage the tiling count is scaled by all come from it. A pool holding fewer than **30 read pairs** after deduplication is refused: the run exits non-zero, naming the event and the windows it searched, and writes nothing.
 
 ```
-Error: event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0 read pair(s)
-extracted from chr20:29990000-30020000, fewer than the 30 spike needs. ...
+Error: event DEL  chr20:30000001-30010000 (10000bp) has too few usable donor reads: 0 read
+pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike needs (0 record(s) in
+those windows were dropped for unusable base qualities and are not in that count). ...
 ```
+
+The drop count is in the message because it is one of the ways a pool empties:
+a CRAM that stores its qualities as read features has every record dropped by
+the quality check below, and the pool is then 0 through no fault of the region
+or of `--min-mapq`. Measured on the chr20 slice with every `QUAL` set to `*`:
+`0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike
+needs (2097 record(s) in those windows were dropped for unusable base
+qualities ...)`. When nothing was dropped the count is `0` and the other three
+causes the message lists are the ones to look at.
 
 Without that check a starved window is silent. spike logs `Built read pool: 0 pairs`, then falls through to every substitute in turn -- the constant Q20 last resort above for every base, the default 400 +/- 80 fragment distribution, coverage 0 with the 2-read tiling floor -- and exits **0** with a truth VCF and two invented read pairs beside it. An event in a zero-coverage region, an off-target panel BAM and a mistyped `--region` all reach it.
 
@@ -1068,6 +1078,8 @@ WARN spike::extract] 457 record(s) considered for the chr20:38402500-38432500 do
 ```
 
 **A dropped pair is removed from the merged BAM even though nothing replaces it.** spike has no quality string to write for it, so it cannot come back through the FASTQ — but it is still listed in `replaced_reads.txt`, so `merge.sh` drops it. That costs real depth. Leaving it in costs more: the pair would sit inside every event it overlaps as reference support that no allele fraction can suppress and no synthetic read can replace, so the realised VAF would come out diluted by the unusable-quality fraction while the truth VCF still claimed the full one. Because the same pairs are dropped across the whole extraction window, not just inside the event, the loss cancels in a flank-normalised ratio; the dilution would not. Measured on an HG002 chr20 slice with 5% of donor pairs' quality stripped to `*`, over a 10 kb deletion: 147 of 2868 eligible records inside the event (5.13%) carried `*` quality and were un-suppressible; removing them takes that to 0.00%, at a cost of those same 147 records of depth.
+
+**The count is in the generated run README, per event and in total**, not only on stderr: a run whose log has scrolled past leaves the depth dip invisible otherwise, and a localized dip is exactly what a depth-based CNV caller reads as signal. The `Events` table gains a `Dropped (unusable quality)` column, and a line under it gives the total and how many of those are removed with nothing put back in their place. Measured on the chr20 slice with `QUAL` set to `*` on every 20th record — **5.0%** of records (709 of 14,184) — over a 10 kb deletion with `--flank 2000`: the pool is 1855 pairs and **201** pairs are dropped, **9.8%** of the 2056 pairs the window would otherwise have held, because a pair is lost when *either* of its two records is stripped. The run README now says so; the FASTQ, truth VCF and `replaced_reads.txt` are byte-identical to the run before this column existed.
 
 Without the drop, a missing quality used to decode to an invalid FASTQ quality byte (space) for kept reads and poisoned the learned quality model, so synthetic reads sampled from it came out mostly-Q0 with effectively random bases. On the CRAM path it produced a FASTQ record with a full-length SEQ line next to a zero-length QUAL line, which `samtools import` rejects outright (`truncated file`).
 

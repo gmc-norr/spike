@@ -19,10 +19,10 @@ and is never edited. The two right columns were added later (bookkeeping fix,
 commits — measure both at the row's own command, not by scaling the "At
 review" figure.
 
-| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `a8c7053`, the whole-branch fix pass) |
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `6e0aa57`+, the whole-branch fix pass) |
 | --- | --- | --- | --- |
 | `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | OK, **1** warning (unused `is_within_single_segment` in `haplotype.rs`) |
-| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **392** passed, 0 failed |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **394** passed, 0 failed |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run and in the whole-branch pass held the line here |
 | `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
@@ -53,7 +53,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M11 | Medium | **Fixed.** `validate` exits 0 when every check errors | `validate.rs:76-80, 136-158` |
 | M12 | Medium | **Fixed.** `validate` split-read check passes with no simulation | `validate.rs:503-517` |
 | M13 | Medium | **Fixed.** All synthetic pairs are F1R2 | `synth.rs:497-504, 736-742` |
-| M14 | Medium | **Fixed.** Missing base qualities → invalid FASTQ | `extract.rs:453-460` |
+| M14 | Medium | **Fixed.** Missing base qualities → invalid FASTQ. Fix pass 2: the dropped pairs are now counted in the generated run README, per event and in total, instead of only on stderr | `extract.rs:453-460`; `main.rs` `write_readme` |
 | M15 | Medium | **Fixed.** CRAM extraction ~300× slower than BAM | `extract.rs:240-243, 314-317` |
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
@@ -289,6 +289,38 @@ give byte-identical FASTQ (M7).
 - **Fix:** skip or flag reads with all-0xFF quality at extraction; refuse to write qualities outside 33–126.
 - **Fixed:** `parse_partial_from_bam_record`/`parse_partial_from_record_buf` now skip (not encode) a record whose raw quality is unusable, counted and logged (`log::warn!`) per extraction call; `write_paired_fastq` refuses (returns `Err`) a quality whose length does not match SEQ or that carries a byte outside 33-126, validating before it creates either file. The `synth.rs` clamp is kept as defense in depth (not proven unreachable — see "Judgement calls" in the task report). HG002 chr20 slice with 5% of donor pairs' quality stripped to `*` (seed 1, `del:chr20:38412500-38422500`): kept-original quality lines containing byte 32 (space) 188/3862 → 0/3667; synthetic (chimeric) reads "mostly Q0" 4.11% (R1) / 4.79% (R2) of 292 → 0.00% of 273; R1 mean quality 34.2 → 36.0 (no longer dragged down by poisoned Q0 runs). Absolute counts differ from the review's numbers because the donor BAM here is a synthetic 5%-stripped HG002 slice, not the original review's BAM.
 - **Fix pass 1** (three defects in the fix itself, same slice re-encoded as CRAM with `samtools view -C`): (a) the all-0xFF test never fired on CRAM, because noodles-cram clears the buffer — CRAM donors still yielded 4559 pairs with 188 R1 + 188 R2 records carrying a 151 bp SEQ line and a zero-length QUAL line, and `samtools import` aborted with `truncated file`; now 4331 pairs, 0 zero-length QUAL lines, `samtools import` exits 0. (b) Skipped pairs were in neither `kept_originals` nor `suppressed_names`, so `merge.sh` merged them back untouched: 147 of 2868 eligible records inside `chr20:38412500-38422500` (5.13%) were `*`-quality and un-suppressible → 0.00%, by listing them in `replaced_reads.txt` (4331 → 4562 names; 231 pairs removed without replacement). (c) `missing_qual_count` double-counted any record whose mate pass 1 kept: on a slice with only read1 stripped, 464 reported against a true 230 distinct records → 235 (the tally is now keyed by (name, segment); the 5 extra come from pass 2's wider mate-recovery window, which the message no longer claims to cover). Extraction now also skips any record carrying a raw quality byte above Q93, so "partial 0xFF cannot occur" is enforced rather than assumed.
+- **Fix pass 2 (whole-branch review): a dropped pair was invisible in every
+  output file.** Fix pass 1 (b) put the dropped names in `replaced_reads.txt`
+  so `merge.sh` removes them, but nothing there or anywhere else distinguishes
+  them from replaced pairs, and the only surface was one stderr INFO line
+  (`main.rs:579-584`) -- `write_readme` was never given the count. A run whose
+  log has scrolled past leaves a localized depth dip with no record, and a
+  localized dip is what a depth-based CNV caller reads as signal. Measured on
+  the chr20 slice with `QUAL` set to `*` on every 20th record -- **5.0%** of
+  records (709 of 14,184) -- over `del:chr20:38412500-38422500 --flank 2000
+  --seed 1`: the pool holds 1855 pairs and **201** are dropped, **9.8%** of the
+  2056 pairs the window would otherwise have held, because a pair is lost when
+  *either* of its records is stripped. The generated run README now carries a
+  `Dropped (unusable quality)` column per event and a total line saying how
+  many of them are removed with nothing put back. `R1.fq.gz`, `R2.fq.gz`,
+  `truth.vcf` and `replaced_reads.txt` are byte-identical before and after the
+  column existed (`a052cfcb`, `1c924957`, `5a73bfd8`, `9a23f32f`).
+- **N5's message misdiagnosed the failure it now catches, and contradicted
+  itself.** A CRAM storing qualities via read features has every record dropped
+  by `quality_is_missing`, the pool is then 0, and N5's guard fires -- the right
+  outcome -- but the message named three causes (coverage, `--region`,
+  `--min-mapq`) and never quality. It also read "has **no** usable donor reads:
+  12 read pair(s) extracted", which is false whenever the pool is non-empty.
+  `extract_pool_for_event` now measures the per-event delta of
+  `unusable_qual_names` and hands it to `finish_donor_pool`, and the message
+  opens "has **too few** usable donor reads". Measured on the same slice with
+  every `QUAL` set to `*`: before, `has no usable donor reads: 0 read pair(s)
+  extracted from chr20:38410500-38424500, fewer than the 30 spike needs. Check
+  that the event lies in a covered region ...`; after, `has too few usable donor
+  reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the
+  30 spike needs (**2097** record(s) in those windows were dropped for unusable
+  base qualities and are not in that count)`, and the remedy list ends with the
+  CRAM read-feature case.
 
 ### M15 · CRAM extraction ~300× slower than BAM
 noodles-cram 0.74 `Query::read_next_container` checks only the reference id, never position, so every container on the chromosome is decoded (`extract.rs:240-243, 314-317`).
@@ -574,9 +606,12 @@ only thing left that could notice, and it did not.
   30 kb window yields 4559 pairs on the 35x HG002 BAM, so it would have to fall
   to about 0.2x before the floor bound.
 - **Fixed**, and measured: the same command and seed now exits **1** with
-  `event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0
-  read pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike
-  needs. ...`, and leaves `--output` empty -- **7 files written and exit 0
+  `event DEL  chr20:30000001-30010000 (10000bp) has too few usable donor reads:
+  0 read pair(s) extracted from chr20:29990000-30020000, fewer than the 30
+  spike needs (0 record(s) in those windows were dropped for unusable base
+  qualities and are not in that count). ...`  (the message was reworded in the
+  whole-branch pass -- see M14's fix pass 2 -- and read "has **no** usable
+  donor reads" when this was first measured), and leaves `--output` empty -- **7 files written and exit 0
   before, 0 files and exit 1 after**. A working event is untouched:
   `del:chr20:38412500-38422500 --seed 1` on the same slice still extracts 4559
   pairs and gives byte-identical output before and after (`R1.fq.gz`
