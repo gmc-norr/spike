@@ -124,6 +124,14 @@ impl FragmentDist {
     /// rather than dropping keeps the set non-empty for every read length
     /// `validate_read_length` admits (`min <= MAX_FRAGMENT_LEN`). The caller
     /// warns first: this is a fallback, not a library measurement.
+    ///
+    /// Two limits of the clamp, both on this already-degraded path. `clamp`
+    /// panics with std's opaque message if `min > MAX_FRAGMENT_LEN`, so the
+    /// caller must have run `validate_read_length` first -- it does, before
+    /// `SimConfig` is built. And for a read length above roughly 720 the
+    /// 400 +/- 80 default has no draw left above `min`, so every length
+    /// clamps to it: the set stays samplable, but it is a point mass at one
+    /// read length, not a distribution.
     fn default_dist_in_range(min: i64) -> Self {
         let lengths: Vec<i64> = Self::from_stats(400.0, 80.0)
             .lengths
