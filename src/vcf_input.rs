@@ -1185,7 +1185,7 @@ mod tests {
         let vcf = "chr1\t100\tsnp1\ta\tc\t.\t.\t.\n";
         let records = parse_records(vcf).unwrap();
         let events = to_events(records).unwrap();
-        let (spec_event, _) = crate::exon::parse_event_spec("snp:chr1:100:a:c", &[]).unwrap();
+        let (spec_event, _) = crate::exon::parse_event_spec("snp:chr1:100:a:c", &[], &[]).unwrap();
         assert_eq!(
             small_variant_alleles(&events[0]),
             small_variant_alleles(&spec_event),
@@ -2111,6 +2111,17 @@ mod tests {
         assert_eq!(
             stats.totals_line(events.len()),
             "read 2 VCF record(s), simulated 1, skipped 1"
+        );
+    }
+
+    #[test]
+    fn test_decode_bnd_partner_contig_name_containing_colons() {
+        // A BND ALT is always `chrom:pos`, so the last ':' ends the contig
+        // name however many it contains -- `rsplit_once` already handles the
+        // HLA contigs of L13 without a contig list.
+        assert_eq!(
+            decode("N[HLA-A*01:01:01:01:200["),
+            bnd("chr1", 100, "HLA-A*01:01:01:01", 199, FusionJoin::Forward, true)
         );
     }
 }

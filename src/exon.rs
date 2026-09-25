@@ -5,6 +5,7 @@
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 
+use crate::reference::split_contig;
 use crate::types::{FusionJoin, SimEvent};
 
 /// Allele fraction specification from event syntax.
@@ -208,14 +209,21 @@ fn exon_number_from_name(name: &str) -> Option<u32> {
 ///   "del:GENE:exon4-exon8;af=0.15"           — with explicit allele fraction
 ///   "fusion:GENEA:exon14:GENEB:exon2;af=het" — with heterozygous AF distribution
 ///   "del:GENE:exon4-exon8;af=hom"            — with homozygous AF (1.0)
-pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, Option<AfSpec>)> {
+///
+/// `contigs` are the reference's contig names, used to keep a contig name
+/// that itself contains ':' whole (L13); an empty slice just splits on ':'.
+pub fn parse_event_spec(
+    spec: &str,
+    genes: &[GeneTarget],
+    contigs: &[String],
+) -> Result<(SimEvent, Option<AfSpec>)> {
     // Split on ';' to separate event spec from options.
     let (event_part, options_part) = match spec.split_once(';') {
         Some((ev, opts)) => (ev, Some(opts)),
         None => (spec, None),
     };
 
-    let parts: Vec<&str> = event_part.split(':').collect();
+    let parts = split_event_parts(event_part, contigs);
     if parts.is_empty() {
         bail!("empty event specification");
     }
@@ -241,6 +249,29 @@ pub fn parse_event_spec(spec: &str, genes: &[GeneTarget]) -> Result<(SimEvent, O
     };
 
     Ok((event, af_spec))
+}
+
+/// Split an event spec into its ':'-separated parts, keeping a contig name
+/// that itself contains ':' whole.
+///
+/// The field after the event type is matched against the reference's contig
+/// names first, so `del:HLA-A*01:01:01:01:1000-2000` gives the contig and the
+/// range instead of six meaningless fields (L13). With no match -- a gene
+/// name, or a contig the reference does not have -- it splits on every ':',
+/// as it always did.
+fn split_event_parts<'a>(event_part: &'a str, contigs: &[String]) -> Vec<&'a str> {
+    let Some((event_type, rest)) = event_part.split_once(':') else {
+        return vec![event_part];
+    };
+    let mut parts = vec![event_type];
+    match split_contig(rest, contigs) {
+        Some((chrom, tail)) => {
+            parts.push(chrom);
+            parts.extend(tail.split(':'));
+        }
+        None => parts.push(rest),
+    }
+    parts
 }
 
 /// Parse key=value options from the part after ';'.
@@ -693,7 +724,7 @@ mod tests {
     #[test]
     fn test_parse_coordinate_deletion() {
         let genes = test_genes();
-        let (event, af) = parse_event_spec("del:chr20:30000000-30005000", &genes).unwrap();
+        let (event, af) = parse_event_spec("del:chr20:30000000-30005000", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::Deletion {
@@ -714,7 +745,7 @@ mod tests {
     fn test_parse_exon_deletion() {
         let genes = test_genes();
         // GENEA exon 4 start = 1000 + 3*500 = 2500, exon 8 end = 1000 + 7*500 + 200 = 4700
-        let (event, af) = parse_event_spec("del:GENEA:exon4-exon8", &genes).unwrap();
+        let (event, af) = parse_event_spec("del:GENEA:exon4-exon8", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::Deletion {
@@ -738,7 +769,7 @@ mod tests {
         let genes = test_genes();
         // GENEA exon 3 end = 1000 + 2*500 + 200 = 2200
         // GENEB exon 2 start = 10000 + 1*2000 = 12000
-        let (event, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes).unwrap();
+        let (event, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::Fusion {
@@ -760,30 +791,30 @@ mod tests {
     #[test]
     fn test_parse_with_af_exact() {
         let genes = test_genes();
-        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=0.15", &genes).unwrap();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=0.15", &genes, &[]).unwrap();
         assert_eq!(af, Some(AfSpec::Exact(0.15)));
     }
 
     #[test]
     fn test_parse_with_af_het() {
         let genes = test_genes();
-        let (_, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2;af=het", &genes).unwrap();
+        let (_, af) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2;af=het", &genes, &[]).unwrap();
         assert_eq!(af, Some(AfSpec::Het));
     }
 
     #[test]
     fn test_parse_with_af_hom() {
         let genes = test_genes();
-        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=hom", &genes).unwrap();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=hom", &genes, &[]).unwrap();
         assert_eq!(af, Some(AfSpec::Hom));
     }
 
     #[test]
     fn test_parse_af_invalid() {
         let genes = test_genes();
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=0.0", &genes).is_err());
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.5", &genes).is_err());
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=abc", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=0.0", &genes, &[]).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.5", &genes, &[]).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=abc", &genes, &[]).is_err());
     }
 
     #[test]
@@ -794,16 +825,16 @@ mod tests {
         // old check, but are pinned here too so a future rewrite of the
         // bounds can't reintroduce them silently.
         let genes = test_genes();
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=nan", &genes).is_err());
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=inf", &genes).is_err());
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-inf", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=nan", &genes, &[]).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=inf", &genes, &[]).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-inf", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_parse_af_accepts_upper_boundary() {
         // L8 boundary: 1.0 itself must stay accepted (af is in `(0.0, 1.0]`).
         let genes = test_genes();
-        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=1.0", &genes).unwrap();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=1.0", &genes, &[]).unwrap();
         assert_eq!(af, Some(AfSpec::Exact(1.0)));
     }
 
@@ -814,7 +845,7 @@ mod tests {
         // the check. Added because the fix brief asked for this exact value
         // to be pinned, not because it was ever broken.
         let genes = test_genes();
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-0.0", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-0.0", &genes, &[]).is_err());
     }
 
     #[test]
@@ -823,13 +854,13 @@ mod tests {
         // the same `<= 1.0` branch as any value clearly over 1; this pins a
         // value just barely over the boundary instead.
         let genes = test_genes();
-        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.0000001", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.0000001", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_parse_snp_colon_format() {
         let genes = test_genes();
-        let (event, af) = parse_event_spec("snp:chr1:100:A:T", &genes).unwrap();
+        let (event, af) = parse_event_spec("snp:chr1:100:A:T", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::SmallVariant {
@@ -851,7 +882,7 @@ mod tests {
     #[test]
     fn test_parse_snp_arrow_format() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("snp:chr1:100:A>T", &genes).unwrap();
+        let (event, _) = parse_event_spec("snp:chr1:100:A>T", &genes, &[]).unwrap();
         match event {
             SimEvent::SmallVariant {
                 pos,
@@ -870,14 +901,14 @@ mod tests {
     #[test]
     fn test_parse_snp_with_af() {
         let genes = test_genes();
-        let (_, af) = parse_event_spec("snp:chr1:100:A:T;af=0.3", &genes).unwrap();
+        let (_, af) = parse_event_spec("snp:chr1:100:A:T;af=0.3", &genes, &[]).unwrap();
         assert_eq!(af, Some(AfSpec::Exact(0.3)));
     }
 
     #[test]
     fn test_parse_snp_small_del() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("snp:chr1:100:ACG:A", &genes).unwrap();
+        let (event, _) = parse_event_spec("snp:chr1:100:ACG:A", &genes, &[]).unwrap();
         match event {
             SimEvent::SmallVariant {
                 pos,
@@ -896,7 +927,7 @@ mod tests {
     #[test]
     fn test_parse_snp_small_ins() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("snp:chr1:100:A:ACGT", &genes).unwrap();
+        let (event, _) = parse_event_spec("snp:chr1:100:A:ACGT", &genes, &[]).unwrap();
         match event {
             SimEvent::SmallVariant {
                 pos,
@@ -915,13 +946,13 @@ mod tests {
     #[test]
     fn test_parse_snp_invalid_base() {
         let genes = test_genes();
-        assert!(parse_event_spec("snp:chr1:100:A:X", &genes).is_err());
+        assert!(parse_event_spec("snp:chr1:100:A:X", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_parse_snp_same_alleles() {
         let genes = test_genes();
-        assert!(parse_event_spec("snp:chr1:100:A:A", &genes).is_err());
+        assert!(parse_event_spec("snp:chr1:100:A:A", &genes, &[]).is_err());
     }
 
     #[test]
@@ -931,13 +962,13 @@ mod tests {
         // same way "A:A" is. The old code compared REF/ALT before
         // uppercasing, so "A:a" slipped past the identical-alleles check.
         let genes = test_genes();
-        assert!(parse_event_spec("snp:chr1:100:A:a", &genes).is_err());
+        assert!(parse_event_spec("snp:chr1:100:A:a", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_parse_snp_zero_position_invalid() {
         let genes = test_genes();
-        assert!(parse_event_spec("snp:chr1:0:A:T", &genes).is_err());
+        assert!(parse_event_spec("snp:chr1:0:A:T", &genes, &[]).is_err());
     }
 
     #[test]
@@ -952,7 +983,7 @@ mod tests {
     fn test_parse_exon_duplication() {
         let genes = test_genes();
         // GENEA exon 4 start = 2500, exon 6 end = 1000 + 5*500 + 200 = 3700
-        let (event, af) = parse_event_spec("dup:GENEA:exon4-exon6", &genes).unwrap();
+        let (event, af) = parse_event_spec("dup:GENEA:exon4-exon6", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::Duplication {
@@ -975,7 +1006,7 @@ mod tests {
     fn test_parse_exon_inversion() {
         let genes = test_genes();
         // GENEB exon 2 start = 12000, exon 4 end = 10000 + 3*2000 + 300 = 16300
-        let (event, af) = parse_event_spec("inv:GENEB:exon2-exon4", &genes).unwrap();
+        let (event, af) = parse_event_spec("inv:GENEB:exon2-exon4", &genes, &[]).unwrap();
         assert!(af.is_none());
         match event {
             SimEvent::Inversion {
@@ -997,7 +1028,7 @@ mod tests {
     #[test]
     fn test_parse_coord_duplication() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("dup:chr20:30000000-30005000", &genes).unwrap();
+        let (event, _) = parse_event_spec("dup:chr20:30000000-30005000", &genes, &[]).unwrap();
         match event {
             SimEvent::Duplication {
                 chrom,
@@ -1016,7 +1047,7 @@ mod tests {
     #[test]
     fn test_parse_coord_inversion() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("inv:chr20:30000000-30005000", &genes).unwrap();
+        let (event, _) = parse_event_spec("inv:chr20:30000000-30005000", &genes, &[]).unwrap();
         match event {
             SimEvent::Inversion {
                 chrom,
@@ -1035,7 +1066,7 @@ mod tests {
     #[test]
     fn test_parse_explicit_insertion_sequence() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("ins:chr20:30000000:ACGTACGT", &genes).unwrap();
+        let (event, _) = parse_event_spec("ins:chr20:30000000:ACGTACGT", &genes, &[]).unwrap();
         match event {
             SimEvent::Insertion {
                 chrom,
@@ -1056,7 +1087,7 @@ mod tests {
     #[test]
     fn test_parse_random_insertion_length() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("ins:chr20:30000000:500", &genes).unwrap();
+        let (event, _) = parse_event_spec("ins:chr20:30000000:500", &genes, &[]).unwrap();
         match event {
             SimEvent::Insertion {
                 ins_seq, ins_len, ..
@@ -1071,20 +1102,20 @@ mod tests {
     #[test]
     fn test_parse_insertion_invalid_sequence() {
         let genes = test_genes();
-        assert!(parse_event_spec("ins:chr20:30000000:ACGXYZ", &genes).is_err());
+        assert!(parse_event_spec("ins:chr20:30000000:ACGXYZ", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_inv_suffix_is_rejected() {
         // Join orientation now follows the gene strands.
         let genes = test_genes();
-        assert!(parse_event_spec("fusion:GENEA:exon3:GENEB:exon2:inv", &genes).is_err());
+        assert!(parse_event_spec("fusion:GENEA:exon3:GENEB:exon2:inv", &genes, &[]).is_err());
     }
 
     #[test]
     fn test_parse_forward_fusion() {
         let genes = test_genes();
-        let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes).unwrap();
+        let (event, _) = parse_event_spec("fusion:GENEA:exon3:GENEB:exon2", &genes, &[]).unwrap();
         match event {
             SimEvent::Fusion { join, .. } => {
                 assert_eq!(join, FusionJoin::Forward, "fusion without :inv suffix should be forward");
@@ -1154,7 +1185,7 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
     fn test_exon_range_on_minus_strand_covers_named_exons() {
         // GENEM exon1 = [3000,3100), exon2 = [2000,2100).
         let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
-        let (event, _) = parse_event_spec("del:GENEM:exon1-exon2", &genes).unwrap();
+        let (event, _) = parse_event_spec("del:GENEM:exon1-exon2", &genes, &[]).unwrap();
         match event {
             SimEvent::Deletion {
                 del_start,
@@ -1176,7 +1207,7 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
         // everything downstream: genomic (..., 7300). On the plus strand that
         // molecule reads GENEN-left then GENEM-right, a forward join.
         let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
-        let (event, _) = parse_event_spec("fusion:GENEM:exon1:GENEN:exon2", &genes).unwrap();
+        let (event, _) = parse_event_spec("fusion:GENEM:exon1:GENEN:exon2", &genes, &[]).unwrap();
         match event {
             SimEvent::Fusion {
                 chrom_a,
@@ -1198,7 +1229,7 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
 
     fn fusion_parts(spec: &str) -> (String, u64, String, String, u64, String, FusionJoin) {
         let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
-        match parse_event_spec(spec, &genes).unwrap().0 {
+        match parse_event_spec(spec, &genes, &[]).unwrap().0 {
             SimEvent::Fusion {
                 chrom_a,
                 bp_a,
@@ -1246,6 +1277,83 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
     #[test]
     fn test_inv_suffix_with_minus_strand_gene_is_rejected() {
         let genes = parse_exon_bed_str(STRANDED_BED).unwrap();
-        assert!(parse_event_spec("fusion:GENEM:exon1:GENEN:exon2:inv", &genes).is_err());
+        assert!(parse_event_spec("fusion:GENEM:exon1:GENEN:exon2:inv", &genes, &[]).is_err());
+    }
+
+    /// 525 of GRCh38's contigs are HLA alleles named `HLA-A*01:01:01:01`;
+    /// splitting the spec on every ':' tears such a name apart (L13).
+    fn hla_contigs() -> Vec<String> {
+        vec!["HLA-A*01:01:01:01".to_string()]
+    }
+
+    #[test]
+    fn test_parse_deletion_on_a_contig_name_containing_colons() {
+        let (event, _) =
+            parse_event_spec("del:HLA-A*01:01:01:01:1000-2000", &[], &hla_contigs()).unwrap();
+        match event {
+            SimEvent::Deletion {
+                chrom,
+                del_start,
+                del_end,
+                ..
+            } => {
+                assert_eq!(chrom, "HLA-A*01:01:01:01");
+                // Coordinate-based del/dup/inv keep the spec's numbers as
+                // given (see test_parse_coordinate_deletion).
+                assert_eq!((del_start, del_end), (1000, 2000));
+            }
+            other => panic!("expected Deletion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_insertion_on_a_contig_name_containing_colons() {
+        let (event, _) =
+            parse_event_spec("ins:HLA-A*01:01:01:01:1000:500", &[], &hla_contigs()).unwrap();
+        match event {
+            SimEvent::Insertion {
+                chrom,
+                pos,
+                ins_len,
+                ..
+            } => {
+                assert_eq!(chrom, "HLA-A*01:01:01:01");
+                assert_eq!((pos, ins_len), (1000, 500));
+            }
+            other => panic!("expected Insertion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_snp_on_a_contig_name_containing_colons() {
+        let (event, _) =
+            parse_event_spec("snp:HLA-A*01:01:01:01:1000:A:T", &[], &hla_contigs()).unwrap();
+        match event {
+            SimEvent::SmallVariant {
+                chrom,
+                pos,
+                ref_allele,
+                alt_allele,
+                ..
+            } => {
+                assert_eq!(chrom, "HLA-A*01:01:01:01");
+                assert_eq!(pos, 999);
+                assert_eq!((ref_allele, alt_allele), (b"A".to_vec(), b"T".to_vec()));
+            }
+            other => panic!("expected SmallVariant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_contig_names_do_not_shadow_gene_names() {
+        // A gene-based spec still resolves against the exon BED even when the
+        // reference has contigs with ':' in them.
+        let genes = test_genes();
+        let (event, _) =
+            parse_event_spec("del:GENEA:exon4-exon8", &genes, &hla_contigs()).unwrap();
+        match event {
+            SimEvent::Deletion { gene, .. } => assert_eq!(gene, "GENEA"),
+            other => panic!("expected Deletion, got {:?}", other),
+        }
     }
 }

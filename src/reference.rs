@@ -41,6 +41,26 @@ pub fn fasta_contigs(fasta_path: &str) -> Result<Vec<(String, u64)>> {
         .collect())
 }
 
+/// Split `s` into a contig name and whatever follows the ':' that ends it.
+///
+/// Hundreds of GRCh38's contigs are HLA alleles named `HLA-A*01:01:01:01`, so
+/// the first ':' is not reliably the end of the name and splitting there makes
+/// such a contig unusable (L13). A name from `contigs` that `s` starts with,
+/// followed by ':', wins -- the longest one, so `HLA-DRB1*01:01:01:02` beats
+/// the `HLA-DRB1*01:01:01` it contains. With no match -- a gene name, or a
+/// contig the reference does not have -- the leading field up to the first
+/// ':' is the name, as it always was.
+pub fn split_contig<'a>(s: &'a str, contigs: &[String]) -> Option<(&'a str, &'a str)> {
+    let matched = contigs
+        .iter()
+        .filter(|c| s.starts_with(c.as_str()) && s.as_bytes().get(c.len()) == Some(&b':'))
+        .max_by_key(|c| c.len());
+    match matched {
+        Some(c) => Some((&s[..c.len()], &s[c.len() + 1..])),
+        None => s.split_once(':'),
+    }
+}
+
 /// Indexed reference FASTA reader with region caching.
 struct ReferenceReader {
     index: fasta::fai::Index,
@@ -440,5 +460,44 @@ mod tests {
         assert_eq!(seq, b"CATGCATG");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// GRCh38's HLA contigs are named `HLA-A*01:01:01:01`, so the first ':'
+    /// in a "contig:rest" string is not reliably the end of the contig name.
+    const HLA_CONTIGS: [&str; 3] = ["chr20", "HLA-DRB1*01:01:01", "HLA-DRB1*01:01:01:02"];
+
+    fn contigs() -> Vec<String> {
+        HLA_CONTIGS.iter().map(|c| c.to_string()).collect()
+    }
+
+    #[test]
+    fn split_contig_keeps_a_contig_name_that_contains_colons_whole() {
+        assert_eq!(
+            split_contig("HLA-DRB1*01:01:01:1000-2000", &contigs()),
+            Some(("HLA-DRB1*01:01:01", "1000-2000"))
+        );
+    }
+
+    #[test]
+    fn split_contig_prefers_the_longest_matching_contig_name() {
+        // Both known names are a prefix of this string; only the longer one
+        // leaves a parsable range behind.
+        assert_eq!(
+            split_contig("HLA-DRB1*01:01:01:02:1000-2000", &contigs()),
+            Some(("HLA-DRB1*01:01:01:02", "1000-2000"))
+        );
+    }
+
+    #[test]
+    fn split_contig_splits_at_the_first_colon_when_no_contig_matches() {
+        assert_eq!(
+            split_contig("chr20:1000-2000", &contigs()),
+            Some(("chr20", "1000-2000"))
+        );
+        assert_eq!(
+            split_contig("chrZZ:1000-2000", &contigs()),
+            Some(("chrZZ", "1000-2000"))
+        );
+        assert_eq!(split_contig("chr20", &contigs()), None);
     }
 }

@@ -265,9 +265,11 @@ fn extraction_bounds(
 
 /// Parse a region string like "chr19:11080000-11140000" into (chrom, start, end).
 /// Coordinates are 1-based inclusive (like samtools), converted to 0-based half-open internally.
-fn parse_region(s: &str) -> Result<ExtractionRegion> {
-    let (chrom, coords) = s
-        .split_once(':')
+///
+/// `contigs` are the reference's contig names, used to keep a contig name that
+/// itself contains ':' whole (L13); an empty slice just splits on ':'.
+fn parse_region(s: &str, contigs: &[String]) -> Result<ExtractionRegion> {
+    let (chrom, coords) = reference::split_contig(s, contigs)
         .ok_or_else(|| anyhow::anyhow!("invalid region '{}', expected chr:start-end", s))?;
     let (start_s, end_s) = coords
         .split_once('-')
@@ -322,6 +324,12 @@ fn main() -> Result<()> {
     // Create output directory.
     std::fs::create_dir_all(&args.output)?;
 
+    // Contig names and lengths from the reference .fai. Read before the
+    // --event and --region specs are parsed because a contig name may itself
+    // contain ':' (L13), so the specs cannot be split without them.
+    let ref_contigs = reference::fasta_contigs(&args.reference)?;
+    let contig_names: Vec<String> = ref_contigs.iter().map(|(name, _)| name.clone()).collect();
+
     // Load gene targets (only needed for gene-based --event specs).
     let genes = if let Some(bed_path) = &args.exon_bed {
         exon::parse_exon_bed(bed_path)?
@@ -333,7 +341,7 @@ fn main() -> Result<()> {
     let parsed: Vec<(SimEvent, Option<AfSpec>)> = args
         .event
         .iter()
-        .map(|spec| exon::parse_event_spec(spec, &genes))
+        .map(|spec| exon::parse_event_spec(spec, &genes, &contig_names))
         .collect::<Result<Vec<_>>>()?;
 
     // Load events from --vcf if provided.
@@ -390,7 +398,7 @@ fn main() -> Result<()> {
 
     // Parse --region if provided.
     let extraction_region = if let Some(ref region_str) = args.region {
-        let r = parse_region(region_str)?;
+        let r = parse_region(region_str, &contig_names)?;
         log::info!(
             "Extraction region: {}:{}-{} (0-based half-open)",
             r.chrom,
@@ -550,7 +558,7 @@ fn main() -> Result<()> {
         &truth_path.to_string_lossy(),
         &args.reference,
         &shared_ref,
-        &reference::fasta_contigs(&args.reference)?,
+        &ref_contigs,
     )?;
 
     // Write alignment convenience script.
@@ -2736,5 +2744,23 @@ done"#,
             2,
             "extract.rs builds an indexed CRAM reader outside the pruning opener"
         );
+    }
+
+    #[test]
+    fn test_parse_region_on_a_contig_name_containing_colons() {
+        // 525 of GRCh38's contigs are HLA alleles whose names contain ':',
+        // so --region cannot be split at the first one (L13).
+        let contigs = vec!["HLA-A*01:01:01:01".to_string()];
+        let r = parse_region("HLA-A*01:01:01:01:1000-2000", &contigs).unwrap();
+        assert_eq!(r.chrom, "HLA-A*01:01:01:01");
+        assert_eq!((r.start, r.end), (999, 2000));
+    }
+
+    #[test]
+    fn test_parse_region_without_contigs_splits_at_the_first_colon() {
+        let r = parse_region("chr20:1000-2000", &[]).unwrap();
+        assert_eq!(r.chrom, "chr20");
+        assert_eq!((r.start, r.end), (999, 2000));
+        assert!(parse_region("chr20", &[]).is_err());
     }
 }

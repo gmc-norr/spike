@@ -437,6 +437,26 @@ rather than every read in between. A region on another chromosome than the
 event is ignored for that event. Reads shared by two windows enter the donor
 pool once.
 
+### Contig names containing `:`
+
+Some references name contigs with colons in them -- GRCh38's HLA alleles
+(`HLA-A*01:01:01:01`) are the common case -- so the first `:` in an `--event`
+or `--region` argument is not reliably the end of the contig name. spike
+resolves the name against the reference's `.fai` contigs first, taking the
+longest one that matches, and splits on `:` only when none does:
+
+```bash
+spike --bam sample.bam --reference GRCh38_full_analysis_set.fasta \
+  --event "del:HLA-A*01:01:01:01:1000-2000" \
+  --region "HLA-A*01:01:01:01:500-3000" \
+  -o output/
+```
+
+A name the reference does not list is still split at its first `:`, so a typo
+in a contig name fails the way it always did, and a gene name is never shadowed
+by a contig. BND ALT strings from `--vcf` (`N[HLA-A*01:01:01:01:200[`) need no
+contig list: their last `:` is always the one before the position.
+
 ### Indel error model
 
 By default, synthetic read errors are substitution-only. To include realistic indel errors:
