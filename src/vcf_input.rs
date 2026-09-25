@@ -201,10 +201,14 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                         log::warn!("{}", not_an_insertion_warning(record));
                         continue;
                     }
-                    (
-                        event_start(record.pos, trimmed.prefix),
-                        Some(trimmed.alt_rem.to_vec()),
-                    )
+                    let start = event_start(record.pos, trimmed.prefix);
+                    if start == 0 {
+                        // No base 0 to anchor the insertion to, exactly as
+                        // for the spans resolve_sv_span_or_warn rejects.
+                        log::warn!("{}", before_first_base_warning(record, "INS"));
+                        continue;
+                    }
+                    (start, Some(trimmed.alt_rem.to_vec()))
                 } else {
                     (record.pos, None)
                 };
@@ -498,11 +502,20 @@ fn resolve_sv_span(record: &SvRecord) -> Option<(u64, u64)> {
 /// returns `None` and the caller rejects it, rather than turning a malformed
 /// record into a plausible-looking wrong truth record.
 fn span_from_alleles(record: &SvRecord) -> Option<(u64, u64)> {
-    if !alt_carries_sequence(&record.alt) {
-        // ALT symbolic (<DEL>) or a single base: REF is the anchor plus the
-        // affected bases, so the span is what REF has past the anchor.
+    if record.alt.starts_with('<') {
+        // A symbolic ALT (<DEL>) carries no sequence to line REF up against,
+        // so REF is the anchor plus the affected bases and the span is what
+        // REF has past the anchor. A single base is *not* such an ALT: it is
+        // the anchor only when it is REF's first base, and REF=ACGT ALT=T
+        // deletes ACG at POS-1, not CGT at POS.
         return (record.ref_allele.len() > 1)
             .then(|| (record.pos, record.pos + record.ref_allele.len() as u64 - 1));
+    }
+
+    // An inversion spelled out base for base states its own span, so it is
+    // read whole rather than trimmed; see [`inv_span`].
+    if record.sv_type == SvTypeTag::Inv && record.ref_allele.len() == record.alt.len() {
+        return inv_span(record);
     }
 
     let trimmed = trim_shared_flanks(&record.ref_allele, &record.alt);
@@ -528,15 +541,32 @@ fn span_from_alleles(record: &SvRecord) -> Option<(u64, u64)> {
         }
         return None;
     }
-    if ref_len > 0
-        && ref_len == alt_len
-        && record.sv_type == SvTypeTag::Inv
-        && is_reverse_complement(trimmed.ref_rem, trimmed.alt_rem)
-    {
-        // An equal-length substitution carries no padding base, so POS is
-        // the first affected base — `start` has already backed up over it.
-        // Only an ALT that really is REF reverse-complemented is an INV.
-        return span(ref_len);
+    None
+}
+
+/// Read an inversion's span off alleles that spell it out base for base.
+/// An inversion's span is *stated* by the record, not derived from where its
+/// alleles differ, so both spellings are matched against the whole allele:
+/// an equal-length substitution, which carries no padding base and so starts
+/// at POS itself, or a padding base followed by the inverted region.
+/// Trimming shared flanks here narrows both spellings whenever the inverted
+/// region's ends are their own complements, which about one equal-length INV
+/// in four has: REF=AGTT ALT=AACT would come out as a 2 bp inversion of the
+/// middle where the record spells out 4 bp, and the padded REF=TAGTT
+/// ALT=TAACT as the same 2 bp instead of the 4 bp after its anchor.
+fn inv_span(record: &SvRecord) -> Option<(u64, u64)> {
+    let (r, a) = (record.ref_allele.as_bytes(), record.alt.as_bytes());
+    if is_reverse_complement(r, a) {
+        // No padding base: POS is the first inverted base, one past the
+        // preceding base every other span here counts from. POS >= 1 is
+        // guaranteed by the parser; a resulting start of 0 is rejected by
+        // the caller, since no VCF record can name the base before the first.
+        let start = record.pos - 1;
+        return Some((start, start + r.len() as u64));
+    }
+    if r.len() > 1 && r[0].eq_ignore_ascii_case(&a[0]) && is_reverse_complement(&r[1..], &a[1..]) {
+        // Padded: POS is the anchor, the inverted region follows it.
+        return Some((record.pos, record.pos + r.len() as u64 - 1));
     }
     None
 }
@@ -544,11 +574,20 @@ fn span_from_alleles(record: &SvRecord) -> Option<(u64, u64)> {
 /// Resolve a DEL/DUP/INV span, warning when the record has to be dropped.
 /// Shared by the three arms so a rejection reads the same whatever the type.
 fn resolve_sv_span_or_warn(record: &SvRecord, sv_type: &str) -> Option<(u64, u64)> {
-    let span = resolve_sv_span(record);
-    if span.is_none() {
-        log::warn!("{}", no_length_warning(record, sv_type));
+    match resolve_sv_span(record) {
+        // Reading the span off the alleles can move the start left of POS,
+        // and at POS=1 that is base 0 — not a position a VCF record can
+        // name, so the truth record would come out as POS=0 with REF=N.
+        Some((0, _)) => {
+            log::warn!("{}", before_first_base_warning(record, sv_type));
+            None
+        }
+        span @ Some(_) => span,
+        None => {
+            log::warn!("{}", no_length_warning(record, sv_type));
+            None
+        }
     }
-    span
 }
 
 /// Message logged when a DEL/DUP/INV record's span cannot be resolved.
@@ -571,6 +610,17 @@ fn not_an_insertion_warning(record: &SvRecord) -> String {
         "INS record {} at {}:{} keeps REF bases its ALT drops, so the bases it inserts are \
          not a shape they can be read from; skipping",
         record.id, record.chrom, record.pos
+    )
+}
+
+/// Message logged when a record's alleles place its event before the
+/// chromosome's first base. Names chrom:pos for the same reason the others
+/// do, so the dropped record can be found.
+fn before_first_base_warning(record: &SvRecord, sv_type: &str) -> String {
+    format!(
+        "{} record {} at {}:{} has alleles that start the event before the chromosome's first \
+         base, which no VCF record can name; skipping",
+        sv_type, record.id, record.chrom, record.pos
     )
 }
 
@@ -1296,5 +1346,169 @@ mod tests {
             "warning must say the record is dropped: {}",
             msg
         );
+    }
+
+    /// A single-base ALT is not always REF's anchor base: `REF=ACGT ALT=T`
+    /// shares its *suffix*, so the deleted bases are `ACG` at 1-based
+    /// 100-102 and the preceding base is 99. Taking REF's length from POS
+    /// claimed 100-103 — a record that deletes `CGT` and leaves `A`, where
+    /// the alleles say the result is `T`.
+    #[test]
+    fn test_del_single_base_alt_that_is_not_the_anchor_strips_the_shared_suffix() {
+        let vcf = "chr1\t100\ttest_del\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one DEL event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
+                assert_eq!(*del_start, 99);
+                assert_eq!(*del_end, 102);
+            }
+            _ => panic!("expected Deletion"),
+        }
+
+        // The normalised spelling of the same event still decodes the way it
+        // always did: REF=ACGT ALT=A is the 3 bases after the anchor.
+        let normalised = "chr1\t100\ttest_del\tACGT\tA\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(normalised.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        match &events[0] {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
+                assert_eq!((*del_start, *del_end), (100, 103));
+            }
+            _ => panic!("expected Deletion"),
+        }
+    }
+
+    /// Stripping can move the start left of POS, and at POS=1 that is base
+    /// 0 — a position no VCF record can name (truth.rs would write `POS=0`
+    /// with `REF=N`). Reject those loudly instead.
+    #[test]
+    fn test_alleles_that_place_the_event_before_the_first_base_are_rejected() {
+        // DEL: shared suffix only, so the preceding base would be 0.
+        let del = "chr1\t1\ttest_del\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(del.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty(), "DEL before base 1 must not decode: {:?}", events);
+
+        // INV written as an equal-length substitution: POS is the first
+        // inverted base, so the preceding base would be 0.
+        let inv = "chr1\t1\ttest_inv\tAGTT\tAACT\t.\t.\tSVTYPE=INV\n";
+        let records = parse_vcf_records(inv.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty(), "INV before base 1 must not decode: {:?}", events);
+
+        // INS whose alleles share only a suffix, same story.
+        let ins = "chr1\t1\ttest_ins\tAT\tGGGAT\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(ins.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(events.is_empty(), "INS before base 1 must not decode: {:?}", events);
+    }
+
+    /// The before-the-first-base rejection is a drop like any other, so it
+    /// must name chrom:pos for L11 to count it.
+    #[test]
+    fn test_before_first_base_warning_identifies_record_by_chrom_and_pos() {
+        let vcf = "chr20\t1\t.\tACGT\tT\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let msg = before_first_base_warning(&records[0], "DEL");
+        assert!(
+            msg.contains("chr20:1"),
+            "warning must locate the record: {}",
+            msg
+        );
+        assert!(msg.contains("DEL"), "warning must name the type: {}", msg);
+        assert!(
+            msg.contains("skipping"),
+            "warning must say the record is dropped: {}",
+            msg
+        );
+    }
+
+    /// An inversion's span is stated by the record, not derived from where
+    /// its alleles happen to differ: `AGTT` and its reverse complement
+    /// `AACT` begin and end with complementary bases, so trimming the flanks
+    /// they share left a 2 bp inversion of the middle where the record spells
+    /// out 4 bp. About one equal-length INV in four has such an end.
+    #[test]
+    fn test_inv_equal_length_self_complementary_ends_span_the_whole_record() {
+        let vcf = "chr1\t100\ttest_inv\tAGTT\tAACT\t.\t.\tSVTYPE=INV\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Inversion {
+                inv_start, inv_end, ..
+            } => {
+                // No padding base, so POS is the first inverted base: the
+                // 4 bases 1-based 100-103.
+                assert_eq!(*inv_start, 99);
+                assert_eq!(*inv_end, 103);
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    /// The other spelling: a padding base, then the inverted region. The
+    /// whole-allele pair is not a reverse-complement pair here, so it has to
+    /// be checked past the anchor — but past the anchor only, never past the
+    /// rest of the flanks the alleles share, which narrowed this record to
+    /// the 2 bp its self-complementary ends leave over.
+    #[test]
+    fn test_inv_equal_length_with_a_padding_base_inverts_ref_past_the_anchor() {
+        let vcf = "chr1\t100\ttest_inv\tTAGTT\tTAACT\t.\t.\tSVTYPE=INV\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Inversion {
+                inv_start, inv_end, ..
+            } => {
+                // POS is the anchor T; the 4 inverted bases are 101-104.
+                assert_eq!(*inv_start, 100);
+                assert_eq!(*inv_end, 104);
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    /// A padded VCF ALT begins with the REF anchor. `REF=T ALT=GGGT` does
+    /// not, so it does not spell "anchor + duplicated copy" and there is no
+    /// saying where the extra bases come from. L7 took `ALT[1..]` (`GGT`);
+    /// it is now rejected with the usual warning.
+    #[test]
+    fn test_dup_single_base_ref_that_is_not_alts_first_base_is_rejected() {
+        let vcf = "chr1\t100\ttest_dup\tT\tGGGT\t.\t.\tSVTYPE=DUP\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(
+            events.is_empty(),
+            "an ALT that does not start with the REF anchor must not decode: {:?}",
+            events
+        );
+    }
+
+    /// The rejected DUP shape is the one whose ALT is *longer*
+    /// (`TGTT`/`TGTTTGTT`), where the copy's source is ambiguous. An ALT
+    /// that only drops REF bases states a span like any other, and is read
+    /// as one for all three span types.
+    #[test]
+    fn test_dup_alt_shorter_than_ref_spans_the_bases_ref_keeps() {
+        let vcf = "chr1\t100\ttest_dup\tTGTT\tTG\t.\t.\tSVTYPE=DUP\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => {
+                assert_eq!((*dup_start, *dup_end), (101, 103));
+            }
+            _ => panic!("expected Duplication"),
+        }
     }
 }
