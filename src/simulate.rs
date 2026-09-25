@@ -200,7 +200,7 @@ fn simulate_event_with_copies(
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
         .unwrap_or((sv_chrom.clone(), sv_start));
-    let cov = donor_coverage_for_tiling(
+    let (cov, uncovered_breakpoint_sides) = donor_coverage_for_tiling(
         event,
         haplotype,
         pool,
@@ -270,6 +270,7 @@ fn simulate_event_with_copies(
         kept_originals: kept,
         suppressed_count: suppressed.len(),
         suppressed_names: suppressed,
+        uncovered_breakpoint_sides,
     })
 }
 
@@ -421,13 +422,20 @@ fn breakpoint_sides(haplotype: &VariantHaplotype) -> Vec<(String, u64)> {
 /// no run that already works changes its arithmetic (M7). In that case it is
 /// the first covered side instead: the only depth the event has been measured
 /// against, and scaling by the 0 would plant nothing at all.
+///
+/// Returned alongside it: the sides the event was kept *despite*. Keeping it
+/// is right, but it is not nothing -- the haplotype still spans those sides,
+/// so the fragments tiled across them are scaled by depth measured somewhere
+/// else and land where the input BAM has no read. The caller logs that and
+/// puts it in the run README; a silent coverage island is what this return
+/// value exists to prevent.
 fn donor_coverage_for_tiling(
     event: &SimEvent,
     haplotype: &VariantHaplotype,
     pool: &ReadPool,
     event_span: (&str, u64, u64),
     fallback_bp: (&str, u64),
-) -> Result<f64> {
+) -> Result<(f64, Vec<String>)> {
     let mut sides = breakpoint_sides(haplotype);
     if sides.is_empty() {
         // No junction (a SNP, or a haplotype of one segment): the event's own
@@ -448,24 +456,42 @@ fn donor_coverage_for_tiling(
         !covs.iter().any(|&c| covered(c))
     };
 
+    // Two junctions a base apart (a small variant's) name the same position
+    // twice; each one is listed once, in haplotype order.
+    let mut uncovered: Vec<String> = Vec::new();
+    for ((chrom, pos), _) in sides.iter().zip(&covs).filter(|(_, &c)| !covered(c)) {
+        let label = format!("{}:{}", chrom, pos);
+        if !uncovered.contains(&label) {
+            uncovered.push(label);
+        }
+    }
+
     if !refuse {
-        return Ok(covs
+        let cov = covs
             .iter()
             .copied()
             .find(|&c| covered(c))
-            .expect("a kept event has at least one covered breakpoint side"));
+            .expect("a kept event has at least one covered breakpoint side");
+        if !uncovered.is_empty() {
+            log::warn!(
+                "event {}:{}-{} is kept although the donor pool has no reads over \
+                 {}: one bare breakpoint side is the far edge of a sliced or panel \
+                 BAM, not a reason to refuse. But the haplotype spans every side, \
+                 so the fragments tiled across the bare part are scaled by the \
+                 {:.1}x measured elsewhere and land where the input BAM has no \
+                 read -- a coverage island the input does not have. Extract a \
+                 wider BAM, or narrow the event, if that matters downstream.",
+                event_span.0,
+                event_span.1,
+                event_span.2,
+                uncovered.join(", "),
+                cov,
+            );
+        }
+        return Ok((cov, uncovered));
     }
 
-    // Two junctions a base apart (a small variant's) name the same position
-    // twice; the message lists each one once, in haplotype order.
-    let mut positions: Vec<String> = Vec::new();
-    for ((chrom, pos), _) in sides.iter().zip(&covs).filter(|(_, &c)| !covered(c)) {
-        let label = format!("{}:{}", chrom, pos);
-        if !positions.contains(&label) {
-            positions.push(label);
-        }
-    }
-    let positions = positions.join(", ");
+    let positions = uncovered.join(", ");
     let scope = if is_fusion {
         "on one side of its junction -- every read spike plants for a fusion spans \
          the junction, so each partner needs donor reads of its own"
@@ -1945,6 +1971,54 @@ mod tests {
     }
 
     #[test]
+    fn test_an_event_kept_on_partial_donor_coverage_names_the_bare_sides() {
+        // `99f1a8e` keeps a single-locus event as long as *some* breakpoint
+        // side carries donor reads. That is the right call -- refusing it was
+        // `48be0c8`'s false refusal on a sliced BAM -- but it was silent. The
+        // haplotype is still left_flank | right_flank, so the pairs tiled
+        // across the bare half land in a window the input BAM has no read
+        // over: a coverage island where there was none, and nothing said so.
+        // DEL chr1:2000-7000, 2 kb flanks -> sides chr1:1999 and chr1:7000.
+        let mut hap = del_haplotype(2000, 5000);
+        // Donor reads over the right side only, far enough from the left one
+        // that `estimate_coverage_at`'s 2 kb window sees nothing there.
+        let pool = make_covering_pool(6500, 7500, 100);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let out = simulate_event(
+            1, &del_event(2000, 7000), &pool, &mut hap, &make_config(),
+            &mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out.uncovered_breakpoint_sides,
+            vec!["chr1:1999".to_string()],
+            "an event kept on partial donor coverage must name the sides with none"
+        );
+    }
+
+    #[test]
+    fn test_an_event_covered_on_every_side_names_none() {
+        // The warning may not fire on ordinary input, or it says nothing.
+        let mut hap = del_haplotype(2000, 5000);
+        let pool = make_covering_pool(500, 8500, 400);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let out = simulate_event(
+            1, &del_event(2000, 7000), &pool, &mut hap, &make_config(),
+            &mock_synth_gen(150), 0.2, &mut rng,
+        )
+        .unwrap();
+
+        assert!(
+            out.uncovered_breakpoint_sides.is_empty(),
+            "every side of this event has donor reads; got {:?}",
+            out.uncovered_breakpoint_sides
+        );
+    }
+
+    #[test]
     fn test_simulate_event_keeps_pairs_straddling_footprint_edge() {
         // Tiled fragments never extend past the haplotype ends, so originals
         // that stick out of the footprint must not be suppressed either;
@@ -2251,6 +2325,7 @@ mod tests {
             chimeric_pairs: chimeric.iter().map(|n| make_pair(n, 0, 400)).collect(),
             suppressed_count: suppressed.len(),
             suppressed_names: suppressed.iter().map(|n| n.to_string()).collect(),
+            uncovered_breakpoint_sides: Vec::new(),
         }
     }
 

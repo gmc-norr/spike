@@ -1111,6 +1111,28 @@ donor reads came from:**
   simulated, and so is the mirror image whose *near* side is the uncovered one;
   the tiling count is then scaled by the first covered side's coverage.
 
+**Keeping such an event is not silent.** The haplotype still spans every side,
+so the fragments tiled across the bare part are scaled by donor depth measured
+at the *other* side and land where the input BAM has no read -- a coverage
+island the input does not have. spike logs a `WARN` naming the bare sides, and
+the generated run README repeats it under the `Events` table, so a run whose
+log has scrolled past still says so. Measured on the chr20 37.5-41.5 Mb slice
+(reads start at 37,499,851), `del:chr20:37400000-37510000 --seed 1`: the
+4000 bp haplotype is `[37,398,000-37,400,000) | [37,510,000-37,512,000)`, the
+left half is outside the slice, and **258 of the 516 synthetic records** land
+there, taking chr20:37,398,000-37,400,000 from **0x** in the input BAM to
+**19.4x** in the output. The FASTQ, truth VCF and `replaced_reads.txt` are
+byte-identical to the run before the warning existed.
+
+```
+WARN spike::simulate] event chr20:37400000-37510000 is kept although the donor pool
+has no reads over chr20:37399999: one bare breakpoint side is the far edge of a sliced
+or panel BAM, not a reason to refuse. But the haplotype spans every side, so the
+fragments tiled across the bare part are scaled by the 60.7x measured elsewhere and
+land where the input BAM has no read -- a coverage island the input does not have.
+Extract a wider BAM, or narrow the event, if that matters downstream.
+```
+
 ```
 Error: event chr20:30000000-30010000 has no donor coverage at any of its breakpoints
 (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them

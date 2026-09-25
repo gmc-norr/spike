@@ -528,6 +528,7 @@ fn main() -> Result<()> {
             chimeric: output.chimeric_pairs.len(),
             suppressed: output.suppressed_count,
             dropped_unusable_qual,
+            uncovered_breakpoint_sides: output.uncovered_breakpoint_sides.clone(),
         });
 
         event_outputs.push(output);
@@ -1102,6 +1103,11 @@ struct EventStat {
     /// them from the merged BAM and nothing replaces them, so they are a
     /// depth dip in this event's window and nowhere else.
     dropped_unusable_qual: usize,
+    /// Breakpoint sides of this event the donor pool had no reads over. The
+    /// event is kept -- one bare side is the far edge of a sliced or panel
+    /// BAM -- but the tiled fragments that land there were scaled by depth
+    /// measured somewhere else, so the run README says which sides they are.
+    uncovered_breakpoint_sides: Vec<String>,
 }
 
 /// Smallest donor pool spike will simulate one event from.
@@ -1645,6 +1651,30 @@ fn write_readme(
         dropped_total, dropped_unreplaced
     )?;
     writeln!(md)?;
+    // Only when it happened: on ordinary input every side is covered and an
+    // unconditional paragraph would train the reader to skip it.
+    let bare: Vec<String> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, event)| {
+            let sides = &event_stats.get(i)?.uncovered_breakpoint_sides;
+            (!sides.is_empty()).then(|| format!("{} ({})", event_label(event), sides.join(", ")))
+        })
+        .collect();
+    if !bare.is_empty() {
+        writeln!(
+            md,
+            "**Breakpoint sides with no donor coverage:** {}. The event was kept -- \
+             a bare side is the far edge of a sliced or panel BAM, not a reason to \
+             refuse -- but its haplotype spans every side, so the fragments tiled \
+             across the bare part were scaled by donor depth measured at the *other* \
+             side and land where the input BAM has no read. Expect a coverage island \
+             there, and reads whose fragment lengths and qualities came from \
+             somewhere else in the genome.",
+            bare.join("; ")
+        )?;
+        writeln!(md)?;
+    }
     writeln!(md, "## Output files")?;
     writeln!(md)?;
     writeln!(md, "| File | Description |")?;
@@ -3057,6 +3087,7 @@ done"#,
             chimeric: 300,
             suppressed: 500,
             dropped_unusable_qual: 457,
+            uncovered_breakpoint_sides: vec!["chr20:38409999".to_string()],
         }];
         write_readme(
             dir.to_str().unwrap(),
@@ -3082,6 +3113,77 @@ done"#,
         assert!(
             md.contains("412"),
             "the total removed without a replacement must be in the run README:\n{}",
+            md
+        );
+    }
+
+    #[test]
+    fn test_run_readme_names_a_breakpoint_side_with_no_donor_coverage() {
+        // `99f1a8e` keeps an event whose footprint is only partly inside the
+        // donor data, which is right, but it kept it silently: the tiled
+        // fragments over the bare side are scaled by depth measured at the
+        // other one and land where the input BAM has no read. Measured on the
+        // chr20 37.5-41.5 Mb slice, `del:chr20:37400000-37510000` puts 258 of
+        // its 516 synthetic records over chr20:37,398,000-37,400,000, taking
+        // that window from 0x in the input to 19.4x in the output. Nothing in
+        // any output file said so.
+        let dir = std::env::temp_dir().join(format!("spike_readme_bare_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![del("chr20", 37_400_000, 37_510_000)];
+        let stats = vec![EventStat {
+            vaf: 0.5,
+            kept: 3000,
+            chimeric: 258,
+            suppressed: 66,
+            dropped_unusable_qual: 0,
+            uncovered_breakpoint_sides: vec!["chr20:37397999".to_string()],
+        }];
+        write_readme(
+            dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+            &events, &stats, 3258, 10_000, 0,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            md.contains("chr20:37397999"),
+            "the run README must name the breakpoint side with no donor \
+             coverage:\n{}",
+            md
+        );
+    }
+
+    #[test]
+    fn test_run_readme_says_nothing_when_every_side_is_covered() {
+        // The paragraph may not appear on ordinary input, or it trains the
+        // reader to skip it.
+        let dir = std::env::temp_dir().join(format!("spike_readme_ok_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![del("chr20", 38_412_500, 38_422_500)];
+        let stats = vec![EventStat {
+            vaf: 0.5,
+            kept: 4000,
+            chimeric: 300,
+            suppressed: 500,
+            dropped_unusable_qual: 0,
+            uncovered_breakpoint_sides: Vec::new(),
+        }];
+        write_readme(
+            dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+            &events, &stats, 4300, 10_000, 0,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            !md.contains("no donor coverage"),
+            "a fully covered run must not carry the warning:\n{}",
             md
         );
     }

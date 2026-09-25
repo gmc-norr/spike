@@ -218,4 +218,10 @@ pub struct SplicedOutput {
     /// combining events: another event's pool may contain the same pair and
     /// would otherwise pass it through as a kept original.
     pub suppressed_names: Vec<String>,
+    /// Breakpoint sides of this event that the donor pool has no reads over,
+    /// `chrom:pos`, deduplicated and in haplotype order. Empty for an event
+    /// whose every side is covered. A single-locus event is kept when at
+    /// least one side is covered, so this is the part of its footprint whose
+    /// synthetic reads have no donor depth behind them.
+    pub uncovered_breakpoint_sides: Vec<String>,
 }

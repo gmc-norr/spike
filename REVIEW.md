@@ -66,7 +66,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
-| N10 | Medium | **Fixed** (found by the whole-branch review). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
+| N10 | Medium | **Fixed, narrowed to complex alleles** (found by the whole-branch review; narrowed by the verification review, which measured that spike *will* plant `TG`>`GTT` and `A`>`CG` on request, so the symptom survives for those). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
 | N12 | Medium | **Fixed** (found while closing N10). N5's donor-coverage refusal measured the **first** breakpoint only, so the same fusion was refused or accepted depending on which partner was named first. Now every breakpoint side is measured, scoped to the loci the pool was extracted from: both sides for a fusion, at least one for a single-locus event | `simulate.rs:196-220` (at `ad9881e`); `simulate.rs:203-210, 379-495` (now) |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
@@ -970,10 +970,33 @@ it.
   left deliberately.** A **complex** allele -- one that changes length *and*
   rewrites the anchor base, such as `AC` > `GTT`, `A` > `CG` or `AC` > `AGT` --
   has neither a single CIGAR operation nor a single allele run to count, so it
-  reports `N/A (complex allele)` and FAILs. spike cannot produce one: its own
-  small-variant haplotype is built as `left | ALT | right`, and the truth record
-  it writes is whatever REF/ALT the user gave. The depth floor and the non-ACGT
+  reports `N/A (complex allele)` and FAILs. The depth floor and the non-ACGT
   allele exits are unchanged, and both still FAIL.
+
+  **N10 is therefore narrowed, not closed.** This entry first said spike
+  "cannot produce one: its own small-variant haplotype is built as
+  `left | ALT | right`". That construction is exactly what makes *any* shape
+  producible. `parse_snp_spec` (`exon.rs:614`) accepts any non-empty A/C/G/T
+  REF/ALT pair, `haplotype.rs:426` only branches on
+  `ref_allele.len() == alt_allele.len()` to decide whether the alt segment
+  gets a `SegmentOrigin`, and `truth.rs:283-295` writes the pair verbatim.
+  Measured on the chr20 37.5-41.5 Mb slice, `--seed 1`:
+
+  ```
+  --event "snp:chr20:38550000:TG:GTT" --event "snp:chr20:38550003:A:CG"
+    exit 0, truth.vcf:
+      chr20 38550000 sim_var_1 TG GTT ... SIM_VAF=0.500
+      chr20 38550003 sim_var_2 A  CG  ... SIM_VAF=0.500
+    spike validate -t truth.vcf   ->  2 x `allele_freq N/A (complex allele) FAIL`
+                                      Result: 3/5 PASS, exit 1
+  ```
+
+  So the symptom this entry set out to remove -- a truth VCF spike itself
+  wrote that can never report all-PASS -- **survives for complex alleles**.
+  The only guard is the REF-must-match-the-reference check, which rejects a
+  spelling whose REF is not the reference there, not a complex one. Closing it
+  needs a counting rule for complex alleles, or a refusal at `--event` parse
+  time; neither is done here.
 - `test_allele_freq_it_cannot_measure_is_not_a_pass` was **corrected, not
   weakened**: three of its four cases (`AC`>`A`, `A`>`ACGT`, `TG`>`AC`) were
   the very shapes this entry gives a check, so they now reach the BAM and error
@@ -1114,6 +1137,23 @@ position 3000 measures `cov = 50`, not 0. The entry was reasoning about the
 exact base rather than the window the function actually uses. The test passes
 unchanged here, and it is the single-locus rule above that keeps the shape it
 encodes legitimate.
+
+**The permissive branch is no longer silent** (added by the verification
+review). "No side of any breakpoint covered" plus `estimate_coverage_at`'s
+2 kb / 50-sample window means one donor read within ~1 kb of any breakpoint
+side keeps the event, and the tiling count is then scaled by coverage measured
+somewhere else. Measured on the chr20 37.5-41.5 Mb slice (reads start at
+37,499,851), `del:chr20:37400000-37510000 --seed 1`: the 4000 bp haplotype is
+`[37,398,000-37,400,000) | [37,510,000-37,512,000)`, its left half lies outside
+the slice, and **258 of the 516 synthetic records** land there --
+chr20:37,398,000-37,400,000 goes from **0x** in the input BAM to **19.4x** in
+the output, a coverage island the input does not have. Nothing in the log or
+the run README said so. `donor_coverage_for_tiling` now returns the sides it
+kept the event despite; `simulate_event` logs a `WARN` naming them and carries
+them into `SplicedOutput`, `EventStat` and the generated run README. Keeping
+the event is still right -- refusing it was `48be0c8`'s false refusal -- and
+the FASTQ, truth VCF and `replaced_reads.txt` for that command are
+byte-identical to the run before the warning existed (M7).
 
 **Two tests were corrected, not weakened**, both for the same reason: their
 synthetic pools held no donor reads at all for one fusion partner, which is the
