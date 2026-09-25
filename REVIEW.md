@@ -2866,7 +2866,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, fixed |
 | CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
 | CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note; its fail-closed half fixed for `--gvcf` |
-| CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
+| CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note; option B's census and warning done (not a gate) |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note; relabelled (warning, help, README), not renamed |
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence, the AF caps and `af=het` fixed; input GT and ploidy still open) |
@@ -3032,6 +3032,25 @@ request by more than a tenth.
 
 Not in this step: `spike validate` reporting the fraction (that is CR9 option B), and editing
 any resistant read (option A).
+
+#### Result: CR4 option B -- supported
+
+Code `2b5b193`. Binaries: master `70ae5a0` md5 `390a1954…`, census `2b5b193` md5
+`fe5fa821…`, each built in its own target dir.
+- **C1 pass.** `lowmap`, `del:chrT:10000-14000;af=1`: `SIM_RESIST=0.500` (1038 of 2074
+  reads), and the warning printed.
+- **C2 pass.** `uniform`, same event: `SIM_RESIST=0.000` (0 of 2074), no warning.
+- **C3 pass.** On both probes `R1.fq.gz`, `R2.fq.gz` and `replaced_reads.txt` have the same
+  md5 under master and the census binary. `truth.vcf` differs by the new header line, the
+  `SIM_RESIST` field, and `##reference`, which names each run's own copy of the probe
+  reference; the two copies have the same md5 (`31977ee8…`).
+- **C4 pass.** The 40 deletions (event list md5 `8f304862…`, as locked) all ran, none refused,
+  and **0 of 40** warned. `SIM_RESIST`: min 0.003, median 0.010, max 0.083 (event 34,
+  `chr20:56107004-56117004`, 236 of 2853).
+
+Not measured: a real locus where the warning *should* fire. C1 shows it fires on the synthetic
+case, and C4 that it stays quiet on ordinary loci; a hard real locus (a segmental duplication,
+say) has not been tried.
 
 ### CR5 -- long-insertion placement breaks its own reference-overlap constraint
 

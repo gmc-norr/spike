@@ -454,6 +454,16 @@ Records spike extracted and then suppressed (the deleted copy of a heterozygous 
 
 The records kept because spike never extracted them (PCR duplicates, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
 
+#### Reads spike cannot edit
+
+spike counts those kept reads for every event and reports them (CR4). Which reads it edits does not change; it only says how many it could not. Per event, the log prints `Reads over the event spike cannot edit: <resistant> of <counted>`, the run README gets a **Resistant reads** column, and `truth.vcf` records the share as `SIM_RESIST`. Above **0.10** spike also warns, and the run README names the event:
+
+```
+DEL  chrT:10001-14000 (4000bp): 1038 of 2074 reads over it (50%) are ones spike cannot edit (below --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the merged BAM as they are, so the event is weaker than requested; truth.vcf records the share as SIM_RESIST (CR4).
+```
+
+That is the review's `lowmap` probe, half of whose pairs are at MAPQ 0: a deletion asked for at AF=1 keeps half its depth. On ordinary loci the share is small. Measured on 40 seeded 10 kb deletions inside the HG002 SV benchmark on chr20 (35x, `--min-mapq` 20): median **0.010**, largest **0.083**, and none above 0.10. Duplicates are not counted, because callers usually skip them; a consumer that counts them sees more surviving depth than `SIM_RESIST` says.
+
 `align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
@@ -558,7 +568,10 @@ predicts 28.13x (`CR2` in `REVIEW.md` for the depth, `CR9` for the check passing
 MAPQ filter rejects: on the same probes, with half the donor pairs at MAPQ 0, a
 deletion requested at AF=1 kept **37.5x** of its reads inside the deletion and
 still PASSed at an observed **0.00**, because `--min-mapq` (default 20) hides
-exactly the reads that survived (`CR4`).
+exactly the reads that survived (`CR4`). spike itself now counts those reads
+at simulation time, as `SIM_RESIST` in the truth VCF (0.500 on that probe; see
+[Reads spike cannot edit](#reads-spike-cannot-edit)), but `spike validate`
+does not read it yet.
 
 `split_reads` establishes that at least **two** distinct read names, pooled
 over the two breakpoints, sit within 500 bp of one breakpoint and carry an
@@ -832,6 +845,7 @@ The truth VCF contains one record per simulated event with:
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
 - `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split
 - `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
+- `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. See [Reads spike cannot edit](#reads-spike-cannot-edit)
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
 
