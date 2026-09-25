@@ -2883,8 +2883,9 @@ Six findings change what spike simulates or what it does by default, so they are
 rather than implemented. Each note carries the measured problem, the governing principle, at
 most two options with a recommendation, the measurement that would show the fix works **and**
 the one that would show it does not, a rough size, and what it breaks for existing users. They
-live outside the repo, with this run's ledger, at
-`/home/parlar_ai/spike-codex-run/DESIGN-NOTES.md`.
+are in `CLINICAL_SV_DESIGN_NOTES.md`, copied from the run's folder, and the findings the run
+recorded but did not fix are in `CLINICAL_SV_NEW_FINDINGS.md`. The run's full ledger,
+`STATUS.md`, stays in `/home/parlar_ai/spike-codex-run/`.
 
 - **CR2, donor-aware depth.** Gate heterogeneous footprints first, then learn a spatial
   fragment-start intensity. Decided by the 18.75x interior reading 28.13x rather than 81.09x,
