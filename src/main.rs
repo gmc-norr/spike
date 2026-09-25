@@ -481,8 +481,9 @@ fn main() -> Result<()> {
 
 
     // Process each event using the unified haplotype + tiling approach.
-    for (i, event) in events.iter().enumerate() {
-        log::info!("Processing event {}/{}: {:?}", i + 1, events.len(), event);
+    let n_events = events.len();
+    for (i, event) in events.iter_mut().enumerate() {
+        log::info!("Processing event {}/{}: {:?}", i + 1, n_events, event);
         let vaf = event.allele_fraction().unwrap_or(config.allele_fraction);
         log::info!("  Using VAF={:.3} for this event", vaf);
 
@@ -1302,7 +1303,7 @@ fn extract_windows(
 
 /// Build a VariantHaplotype for a given event.
 fn build_haplotype(
-    event: &SimEvent,
+    event: &mut SimEvent,
     reference: &crate::reference::SharedReference,
     flank: u64,
     dup_model: &str,
@@ -1349,7 +1350,12 @@ fn build_haplotype(
                 let bases = [b'A', b'C', b'G', b'T'];
                 (0..*ins_len).map(|_| bases[rng.gen_range(0..4)]).collect()
             };
-            VariantHaplotype::from_insertion(reference, chrom, *pos, &seq, flank)
+            let hap = VariantHaplotype::from_insertion(reference, chrom, *pos, &seq, flank);
+            // CR7: keep the sequence on the event. The truth VCF is written
+            // after this loop, so this is what lets its ALT spell out the
+            // bases the reads were cut from instead of a symbolic <INS>.
+            *ins_seq = Some(seq);
+            hap
         }
         SimEvent::Fusion {
             chrom_a,
@@ -3453,5 +3459,31 @@ done"#,
             "the error must name both windows: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_build_haplotype_stores_generated_insertion_sequence() {
+        let reference = crate::reference::SharedReference::from_sequences(
+            [("chr1".to_string(), b"ACGT".repeat(100))].into(),
+        );
+        let mut event = SimEvent::Insertion {
+            chrom: "chr1".to_string(),
+            pos: 200,
+            ins_seq: None,
+            ins_len: 30,
+            gene: "G".to_string(),
+            allele_fraction: None,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let hap = build_haplotype(&mut event, &reference, 50, "junction", &mut rng).unwrap();
+        let stored = match &event {
+            SimEvent::Insertion { ins_seq, .. } => ins_seq.clone(),
+            _ => unreachable!(),
+        };
+        let stored = stored.expect("generated sequence kept on the event for truth to write");
+        // The bases kept are the ones the haplotype -- and so every read cut
+        // from it -- carries, not just the same count of them.
+        assert_eq!(stored.len(), 30);
+        assert_eq!(hap.get_sequence(50, 30), stored.as_slice());
     }
 }

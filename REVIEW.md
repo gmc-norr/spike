@@ -2708,7 +2708,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
-| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed |
+| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence fixed) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, not fixed |
@@ -2814,9 +2814,28 @@ conserved.
 - **`af=het` moves the event fraction,** not just the observation:
   `Beta(40,40)` (`src/main.rs:430`) feeds `resolved_af`, which drives both suppression and
   generation.
-- **Insertion sequence is lost.** Truth writes `<INS>` with SVLEN only (`src/truth.rs:264`);
-  a generated sequence is a local value in `src/main.rs:1252` and is never stored in the
-  event.
+- **Insertion sequence is lost.** Truth wrote `<INS>` with SVLEN only (`src/truth.rs:264`);
+  a generated sequence was a local value in `src/main.rs:1252` and was never stored in the
+  event. **Fixed -- this bullet only; the other four are open.** `build_haplotype` writes the
+  sequence it generates back into `SimEvent::Insertion::ins_seq`, which the haplotype loop
+  does before `write_truth_vcf` runs, and the INS record's ALT is the anchor base followed by
+  those bases, uppercased the way `from_insertion` uppercases them for the reads. Where the
+  sequence is generated, and how many RNG draws it takes, are unchanged. Measured on the
+  review's own synthetic chrT (`--seed 17 --flank 2000`, `ins:chrT:20000:500`): `4efa0f4`
+  wrote `chrT 20000 sim_ins_1 T <INS> 999 PASS SVTYPE=INS;SVLEN=500;...`, and the fix writes
+  the same line with `ALT` = `T` + the 500 generated bases (501 characters). It is the reads'
+  sequence, not merely its length: all 470 of the ALT's 31-mers occur in the emitted FASTQ,
+  150 consecutive ALT bases appear verbatim in one read, and the ALT's sequence occurs nowhere
+  in the reference. An explicitly supplied sequence comes back exactly (`ALT == REF` + the
+  supplied bases). `POS`, `REF`, `SVTYPE` and `SVLEN` are untouched, and no other event type's
+  record moves: on a del+dup+inv+ins run, and on a SNP run, the truth VCFs of `4efa0f4` and
+  the fix differ on the INS line and nowhere else. `spike validate` still loads the record as
+  an INS and its `ins_reads` check still runs and passes (22 reads for the 500 bp insertion).
+  Feeding the new truth back through `--vcf` now reproduces the identical ALT -- the "cannot
+  recover the original insertion sequence" the review named. A 1 Mb insertion puts a
+  1,000,001-character ALT on one line: its truth VCF is 1,001,142 bytes against 1146 for the
+  symbolic form, `spike validate` still parses it (`ins_reads` 39, PASS) and `bcftools view`
+  and `bcftools query` read it unchanged.
 - **Requested AF is written despite caps.** `MAX_ADDITIVE_VAF = 0.95`
   (`src/simulate.rs:575`) and `MIN_TILED_FRAGMENTS = 2` (`src/simulate.rs:608`) change the
   simulated fraction; only a `log::warn!` records it, and truth keeps the request.

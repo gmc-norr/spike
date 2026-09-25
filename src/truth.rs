@@ -253,17 +253,33 @@ pub fn write_truth_vcf(
             SimEvent::Insertion {
                 chrom,
                 pos,
+                ins_seq,
                 ins_len,
                 gene,
                 ..
             } => {
+                // Sequence-resolved ALT: the anchor base plus the inserted
+                // bases, uppercased exactly as `from_insertion` uppercases
+                // them, so the truth spells the sequence the reads carry.
+                // An event whose sequence was never resolved has none to
+                // write and keeps the symbolic ALT.
+                let anchor = base_at(chrom, *pos);
+                let alt = match ins_seq {
+                    Some(seq) => {
+                        let mut a = anchor.clone();
+                        a.extend(seq.iter().map(|b| b.to_ascii_uppercase() as char));
+                        a
+                    }
+                    None => "<INS>".to_string(),
+                };
                 records.push((
                     chrom.clone(),
                     *pos,
                     format!(
-                        "sim_ins_{}\t{}\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
+                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_GENE={}\tGT\t{}",
                         i + 1,
-                        base_at(chrom, *pos),
+                        anchor,
+                        alt,
                         ins_len,
                         event_af,
                         gene,
@@ -486,5 +502,66 @@ mod tests {
             records(99, 199, FusionJoin::RightRight),
             [(100, "[chr2:200[N".to_string()), (200, "[chr1:100[N".to_string())]
         );
+    }
+
+    /// chr1 = GATTACAGATTACA; an insertion at 0-based 7 is anchored on the
+    /// A at 0-based 6 (1-based POS 7).
+    fn ins_reference() -> SharedReference {
+        SharedReference::from_sequences(
+            [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
+        )
+    }
+
+    /// The INS record's CHROM, POS, ID, REF, ALT and INFO. `tag` keeps
+    /// concurrently running callers off each other's temporary file.
+    fn ins_record(tag: &str, ins_seq: Option<Vec<u8>>, ins_len: u64) -> Vec<String> {
+        let reference = ins_reference();
+        let contigs = vec![("chr1".to_string(), 14)];
+        let events = vec![SimEvent::Insertion {
+            chrom: "chr1".to_string(),
+            pos: 7,
+            ins_seq,
+            ins_len,
+            gene: "G".to_string(),
+            allele_fraction: None,
+        }];
+        let path = std::env::temp_dir()
+            .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
+        write_truth_vcf(&events, 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let line = text
+            .lines()
+            .find(|l| !l.starts_with('#'))
+            .expect("one INS record");
+        let f: Vec<&str> = line.split('\t').collect();
+        vec![
+            f[0].to_string(),
+            f[1].to_string(),
+            f[2].to_string(),
+            f[3].to_string(),
+            f[4].to_string(),
+            f[7].to_string(),
+        ]
+    }
+
+    #[test]
+    fn test_truth_ins_alt_is_anchor_plus_supplied_sequence() {
+        let r = ins_record("supplied", Some(b"GGGG".to_vec()), 4);
+        assert_eq!(&r[..5], ["chr1", "7", "sim_ins_1", "A", "AGGGG"]);
+        assert!(
+            r[5].starts_with("SVTYPE=INS;SVLEN=4;"),
+            "SVTYPE and SVLEN unchanged, got {}",
+            r[5]
+        );
+    }
+
+    #[test]
+    fn test_truth_ins_alt_uppercases_supplied_sequence() {
+        // `from_insertion` uppercases before the reads are cut from it, so
+        // truth must uppercase too or the ALT is not the reads' sequence.
+        let r = ins_record("lowercase", Some(b"ggtt".to_vec()), 4);
+        assert_eq!(r[4], "AGGTT");
     }
 }

@@ -685,6 +685,12 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 The truth VCF contains one record per simulated event with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
+- A sequence-resolved `ALT` for an insertion: `REF` is the anchor base at `POS` and `ALT` is
+  that base followed by the inserted bases, supplied or generated, so the truth carries the
+  sequence the reads were built from rather than a symbolic `<INS>`. `SVTYPE=INS` and `SVLEN`
+  are unchanged, and the record reads back through `--vcf` as the same insertion. A 1 Mb
+  insertion therefore writes a ~1 MB `ALT` on one line: that truth VCF is 1,001,142 bytes
+  against 1146 for the symbolic form
 - `SIM_VAF` in the INFO field with the actual allele fraction used
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
@@ -957,7 +963,7 @@ The middle segment is the reverse complement of the original reference sequence.
 [left_flank]          [novel_sequence]       [right_flank]
 ref[P-F .. P]         <inserted bases>       ref[P .. P+F]
 ```
-The inserted sequence is either user-specified or randomly generated. It has no reference origin (novel sequence).
+The inserted sequence is either user-specified or randomly generated. It has no reference origin (novel sequence). A generated sequence is kept on the event, so the truth VCF spells it out: `REF` is the anchor base at `POS` and `ALT` is that base plus the inserted bases (see [Truth VCF](#truth-vcf)).
 
 **Simulation**: Suppress-and-replace. Reads spanning left_flank→novel or novel→right_flank produce chimeric reads at the insertion point. Tiling draws each fragment start from the starts that overlap reference sequence, so no fragment is placed entirely within the novel sequence (such reads wouldn't align to the reference at all).
 
