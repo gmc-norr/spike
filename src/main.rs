@@ -23,7 +23,6 @@ use clap::Parser;
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Beta, Distribution};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -64,7 +63,7 @@ struct Args {
     /// Per-event AF (appended with ;):
     ///   --event "del:GENE:exon4-exon8;af=0.15"
     ///   --event "fusion:GENEA:exon14:GENEB:exon2;af=het"
-    ///   af=<number>: exact AF, af=het: Beta(40,40)~0.5, af=hom: 1.0
+    ///   af=<number>: exact AF, af=het: 0.5, af=hom: 1.0
     #[arg(short, long)]
     event: Vec<String>,
 
@@ -221,6 +220,21 @@ fn validate_allele_fraction(af: f64) -> Result<()> {
 
 /// Check `--flank`: originals are only suppressed inside the extracted
 /// window (event ± flank), but synthetic reads cover event ± HAP_FLANK.
+/// Turns an event's `;af=` spec into the fraction it is simulated at. `None`
+/// means the event takes the global `--allele-fraction`.
+///
+/// `af=het` is one copy of two, so exactly 0.5 (CR7(c)). It used to draw
+/// from Beta(40,40), which moved the event itself, not just what the reads
+/// show: above 0.5 the other copy lost reads too.
+fn resolve_af_spec(af_spec: Option<AfSpec>) -> Option<f64> {
+    match af_spec {
+        Some(AfSpec::Exact(v)) => Some(v),
+        Some(AfSpec::Het) => Some(0.5),
+        Some(AfSpec::Hom) => Some(1.0),
+        None => None, // will use global default
+    }
+}
+
 fn validate_flank(flank: u64) -> Result<()> {
     if flank < HAP_FLANK {
         bail!(
@@ -430,18 +444,7 @@ fn main() -> Result<()> {
     let mut events: Vec<SimEvent> = parsed
         .into_iter()
         .map(|(mut event, af_spec)| {
-            let resolved_af = match af_spec {
-                Some(AfSpec::Exact(v)) => Some(v),
-                Some(AfSpec::Het) => {
-                    let beta = Beta::new(40.0, 40.0).unwrap();
-                    let v = beta.sample(&mut rng);
-                    log::info!("  Het AF sampled: {:.3}", v);
-                    Some(v)
-                }
-                Some(AfSpec::Hom) => Some(1.0),
-                None => None, // will use global default
-            };
-            event.set_allele_fraction(resolved_af);
+            event.set_allele_fraction(resolve_af_spec(af_spec));
             event
         })
         .collect();
@@ -2087,6 +2090,19 @@ mod tests {
         // 1.5 exercises the same `<= 1.0` branch as any value clearly over
         // 1; this pins a value just barely over the boundary instead.
         assert!(validate_allele_fraction(1.0000001).is_err());
+    }
+
+    #[test]
+    fn test_af_het_is_exactly_one_half() {
+        // CR7(c): af=het drew the event's fraction from Beta(40,40), so a
+        // "heterozygote" was built as a dosage mixture: above 0.5 the other
+        // copy lost reads too. A het event is one copy of two.
+        // Before the fix the draw came from the run's --seed; seed 0 gave
+        // 0.4605. The helper takes no RNG now, so no seed can move it.
+        assert_eq!(resolve_af_spec(Some(AfSpec::Het)), Some(0.5));
+        assert_eq!(resolve_af_spec(Some(AfSpec::Exact(0.15))), Some(0.15));
+        assert_eq!(resolve_af_spec(Some(AfSpec::Hom)), Some(1.0));
+        assert_eq!(resolve_af_spec(None), None);
     }
 
     #[test]

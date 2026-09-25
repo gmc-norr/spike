@@ -13,7 +13,7 @@ use crate::types::{FusionJoin, SimEvent};
 pub enum AfSpec {
     /// Exact allele fraction value.
     Exact(f64),
-    /// Germline heterozygous: sample from Beta(40,40) centered at 0.5.
+    /// Germline heterozygous: exactly 0.5, one copy of two.
     Het,
     /// Homozygous: fixed at 1.0.
     Hom,
@@ -218,7 +218,7 @@ fn exon_number_from_name(name: &str) -> Option<u32> {
 ///   "inv:chr20:30000000-30005000"             — inversion
 ///   "ins:chr20:30000000:500"                  — insertion (500bp random seq)
 ///   "del:GENE:exon4-exon8;af=0.15"           — with explicit allele fraction
-///   "fusion:GENEA:exon14:GENEB:exon2;af=het" — with heterozygous AF distribution
+///   "fusion:GENEA:exon14:GENEB:exon2;af=het" — heterozygous, AF 0.5
 ///   "del:GENE:exon4-exon8;af=hom"            — with homozygous AF (1.0)
 ///
 /// `contigs` are the reference's contig names, used to keep a contig name
