@@ -430,18 +430,43 @@ computed from one sample of the reads in the truth events' own windows (event
 +/- `--flank`), read with the same indexed query the per-event checks use, not
 from the head of the file: the first 100k records of a whole-genome BAM are
 chr1's telomere, mean MAPQ 10.0, which fails a check the rest of the file
-passes. The sample is capped at 200,000 records, shared out over the events so
-one long event cannot spend it. `spike validate` therefore needs the BAM's
-`.bai` / the CRAM's `.crai`, which its per-event checks already required.
+passes. The sample is capped at 200,000 records and **every** event gets an
+equal share of that cap (200,000 / number of events, at least one record each),
+so no event is left out however many the truth VCF holds. `spike validate`
+therefore needs the BAM's `.bai` / the CRAM's `.crai`, which its per-event
+checks already required.
+
+Each region's contribution and the size of the whole sample are logged at
+`INFO` (`[global] sampled 117 records from chr20:37500081-37500320`,
+`[global] sample: 117 records over 1 of 1 event regions`): a check computed
+over 117 records prints exactly like one computed over 200,000, so read the log
+before trusting a global number from a narrow `--flank`. Within one window the
+sample is that window's first records in coordinate order, not a spread over
+it, so an event longer than its share covers (above roughly 1 Mb at 35x with
+one event) is represented by its start. A region that cannot be queried — a
+truth event on a contig the alignment file does not have — is logged as a `WARN`
+and skipped; the sample fails only if no region could be read at all.
 
 A global check whose sample cannot answer it **fails** rather than passing on a
-default: a file whose duplicates were never marked reports `dup_rate` as
-`no dup flags` (no record carries the flag, so 0% would be an assumption, not a
-measurement — mark duplicates if you want the rate evaluated), and a window
-holding no properly-paired record reports `insert_size` as `no pairs`. Both
-also log a `WARN` line naming the reason. A truth VCF with no events leaves no
-window to sample, so all three global checks fail rather than reporting
-whole-file statistics for a run that validated nothing.
+default. `dup_rate` distinguishes three cases when no sampled record carries the
+duplicate flag: if a `@PG` record names a duplicate marker (`samtools markdup`,
+Picard/GATK `MarkDuplicates`, `sambamba markdup`, `bammarkduplicates`,
+`umi_tools dedup`) the rate is a measured `0.0%` and passes — the pipeline
+decided those reads are not duplicates; if fewer than 1,000 records were sampled
+it reports `too few reads`, because at a 1% duplicate rate a 41-record window
+holds no duplicate about two times in three; otherwise it reports `no dup flags`
+and asks for duplicates to be marked. A window holding no properly-paired record
+reports `insert_size` as `no pairs`. Each also logs a `WARN` naming the reason.
+A truth VCF with no events leaves no window to sample, so all three global
+checks fail rather than reporting whole-file statistics for a run that validated
+nothing.
+
+A truth event **no check applies to** is reported as a failed `event_checked`
+result rather than left out. Only DEL and DUP get `coverage_ratio`, only
+DEL/DUP/INV/BND get `split_reads`, and only a SNP with explicit REF/ALT gets
+`allele_freq`, so an INS has no per-event check at all: without this an
+INS-only truth VCF scored `3/3 PASS` on the three global checks alone, having
+verified nothing about the one event it was given.
 
 ### Controlling the read extraction region
 

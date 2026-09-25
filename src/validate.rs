@@ -22,6 +22,9 @@ struct ValidateArgs {
     json_output: bool,
 }
 
+/// The event label the three whole-sample checks are reported under.
+const GLOBAL_LABEL: &str = "[global]";
+
 /// A truth VCF event with its expected properties.
 #[derive(Debug)]
 struct TruthEvent {
@@ -81,40 +84,18 @@ pub fn run() -> Result<()> {
 
     // Per-event checks.
     for event in &truth_events {
-        let label = format_event_label(event);
-
-        // Coverage ratio check (meaningful for DEL, DUP).
-        if event.sv_type == "DEL" || event.sv_type == "DUP" {
-            let r = check_coverage_ratio(
-                &args.bam_path,
-                &args.ref_path,
-                event,
-                args.flank_bp,
-                args.min_mapq,
-            );
-            results.push(check_outcome(&label, "coverage_ratio", r));
-        }
-
-        // Split reads joining the two breakpoints (not INS: its inserted
-        // sequence has no second reference breakpoint).
-        if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
-            let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-            results.push(check_outcome(&label, "split_reads", r));
-        }
-
-        // Allele frequency (meaningful for SNPs/small variants).
-        if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
-            let r = check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq);
-            results.push(check_outcome(&label, "allele_freq", r));
-        }
-
-        // Log progress.
-        log::info!("Checked: {}", label);
+        check_event(&args, event, &mut results);
     }
 
     // Global checks. All three read one sample, taken from the truth events'
     // own regions rather than from the head of the file (L15).
-    match sample_event_regions(&args.bam_path, &args.ref_path, &truth_events, args.flank_bp) {
+    match sample_event_regions(
+        &args.bam_path,
+        &args.ref_path,
+        &truth_events,
+        args.flank_bp,
+        GLOBAL_SAMPLE_MAX,
+    ) {
         Ok(sample) => {
             results.push(check_insert_size(&sample));
             results.push(check_dup_rate(&sample));
@@ -125,7 +106,7 @@ pub fn run() -> Result<()> {
             // three checks that quietly pass on a default (M10, M11).
             for check_name in ["insert_size", "dup_rate", "mean_mapq"] {
                 results.push(check_outcome(
-                    "global",
+                    GLOBAL_LABEL,
                     check_name,
                     Err(anyhow::anyhow!("{:#}", e)),
                 ));
@@ -144,6 +125,58 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run every check that applies to one truth event, pushing one result per
+/// check. An event no check applies to gets one failed "not evaluable"
+/// result, so a truth VCF of such events cannot report all-PASS (M11).
+fn check_event(args: &ValidateArgs, event: &TruthEvent, results: &mut Vec<CheckResult>) {
+    let label = format_event_label(event);
+    let n_before = results.len();
+
+    // Coverage ratio check (meaningful for DEL, DUP).
+    if event.sv_type == "DEL" || event.sv_type == "DUP" {
+        let r = check_coverage_ratio(
+            &args.bam_path,
+            &args.ref_path,
+            event,
+            args.flank_bp,
+            args.min_mapq,
+        );
+        results.push(check_outcome(&label, "coverage_ratio", r));
+    }
+
+    // Split reads joining the two breakpoints (not INS: its inserted
+    // sequence has no second reference breakpoint).
+    if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
+        let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
+        results.push(check_outcome(&label, "split_reads", r));
+    }
+
+    // Allele frequency (meaningful for SNPs/small variants).
+    if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
+        let r = check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq);
+        results.push(check_outcome(&label, "allele_freq", r));
+    }
+
+    if results.len() == n_before {
+        // No check applies to this event type -- an INS has no coverage
+        // ratio, no split reads and no allele frequency -- so nothing about
+        // the event was verified. An unverified event is a failed result, not
+        // an absent one: an INS-only truth VCF used to score 3/3 PASS on the
+        // three global checks alone (M11).
+        log::warn!("no check applies to {}, so it was not evaluated", label);
+        results.push(CheckResult {
+            event_label: label.clone(),
+            check_name: "event_checked".to_string(),
+            expected: "a check applies".to_string(),
+            observed: format!("none for {}", event.sv_type),
+            pass: false,
+        });
+    }
+
+    // Log progress.
+    log::info!("Checked: {}", label);
 }
 
 /// Parse validate-specific arguments from std::env::args().
@@ -650,9 +683,11 @@ fn check_allele_freq(
 /// Records to sample for the global checks, over all event regions together.
 const GLOBAL_SAMPLE_MAX: u64 = 200_000;
 
-/// The smallest per-event share of that budget, so a truth VCF with many
-/// events still reads enough of each one.
-const GLOBAL_SAMPLE_MIN_PER_REGION: u64 = 1_000;
+/// The smallest sample a missing duplicate flag says anything about. At a 1%
+/// duplicate rate a 41-record window holds no duplicate about two times in
+/// three, while 1 000 records hold none with probability 4e-5, so below this
+/// "no record carries the flag" is a small sample, not an unmarked file.
+const DUP_RATE_MIN_SAMPLE: u64 = 1_000;
 
 /// What the three global checks are computed from: primary, mapped records
 /// sampled from the truth events' own regions.
@@ -666,6 +701,8 @@ struct GlobalSample {
     mapq_sum: u64,
     /// Template lengths of the properly-paired, non-duplicate records.
     insert_sizes: Vec<f64>,
+    /// Whether the alignment file's header records a duplicate-marking step.
+    duplicates_marked: bool,
 }
 
 impl GlobalSample {
@@ -711,35 +748,50 @@ impl GlobalSample {
     }
 }
 
-/// Sample records for the global checks from every truth event's own window
-/// (event +/- `flank_bp`).
+/// Sample up to `budget` records for the global checks from every truth
+/// event's own window (event +/- `flank_bp`).
 ///
 /// The head of a file is not a sample of it: on whole-genome HG002 the first
 /// 100k records are chr1's telomere, mean MAPQ 10.0, which fails a check the
 /// rest of the file passes (L15). The event windows are both representative of
 /// the reads `validate` is judging and cheap to read, because they are indexed
 /// queries like every other check here rather than a walk from the top.
+///
+/// Every event gets an equal share of the budget and no event is skipped. The
+/// sample is still the *head* of each window, in coordinate order, so an event
+/// longer than its share covers (above about 1 Mb at 35x with the default
+/// budget and one event) is represented by its first records rather than by a
+/// spread over it. The size of the sample, and of each region's contribution,
+/// is logged, because a check computed over 41 records reads exactly like one
+/// computed over 200 000.
 fn sample_event_regions(
     bam_path: &str,
     ref_path: &str,
     events: &[TruthEvent],
     flank_bp: u64,
+    budget: u64,
 ) -> Result<GlobalSample> {
     if events.is_empty() {
         bail!("truth VCF holds no events, so there is no region to sample");
     }
 
-    // Spread the budget over the events, so one long event cannot spend it.
-    let per_region = (GLOBAL_SAMPLE_MAX / events.len() as u64).max(GLOBAL_SAMPLE_MIN_PER_REGION);
+    // An equal share each, with no floor. A floor above the fair share
+    // silently truncates the event list: at 1 000 records each, the first 200
+    // events of a 250-event panel spend the whole 200 000 and events 201..250
+    // are never read, with nothing in the log or the output to say so.
+    let per_region = (budget / events.len() as u64).max(1);
 
     let mut sample = GlobalSample::default();
+    let mut visited = 0usize;
+    let mut failed = 0usize;
     for event in events {
-        if sample.total >= GLOBAL_SAMPLE_MAX {
+        if sample.total >= budget {
             break;
         }
         let start = event.start.saturating_sub(flank_bp);
         let end = event.end + flank_bp;
-        sample_region(
+        visited += 1;
+        match sample_region(
             bam_path,
             ref_path,
             &event.chrom,
@@ -747,13 +799,65 @@ fn sample_event_regions(
             end,
             per_region,
             &mut sample,
-        )?;
+        ) {
+            Ok(taken) => log::info!(
+                "{} sampled {} records from {}:{}-{}",
+                GLOBAL_LABEL,
+                taken,
+                event.chrom,
+                start + 1,
+                end
+            ),
+            // One region that cannot be queried -- a truth event on a contig
+            // the alignment file does not have -- must not fail all three
+            // global checks, the way the per-event checks isolate an error per
+            // check through `check_outcome`.
+            Err(e) => {
+                failed += 1;
+                log::warn!(
+                    "{} skipping {}:{}-{}: {:#}",
+                    GLOBAL_LABEL,
+                    event.chrom,
+                    start + 1,
+                    end,
+                    e
+                );
+            }
+        }
     }
+
+    if visited < events.len() {
+        log::warn!(
+            "{} the {}-record budget ran out after {} of {} event regions; the rest went unsampled",
+            GLOBAL_LABEL,
+            budget,
+            visited,
+            events.len()
+        );
+    }
+
+    if sample.total == 0 && failed > 0 {
+        bail!(
+            "no records could be sampled: all {} truth event regions failed to query",
+            failed
+        );
+    }
+
+    log::info!(
+        "{} sample: {} records over {} of {} event regions (up to {} each)",
+        GLOBAL_LABEL,
+        sample.total,
+        visited - failed,
+        events.len(),
+        per_region
+    );
 
     Ok(sample)
 }
 
-/// Add up to `max_records` of one region's primary alignments to `sample`.
+/// Add up to `max_records` of one region's primary alignments to `sample`,
+/// returning how many were taken. The records are the window's first in
+/// coordinate order, not a spread over it.
 fn sample_region(
     bam_path: &str,
     ref_path: &str,
@@ -762,7 +866,7 @@ fn sample_region(
     end: u64,
     max_records: u64,
     sample: &mut GlobalSample,
-) -> Result<()> {
+) -> Result<u64> {
     let start_pos = crate::extract::safe_noodles_position(start + 1);
     let end_pos = crate::extract::safe_noodles_position(end);
     let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
@@ -773,6 +877,7 @@ fn sample_region(
         let (mut reader, header) =
             crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
                 .context("failed to open CRAM for the global sample")?;
+        sample.duplicates_marked |= header_marks_duplicates(&header);
         let query = reader.query(&header, &region)?;
         // `query` has already rejected an unknown contig, so this is `Some`.
         let queried_reference_sequence_id =
@@ -803,6 +908,7 @@ fn sample_region(
             .build_from_path(bam_path)
             .context("failed to open BAM for the global sample")?;
         let header = reader.read_header()?;
+        sample.duplicates_marked |= header_marks_duplicates(&header);
         let query = reader.query(&header, &region)?;
 
         for rec_result in query {
@@ -820,7 +926,47 @@ fn sample_region(
         }
     }
 
-    Ok(())
+    Ok(taken)
+}
+
+/// Whether the header records a duplicate-marking step.
+///
+/// A `@PG` record from a duplicate marker (`samtools markdup`, Picard
+/// `MarkDuplicates`, `sambamba markdup`, biobambam's `bammarkduplicates`, or a
+/// UMI pipeline's `dedup`) means a record without the duplicate flag is a
+/// record that step decided is not a duplicate -- so a sample carrying no
+/// duplicate flag is a measured 0%, not a file nothing ever marked. The tool's
+/// name is usually only in the command line: HG002's marker is `ID:samtools.4`
+/// `PN:samtools`, `CL:... samtools markdup -@ 4 - out.bam`.
+fn header_marks_duplicates(header: &noodles::sam::Header) -> bool {
+    header.programs().as_ref().iter().any(|(id, program)| {
+        let mut fields = vec![String::from_utf8_lossy(id.as_ref()).into_owned()];
+        for value in program.other_fields().values() {
+            fields.push(String::from_utf8_lossy(value.as_ref()).into_owned());
+        }
+        fields
+            .iter()
+            .any(|f| f.split_whitespace().any(names_a_duplicate_marker))
+    })
+}
+
+/// Whether one `@PG` token names a duplicate marker.
+///
+/// A token, not a substring of the whole record: HG002's `samtools markdup`
+/// writes to a path with `dedup` in its name, and a file name is not a
+/// program. A false positive here reports a fabricated 0% duplicate rate on a
+/// file nothing marked -- the silent pass this check exists to avoid -- so the
+/// match is deliberately narrow.
+fn names_a_duplicate_marker(token: &str) -> bool {
+    let name = token
+        .rsplit('/')
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    name == "markdup"
+        || name == "dedup"
+        || name.starts_with("markduplicates")
+        || name.starts_with("bammarkduplicates")
 }
 
 /// A global check its sample cannot answer: a failed result, never a silent
@@ -828,7 +974,7 @@ fn sample_region(
 fn not_evaluable(check_name: &str, expected: &str, observed: &str, why: &str) -> CheckResult {
     log::warn!("{} check is not evaluable: {}", check_name, why);
     CheckResult {
-        event_label: "[global]".to_string(),
+        event_label: GLOBAL_LABEL.to_string(),
         check_name: check_name.to_string(),
         expected: expected.to_string(),
         observed: observed.to_string(),
@@ -852,7 +998,7 @@ fn check_insert_size(sample: &GlobalSample) -> CheckResult {
     let pass = (50.0..=1000.0).contains(&mean) && (5.0..=300.0).contains(&stddev);
 
     CheckResult {
-        event_label: "[global]".to_string(),
+        event_label: GLOBAL_LABEL.to_string(),
         check_name: "insert_size".to_string(),
         expected: expected.to_string(),
         observed: format!("{:.0}+/-{:.0}", mean, stddev),
@@ -865,14 +1011,29 @@ fn check_dup_rate(sample: &GlobalSample) -> CheckResult {
     if sample.total == 0 {
         return not_evaluable("dup_rate", "<50%", "no reads", "no record sampled");
     }
-    if sample.dups == 0 {
-        // A file with no duplicate flags is not a file without duplicates:
-        // nothing marked them, so 0% would be a default, not a measurement.
+    if sample.dups == 0 && !sample.duplicates_marked {
+        // No duplicate flag in a file whose header names no duplicate marker.
+        // Either nothing marked them -- in which case 0% would be a default,
+        // not a measurement -- or the window is too small to hold one. Say
+        // which, rather than telling the owner of a marked BAM to mark it.
+        if sample.total < DUP_RATE_MIN_SAMPLE {
+            return not_evaluable(
+                "dup_rate",
+                "<50%",
+                "too few reads",
+                &format!(
+                    "{} sampled records carry no duplicate flag, too few to tell an unmarked \
+                     file from a window that holds no duplicate",
+                    sample.total
+                ),
+            );
+        }
         return not_evaluable(
             "dup_rate",
             "<50%",
             "no dup flags",
-            "no sampled record carries the duplicate flag -- mark duplicates to evaluate it",
+            "no sampled record carries the duplicate flag and no @PG record marked duplicates \
+             -- mark duplicates to evaluate it",
         );
     }
 
@@ -880,7 +1041,7 @@ fn check_dup_rate(sample: &GlobalSample) -> CheckResult {
     let pass = rate < 0.50;
 
     CheckResult {
-        event_label: "[global]".to_string(),
+        event_label: GLOBAL_LABEL.to_string(),
         check_name: "dup_rate".to_string(),
         expected: "<50%".to_string(),
         observed: format!("{:.1}%", rate * 100.0),
@@ -898,7 +1059,7 @@ fn check_mapq(sample: &GlobalSample) -> CheckResult {
     let pass = mean_mapq > 20.0;
 
     CheckResult {
-        event_label: "[global]".to_string(),
+        event_label: GLOBAL_LABEL.to_string(),
         check_name: "mean_mapq".to_string(),
         expected: ">20".to_string(),
         observed: format!("{:.1}", mean_mapq),
@@ -1931,8 +2092,14 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         let (dir, fasta, cram) = head_and_event_cram("global_sample");
         let event = del_event("chrA", 10_000, 10_200);
 
-        let sample =
-            sample_event_regions(&cram, &fasta, std::slice::from_ref(&event), 5_000).unwrap();
+        let sample = sample_event_regions(
+            &cram,
+            &fasta,
+            std::slice::from_ref(&event),
+            5_000,
+            GLOBAL_SAMPLE_MAX,
+        )
+        .unwrap();
         let result = check_mapq(&sample);
 
         assert_eq!(
@@ -1953,6 +2120,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             dups: 0,
             mapq_sum: 600_000,
             insert_sizes: vec![300.0; 10_000],
+            duplicates_marked: false,
         };
 
         let result = check_dup_rate(&sample);
@@ -1969,6 +2137,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             dups: 71,
             mapq_sum: 60_000,
             insert_sizes: vec![300.0; 1_000],
+            duplicates_marked: false,
         };
 
         let result = check_dup_rate(&sample);
@@ -1986,11 +2155,230 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             dups: 0,
             mapq_sum: 6_000,
             insert_sizes: Vec::new(),
+            duplicates_marked: false,
         };
 
         let result = check_insert_size(&sample);
 
         assert_eq!(result.observed, "no pairs");
         assert!(!result.pass, "an unevaluable insert size may not pass");
+    }
+
+    // --- L15 fix pass 1: every event region is sampled, and the sample's own
+    // size and provenance are reported ---
+
+    /// An INS truth event: no coverage ratio, no split reads, no allele
+    /// frequency -- no check applies to it at all.
+    fn ins_event(chrom: &str, pos: u64) -> TruthEvent {
+        TruthEvent {
+            chrom: chrom.to_string(),
+            start: pos,
+            end: pos + 1,
+            sv_type: "INS".to_string(),
+            expected_vaf: 0.5,
+            gene: "unknown".to_string(),
+            partner: None,
+            ref_allele: None,
+            alt_allele: None,
+        }
+    }
+
+    fn args_for(bam: &str, reference: &str) -> ValidateArgs {
+        ValidateArgs {
+            bam_path: bam.to_string(),
+            truth_path: "unused.vcf".to_string(),
+            ref_path: reference.to_string(),
+            min_mapq: 20,
+            flank_bp: 5_000,
+            json_output: false,
+        }
+    }
+
+    #[test]
+    fn test_every_event_region_gets_a_share_of_the_sample_budget() {
+        // Two regions and a budget of 4: with a per-region floor larger than
+        // the fair share the first region spends the whole budget and the
+        // second is never read (MAPQ 0.0 instead of the 30.0 the two regions
+        // average to). A truth VCF with more than 200 events hit exactly this
+        // against the real 200 000/1 000 numbers.
+        let (dir, fasta, cram) = head_and_event_cram("budget_share");
+        let events = vec![
+            del_event("chrA", 100, 1_800),     // the head: 30 records at MAPQ 0
+            del_event("chrA", 10_000, 10_200), // the event: MAPQ 60
+        ];
+
+        let sample = sample_event_regions(&cram, &fasta, &events, 0, 4).unwrap();
+        let result = check_mapq(&sample);
+
+        assert_eq!(sample.total, 4, "both regions must contribute their share");
+        assert_eq!(
+            result.observed, "30.0",
+            "the last event region must reach the sample"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sample_region_reports_how_many_records_it_took() {
+        // The count is what says a global check was computed over 41 records
+        // rather than over 200 000.
+        let (dir, fasta, cram) = head_and_event_cram("region_count");
+        let mut sample = GlobalSample::default();
+
+        let n = sample_region(&cram, &fasta, "chrA", 10_000, 10_500, 100, &mut sample).unwrap();
+
+        assert_eq!(n, 6, "3 pairs lie in chrA:10001-10500");
+        assert_eq!(n, sample.total);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_one_unqueryable_region_does_not_fail_the_whole_sample() {
+        // A truth event on a contig the alignment file does not have used to
+        // propagate out of the sample and fail all three global checks, unlike
+        // the per-event checks, which isolate an error per check.
+        let (dir, fasta, cram) = head_and_event_cram("bad_contig");
+        let events = vec![
+            del_event("chrZ", 100, 200), // not in the file
+            del_event("chrA", 10_000, 10_200),
+        ];
+
+        let sampled = sample_event_regions(&cram, &fasta, &events, 5_000, GLOBAL_SAMPLE_MAX);
+
+        assert!(
+            sampled.is_ok(),
+            "one unqueryable region must not fail the whole sample: {:?}",
+            sampled.as_ref().err()
+        );
+        let sample = sampled.unwrap();
+        assert_eq!(check_mapq(&sample).observed, "60.0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_global_sample_of_no_events_is_an_error() {
+        // The empty-truth-VCF bail: without it the three global checks report
+        // whole-file statistics for a run that validated nothing (M11).
+        let (dir, fasta, cram) = head_and_event_cram("no_events");
+
+        let sampled = sample_event_regions(&cram, &fasta, &[], 5_000, GLOBAL_SAMPLE_MAX);
+
+        assert!(
+            sampled.is_err(),
+            "a truth VCF with no events has no region to sample"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_event_no_check_applies_to_is_not_evaluable() {
+        // An INS-only truth VCF used to score 3/3 PASS: the one truth event
+        // was never checked and the three globals passed on background reads
+        // (M11's door, one step over). No check reads the BAM here, so the
+        // paths need not exist.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event = ins_event("chrA", 10_000);
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &event, &mut results);
+
+        assert_eq!(results.len(), 1, "an unchecked event must leave a result");
+        assert!(!results[0].pass, "an event no check covers may not pass");
+    }
+
+    #[test]
+    fn test_header_marks_duplicates_from_the_pg_command_line() {
+        use noodles::sam::header::record::value::{
+            map::{program::tag, Program},
+            Map,
+        };
+
+        // HG002's marker is ID:samtools.4 PN:samtools, and only its CL says
+        // markdup -- so the ID and the name are not enough.
+        let marked = noodles::sam::Header::builder()
+            .add_program(
+                "samtools.4",
+                Map::<Program>::builder()
+                    .insert(tag::NAME, "samtools")
+                    .insert(tag::COMMAND_LINE, "/bin/samtools markdup -@ 4 - out.bam")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        let aligned_only = noodles::sam::Header::builder()
+            .add_program(
+                "bwa-mem2",
+                Map::<Program>::builder()
+                    .insert(tag::NAME, "bwa-mem2")
+                    .insert(tag::COMMAND_LINE, "bwa-mem2 mem -t 8 ref.fa r1.fq r2.fq")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        // The same pipeline with markdup taken out: its command line still
+        // mentions a path with "dedup" in the name, which is a file, not a
+        // duplicate marker.
+        let dedup_in_a_path = noodles::sam::Header::builder()
+            .add_program(
+                "samtools.4",
+                Map::<Program>::builder()
+                    .insert(tag::NAME, "samtools")
+                    .insert(
+                        tag::COMMAND_LINE,
+                        "/bin/samtools sort -@ 4 - HG002.35x.bwamem2.dedup.grch38.bam",
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        assert!(header_marks_duplicates(&marked));
+        assert!(!header_marks_duplicates(&aligned_only));
+        assert!(
+            !header_marks_duplicates(&dedup_in_a_path),
+            "a file name is not a duplicate marker"
+        );
+    }
+
+    #[test]
+    fn test_dup_rate_is_zero_when_the_header_marked_duplicates() {
+        // A marked file whose sampled window happens to hold no duplicate is
+        // not an unmarked file: 0% is what the pipeline decided, and telling
+        // the user to "mark duplicates" is wrong advice about their BAM.
+        let sample = GlobalSample {
+            total: 41,
+            dups: 0,
+            mapq_sum: 2_460,
+            insert_sizes: vec![300.0; 41],
+            duplicates_marked: true,
+        };
+
+        let result = check_dup_rate(&sample);
+
+        assert_eq!(result.observed, "0.0%");
+        assert!(
+            result.pass,
+            "a marked file with no duplicate is 0%, and 0% passes"
+        );
+    }
+
+    #[test]
+    fn test_dup_rate_of_a_small_unmarked_sample_says_the_sample_is_too_small() {
+        // With no markdup @PG to go on, 41 records without a duplicate flag
+        // are no evidence of an unmarked file: at a 1% duplicate rate a
+        // 41-record window holds none about two times in three.
+        let sample = GlobalSample {
+            total: 41,
+            dups: 0,
+            mapq_sum: 2_460,
+            insert_sizes: vec![300.0; 41],
+            duplicates_marked: false,
+        };
+
+        let result = check_dup_rate(&sample);
+
+        assert_eq!(result.observed, "too few reads");
+        assert!(!result.pass, "an unevaluable duplicate rate may not pass");
     }
 }
