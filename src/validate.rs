@@ -626,7 +626,9 @@ fn coverage_ratio_result(
             let pass = (ratio - expected_ratio).abs() < tolerance;
             (format!("{:.2}", expected_ratio), pass)
         }
-        _ => ("~1.0".to_string(), (ratio - 1.0).abs() < 0.5),
+        // Only DEL and DUP are routed here. Any other type has no expected
+        // ratio, so it gets no verdict rather than a loose pass (NF6).
+        _ => ("N/A".to_string(), false),
     };
 
     CheckResult {
@@ -2798,6 +2800,15 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
     fn test_coverage_ratio_without_flank_coverage_fails() {
         let r = coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 0.0, 0.0);
         assert!(!r.pass, "an unevaluable coverage check must not pass");
+    }
+
+    #[test]
+    fn test_coverage_ratio_has_no_verdict_for_a_type_without_an_expected_ratio() {
+        // Only DEL and DUP reach this check. Any other type has no expected
+        // ratio, so an untouched region must not pass it by default (NF6).
+        let r = coverage_ratio_result("INV".to_string(), "INV", 0.5, 35.0, 35.0);
+        assert!(!r.pass, "observed {}, expected {}", r.observed, r.expected);
+        assert_eq!(r.expected, "N/A");
     }
 
     #[test]
