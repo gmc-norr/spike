@@ -1514,7 +1514,10 @@ one that makes the verdict mean something: a plain "recovered more than zero"
 test passes on the background alone, so a run in which the spike-in contributed
 nothing would still print `VALIDATION PASSED`. A summary table is written to
 `<outdir>/validation_summary.tsv`, and the control's own calls to
-`<outdir>/background_control/`.
+`<outdir>/background_control/`. The version each tool reported is written to
+`<outdir>/tool_versions.tsv`, one `tool<TAB>version` line per tool, before any
+step runs; a tool that answers neither `--version` nor `version` is recorded as
+`unknown`.
 
 The gate counts recovered truth events, so it catches a run that contributed
 nothing at all; on a single replicate it cannot separate a very weak spike-in
@@ -1565,8 +1568,8 @@ measures what this caller recovered from this background, not what is in it.
 
 Genotype accuracy is not measured at all. Matching is whatever Truvari makes of
 the flags the script passes it — `--passonly -r 500 -p 0.5 -P 0.5 -s 500`
-(`scripts/validate_pipeline.sh`) — and the script neither pins a Truvari version
-nor records the one it ran, so read those flags against the Truvari you have
-installed rather than against this paragraph. What the script itself does is
+(`scripts/validate_pipeline.sh`) — and the script does not pin a Truvari
+version. It records the one it ran in `<outdir>/tool_versions.tsv`, so read
+those flags against that version rather than against this paragraph. What the script itself does is
 fixed: it reads back `TP-base`, `FP`, `FN`, recall, precision and F1 from
 Truvari's `summary.json`, and no genotype is compared.

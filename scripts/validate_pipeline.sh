@@ -257,6 +257,36 @@ count_records() {
     printf '%s' "$n"
 }
 
+# The first line a tool prints on stdout for --version, else for `version`
+# (bwa-mem2 answers only that), or "unknown". A command that fails does not
+# count.
+tool_version() {
+    local bin="$1" arg out line
+    for arg in --version version; do
+        if out="$("$bin" "$arg" 2>/dev/null </dev/null)"; then
+            line="$(printf '%s\n' "$out" | grep -m1 -v '^[[:space:]]*$' || true)"
+            if [[ -n "$line" ]]; then
+                printf '%s\n' "$line"
+                return
+            fi
+        fi
+    done
+    echo "unknown"
+}
+
+# Write "tool<TAB>version" for every tool the pipeline runs. Truvari has
+# renamed and re-defaulted the flags its matching depends on between
+# versions, so a result is reproducible only with these beside it (NF7).
+record_tool_versions() {
+    local out="$1" pair var
+    : > "$out"
+    for pair in spike:SPIKE samtools:SAMTOOLS bwa-mem2:BWAMEM2 bcftools:BCFTOOLS \
+        delly:DELLY truvari:TRUVARI bgzip:BGZIP tabix:TABIX; do
+        var="${pair##*:}"
+        printf '%s\t%s\n' "${pair%%:*}" "$(tool_version "${!var}")" >> "$out"
+    done
+}
+
 # Read one truvari summary.json as "tp fp fn recall precision f1".
 #
 # TP is base-side (TP-base): TP + FN is then the number of truth events and
@@ -1062,6 +1092,7 @@ except Exception:
     echo ""
     echo "Full results:  ${OUTDIR}"
     echo "Summary TSV:   ${summary_tsv}"
+    echo "Tool versions: ${OUTDIR}/tool_versions.tsv"
     echo ""
 }
 
@@ -1098,6 +1129,9 @@ main() {
     echo ""
 
     step0_check_prereqs
+    mkdir -p "$OUTDIR"
+    record_tool_versions "${OUTDIR}/tool_versions.tsv"
+    log "Tool versions: ${OUTDIR}/tool_versions.tsv (truvari: $(awk -F'\t' '$1 == "truvari" {print $2}' "${OUTDIR}/tool_versions.tsv"))"
 
     if [[ "$SKIP_TO" -le 1 ]]; then
         step1_prepare_background

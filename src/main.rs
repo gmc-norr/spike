@@ -3009,6 +3009,60 @@ done"#,
     }
 
     #[test]
+    fn test_validate_pipeline_records_each_tools_version() {
+        // Truvari's matching flags have changed meaning between versions, so
+        // a result is only reproducible with the tool versions beside it
+        // (NF7). Three stand-ins: one answering --version, one answering
+        // only `version` with noise on stderr (as bwa-mem2 does), one
+        // answering neither.
+        let dir = scratch_dir("validate_pipeline_versions");
+        let stub = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{}\n", body)).unwrap();
+            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            path
+        };
+        let flag = stub("flag", r#"[ "$1" = --version ] && echo "flagtool 1.2" || exit 1"#);
+        let word = stub("word", r#"echo "Looking to launch" >&2; [ "$1" = version ] && echo "2.2.1"; exit 0"#);
+        let mute = stub("mute", "exit 1");
+        let out = dir.join("tool_versions.tsv");
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(r#"script="$1"; out="$2"; shift 2; source "$script"; record_tool_versions "$out""#)
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&out)
+            .env("SPIKE", &flag)
+            .env("SAMTOOLS", &flag)
+            .env("BWAMEM2", &word)
+            .env("BCFTOOLS", &flag)
+            .env("DELLY", &mute)
+            .env("TRUVARI", &word)
+            .env("BGZIP", &flag)
+            .env("TABIX", &flag)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = std::fs::read_to_string(&out).unwrap_or_default();
+        for want in [
+            "spike\tflagtool 1.2",
+            "bwa-mem2\t2.2.1",
+            "delly\tunknown",
+            "truvari\t2.2.1",
+            "tabix\tflagtool 1.2",
+        ] {
+            assert!(text.lines().any(|l| l == want), "want the line {:?} in:\n{}", want, text);
+        }
+    }
+
+    #[test]
     fn test_validate_pipeline_aborts_when_its_data_files_are_missing() {
         // A harness that cannot fail is worthless: missing inputs must stop the
         // run, not let it continue and report an empty result as a pass.
