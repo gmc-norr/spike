@@ -1,23 +1,24 @@
 use anyhow::{Context, Result};
 use log::info;
 
-/// Summary statistics computed from a BAM/CRAM file.
+/// What spike reads off the head of the input BAM/CRAM.
+///
+/// Only the read length is used downstream. An insert size and a coverage
+/// estimate used to sit here too, read by nothing but their own log line: the
+/// fragment distribution the simulation samples from is built from the
+/// extracted donor pool (`FragmentDist::from_read_pairs`), and the coverage
+/// estimate divided a capped record sample by the whole header genome, so it
+/// printed about 0.005x for any 35x WGS BAM (N6).
 #[derive(Debug, Clone)]
 pub struct BamStats {
-    /// Mean insert size (template length) of properly-paired reads.
-    pub insert_mean: f64,
-    /// Standard deviation of insert size.
-    pub insert_stddev: f64,
     /// Mean read length.
     pub read_length: f64,
-    /// Estimated mean coverage (reads * read_length / genome_size).
-    pub mean_coverage: f64,
-    /// Total number of records sampled.
+    /// Primary, mapped records the scan examined.
     pub records_sampled: usize,
 }
 
-/// Compute alignment statistics by sampling the first `sample_size` primary, mapped,
-/// properly-paired records. Supports both BAM and CRAM formats.
+/// Compute alignment statistics from the first `sample_size` primary, mapped
+/// records. Supports both BAM and CRAM formats.
 pub fn compute_stats(
     alignment_path: &str,
     sample_size: usize,
@@ -43,14 +44,11 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     let mut reader = noodles::bam::io::reader::Builder
         .build_from_path(bam_path)
         .with_context(|| format!("Failed to open BAM file: {}", bam_path))?;
-    let header = reader.read_header()?;
+    reader.read_header()?;
 
-    let mut insert_sizes: Vec<f64> = Vec::with_capacity(sample_size);
     let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
-
-    let genome_size: u64 = header_genome_size(&header);
 
     for result in reader.records() {
         let record = result?;
@@ -73,20 +71,13 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
             read_lengths.push(seq_len as f64);
         }
 
-        if flags.is_properly_segmented() && !flags.is_mate_unmapped() {
-            let tlen = record.template_length();
-            if tlen > 0 {
-                insert_sizes.push(tlen as f64);
-            }
-        }
-
-        if scan_is_complete(insert_sizes.len(), total_records, saw_segmented, sample_size) {
+        if total_records >= sample_size {
             break;
         }
     }
 
     reject_single_end(bam_path, saw_segmented, total_records, sample_size)?;
-    finalize_stats(insert_sizes, read_lengths, total_records, genome_size)
+    finalize_stats(read_lengths, total_records)
 }
 
 /// CRAM-specific stats computation.
@@ -104,12 +95,9 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
         .with_context(|| format!("Failed to open CRAM file: {}", cram_path))?;
     let header = reader.read_header()?;
 
-    let mut insert_sizes: Vec<f64> = Vec::with_capacity(sample_size);
     let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
-
-    let genome_size: u64 = header_genome_size(&header);
 
     for result in reader.records(&header) {
         let cram_record = result?;
@@ -136,47 +124,24 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
             read_lengths.push(seq_len as f64);
         }
 
-        if flags.is_properly_segmented() && !flags.is_mate_unmapped() {
-            let tlen = buf.template_length();
-            if tlen > 0 {
-                insert_sizes.push(tlen as f64);
-            }
-        }
-
-        if scan_is_complete(insert_sizes.len(), total_records, saw_segmented, sample_size) {
+        if total_records >= sample_size {
             break;
         }
     }
 
     reject_single_end(cram_path, saw_segmented, total_records, sample_size)?;
-    finalize_stats(insert_sizes, read_lengths, total_records, genome_size)
+    finalize_stats(read_lengths, total_records)
 }
 
-/// Whether the sampling scan has seen enough and may stop.
-///
-/// A paired library stops once `sample_size` insert sizes are in hand, which
-/// is what keeps the fragment-length estimate representative -- a cap on the
-/// *record* count would truncate that sample on a BAM whose proper pairs are
-/// sparse. A single-end library yields no insert size at all, so that
-/// condition alone leaves end-of-file as the only stop and the scan reads the
-/// whole BAM/CRAM (L19). Hence the second clause, which caps the record count
-/// once the data is known to be single-end.
+/// Refuse a single-end library, once the scan has established it is one.
 ///
 /// Single-end is *detected*, not inferred from an empty insert-size sample:
 /// SAM flag `0x1` says the read's template had more than one segment, and a
 /// paired library sets it on every read whether or not the pair aligned
-/// properly. So a record carrying `0x1` keeps the scan going, and a window of
-/// `sample_size` primary records without one is single-end data.
-fn scan_is_complete(
-    insert_sizes: usize,
-    total_records: usize,
-    saw_segmented: bool,
-    sample_size: usize,
-) -> bool {
-    insert_sizes >= sample_size || (!saw_segmented && total_records >= sample_size)
-}
-
-/// Refuse a single-end library, once the scan has established it is one.
+/// properly. So a window of `sample_size` primary records without one is
+/// single-end data. The scan stops at that window for every library (L19,
+/// N6): a paired one used to be read on until it had `sample_size` insert
+/// sizes, which nothing downstream ever read.
 ///
 /// spike builds every simulated read from an extracted *pair* -- extraction
 /// keeps only `is_properly_segmented` records, and the quality profile is
@@ -223,55 +188,22 @@ fn reject_single_end(
     Ok(())
 }
 
-/// Compute genome size from header reference sequences.
-fn header_genome_size(header: &noodles::sam::Header) -> u64 {
-    header
-        .reference_sequences()
-        .values()
-        .map(|rs| usize::from(rs.length()) as u64)
-        .sum()
-}
-
 /// Compute final statistics from collected samples.
-fn finalize_stats(
-    insert_sizes: Vec<f64>,
-    read_lengths: Vec<f64>,
-    total_records: usize,
-    genome_size: u64,
-) -> Result<BamStats> {
-    let (insert_mean, insert_stddev) = if insert_sizes.is_empty() {
-        log::warn!("No properly-paired reads found for insert size estimation");
-        (350.0, 50.0)
-    } else {
-        let mean = insert_sizes.iter().sum::<f64>() / insert_sizes.len() as f64;
-        let variance = insert_sizes.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
-            / insert_sizes.len() as f64;
-        (mean, variance.sqrt())
-    };
-
+fn finalize_stats(read_lengths: Vec<f64>, total_records: usize) -> Result<BamStats> {
     let read_length = if read_lengths.is_empty() {
         150.0
     } else {
         read_lengths.iter().sum::<f64>() / read_lengths.len() as f64
     };
 
-    let mean_coverage = if genome_size > 0 {
-        (total_records as f64 * read_length) / genome_size as f64
-    } else {
-        0.0
-    };
-
     let stats = BamStats {
-        insert_mean,
-        insert_stddev,
         read_length,
-        mean_coverage,
         records_sampled: total_records,
     };
 
     info!(
-        "Stats: insert_mean={:.1}, insert_stddev={:.1}, read_len={:.0}, est_coverage={:.1}x ({} records sampled)",
-        stats.insert_mean, stats.insert_stddev, stats.read_length, stats.mean_coverage, stats.records_sampled
+        "Stats: read_len={:.0} ({} records sampled)",
+        stats.read_length, stats.records_sampled
     );
 
     Ok(stats)
@@ -409,19 +341,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_stats_defaults() {
-        let stats = BamStats {
-            insert_mean: 350.0,
-            insert_stddev: 50.0,
-            read_length: 150.0,
-            mean_coverage: 30.0,
-            records_sampled: 1_000_000,
-        };
-        assert!((stats.insert_mean - 350.0).abs() < f64::EPSILON);
-        assert!((stats.insert_stddev - 50.0).abs() < f64::EPSILON);
-    }
-
     /// Write a BAM of `n` primary, mapped, 100 bp records, every one carrying
     /// `flags` and `template_length`, into a single 10 kb `chrT`.
     ///
@@ -508,36 +427,28 @@ mod tests {
     fn test_paired_bam_without_proper_pairs_is_not_mistaken_for_single_end() {
         // Detection keys on SAM flag 0x1, which every read of a paired library
         // carries whether or not its pair aligned properly -- not on "we
-        // scanned a lot and found no insert sizes", which would cap a paired
-        // BAM's fragment-length estimate at an unrepresentative sample (L15).
+        // scanned a window and found no proper pair".
         let dir = scratch_dir("bam_stats_paired_no_proper");
         let bam = dir.join("paired_improper.bam");
         write_flat_bam(&bam, 500, 0x41, 0); // 0x1 | 0x40: paired, read 1, not proper
 
-        let stats = compute_stats(bam.to_str().unwrap(), 50, None)
-            .expect("a paired BAM is usable even when no pair aligned properly");
-        assert_eq!(
-            stats.records_sampled, 500,
-            "the single-end cap must not fire on paired reads"
-        );
-        assert!(
-            (stats.insert_mean - 350.0).abs() < f64::EPSILON,
-            "no proper pair means the documented 350/50 fallback, got {}",
-            stats.insert_mean
-        );
+        compute_stats(bam.to_str().unwrap(), 50, None)
+            .expect("a paired BAM is not single-end even when no pair aligned properly");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_paired_bam_still_stops_once_the_insert_size_sample_is_full() {
-        // The paired cap is unchanged: 50 insert sizes is 50 records here.
-        let dir = scratch_dir("bam_stats_paired_proper");
-        let bam = dir.join("paired_proper.bam");
-        write_flat_bam(&bam, 500, 0x63, 300); // 0x1 | 0x2 | 0x20 | 0x40
+    fn test_paired_bam_without_proper_pairs_stops_at_the_record_cap() {
+        // Nothing spike simulates from reads an insert size off this scan: the
+        // fragment distribution is built from the extracted pool (N6). So a
+        // paired BAM has no insert-size sample to fill, and one whose pairs
+        // never aligned properly has no reason to be read to its end.
+        let dir = scratch_dir("bam_stats_paired_no_proper_cap");
+        let bam = dir.join("paired_improper.bam");
+        write_flat_bam(&bam, 500, 0x41, 0);
 
         let stats = compute_stats(bam.to_str().unwrap(), 50, None).unwrap();
-        assert_eq!(stats.records_sampled, 50);
-        assert!((stats.insert_mean - 300.0).abs() < f64::EPSILON);
+        assert_eq!(stats.records_sampled, 50, "the scan must stop at the cap, not at end of file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -616,11 +527,6 @@ mod tests {
         let stats = compute_stats(&cram, 50, Some(&fasta)).expect("a paired CRAM is usable");
         assert_eq!(stats.records_sampled, 10, "5 pairs = 10 primary records");
         assert!(
-            (stats.insert_mean - 300.0).abs() < f64::EPSILON,
-            "every pair's positive template length is 300, got {}",
-            stats.insert_mean
-        );
-        assert!(
             (stats.read_length - 100.0).abs() < f64::EPSILON,
             "every read is 100 bp, got {}",
             stats.read_length
@@ -648,16 +554,5 @@ mod tests {
             err
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_scan_is_complete_caps_only_the_single_end_case() {
-        // The BAM and CRAM loops share this decision.
-        // Paired: keep going until the insert-size sample is full.
-        assert!(!scan_is_complete(49, 10_000, true, 50));
-        assert!(scan_is_complete(50, 60, true, 50));
-        // Single-end: no 0x1 anywhere, so stop on the record count instead.
-        assert!(!scan_is_complete(0, 49, false, 50));
-        assert!(scan_is_complete(0, 50, false, 50));
     }
 }

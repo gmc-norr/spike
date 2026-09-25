@@ -60,7 +60,7 @@ impl FragmentDist {
         }
     }
 
-    /// Build from explicit mean and stddev (e.g. from BamStats).
+    /// Build from explicit mean and stddev: the fallback and test fixtures.
     /// Generates a synthetic sorted distribution by sampling from Normal.
     pub fn from_stats(mean: f64, stddev: f64) -> Self {
         use rand::rngs::StdRng;

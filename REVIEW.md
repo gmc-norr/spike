@@ -67,7 +67,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `count_alleles_cram`, `collect_snp_alleles_cram` (`loh.rs`); `count_depth_in_region`, `split_reads_to_partner`, `pileup_region` (`validate.rs`) -- function names, because the line numbers this row first carried have drifted twice |
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured, at every breakpoint side rather than the first only (N12) | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-210, 379-495, 519-521, 573-587` (now) |
-| N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
+| N6 | Medium | **Fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
@@ -740,6 +740,28 @@ samples from is not those: it is built in `stats.rs` by
 `default_dist()` (a hard-coded 400/80) and by tests, so `BamStats`'s insert
 numbers never reach a read. Removing the four dead fields would leave nothing
 for the uncapped paired scan to protect, and L19's exception with it.
+
+**Fixed.** `BamStats` keeps `read_length`, the one field `main.rs` reads, and
+`records_sampled`, which the log line and the tests read and which is
+correct. `insert_mean`, `insert_stddev` and `mean_coverage` are gone, with the
+350/50 fallback, `header_genome_size` and `scan_is_complete`. The scan now
+stops after `sample_size` primary records for every library, so L19's
+exception went too. The single-end check is unchanged, since it only ever
+needed that window. The README claimed that a paired BAM with no proper pair
+"falls back to a 350 ± 50 bp insert size", a number nothing used, and now
+says the scan only needs the read length.
+
+The new test `test_paired_bam_without_proper_pairs_stops_at_the_record_cap`
+failed first (the scan read 500 of 500 records, not 50). Putting back the old
+paired exception (`!saw_segmented && total_records >= sample_size`) turns it
+red again. Real data, HG002 35x, `del:chr20:38412500-38422500 --seed 1`,
+`master` (`e773177`) against the fix:
+
+| | before | after |
+| --- | --- | --- |
+| log line | `insert_mean=409.1, insert_stddev=179.3, read_len=151, est_coverage=0.0x (101798 records sampled)` | `read_len=151 (50000 records sampled)` |
+| fragment distribution actually used | mean=417.6, stddev=178.7, n=4559 | identical |
+| `R1.fq.gz`, `R2.fq.gz`, `truth.vcf`, `replaced_reads.txt`, `events.bed` | | byte-identical (md5) |
 
 ### N7 · A degenerate quality profile is used without a warning
 
