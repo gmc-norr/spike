@@ -3415,7 +3415,7 @@ the exit status.
 | --- | --- | --- |
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
-| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Plan locked |
+| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
 | T4 | CR4 on a real hard locus (measurement only) | Not started |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
 | T6 | INS sequence identity, advisory | Not started |
@@ -3861,3 +3861,95 @@ equal `SIM_DEPTH_FOLD` and is not compared against it.
 **The separation test, unchanged in substance:** if the six warning events' median control
 statistic does not exceed the other 34's, T3 is **inconclusive whatever the six classifications
 say**.
+
+#### Result: T3 -- mappability dominates, 5 of 6
+
+Measured with master's binary (`985e50f`, md5 `2dd58097…`) and
+`scripts/t3_depth_fold_census.py`, against
+`HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam`. No production code changed.
+
+**CR2's C4 reproduced whole, not just the six.** All 40 seeded spans as duplications, `--seed 1`:
+40 ran, none refused, and **exactly 6 warned -- events 2, 13, 15, 33, 34 and 39**, at folds
+**1.62, 1.71, 2.46, 1.51, 1.51, 1.75**. CR2 recorded "6 of 40 ... max 2.46 (event 15) ... two of
+the six are at 1.51". Same events, same numbers, a different run.
+
+**The anchor was identified for all six, and the estimator reproduces spike's own.** Each event's
+anchor came out as the **start** breakpoint, and the pool-style fragment depth measured there
+matches the `scaled_by` spike printed to within a tenth of an x -- as does the depth in the worst
+bin:
+
+| n | spike `scaled_by` | measured anchor pool | spike `worst_depth` | measured bin pool |
+| --- | --- | --- | --- | --- |
+| 2 | 51.3x | 51.2x | 83.7x | 83.8x |
+| 13 | 56.9x | 57.0x | 32.9x | 33.4x |
+| 15 | 50.0x | 50.0x | 19.7x | 20.0x |
+| 33 | 63.4x | 63.5x | 41.7x | 42.1x |
+| 34 | 51.7x | 51.9x | 33.8x | 33.7x |
+| 39 | 63.5x | 63.4x | 35.8x | 35.5x |
+
+That agreement is what licenses the rest of the table: the any-MAPQ column beside it is measured
+over the same windows with the same script.
+
+**The table.**
+
+| n | event | spike fold | worst bin | bin pool | bin any-MAPQ | bin MAPQ<20 | bin GC | anchor pool | anchor any-MAPQ | anchor MAPQ<20 | anchor GC | `fold_any` | class |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2 | `chr20:2516875-2526875` | 1.62 | `chr20:2520875-2521875` | 83.8 | 56.0 | 0.000 | 0.509 | 51.2 | 39.0 | 0.011 | 0.447 | **1.44** | mappability |
+| 13 | `chr20:23433622-23443622` | 1.71 | `chr20:23431622-23432622` | 33.4 | 36.1 | **0.340** | 0.390 | 57.0 | 43.6 | 0.002 | 0.397 | **1.21** | mappability |
+| 15 | `chr20:25322805-25332805` | 2.46 | `chr20:25332805-25333805` | 20.0 | 25.4 | **0.271** | 0.375 | 50.0 | 37.3 | 0.002 | 0.449 | **1.47** | mappability |
+| 33 | `chr20:56072849-56082849` | 1.51 | `chr20:56081849-56082849` | 42.1 | 45.0 | **0.299** | 0.398 | 63.5 | 45.3 | 0.000 | 0.392 | **1.01** | mappability |
+| 34 | `chr20:56107004-56117004` | 1.51 | `chr20:56109004-56110004` | 33.7 | 45.0 | **0.397** | 0.390 | 51.9 | 38.3 | 0.002 | 0.440 | **1.18** | mappability |
+| 39 | `chr20:59348072-59358072` | 1.75 | `chr20:59355072-59356072` | 35.5 | 28.2 | 0.046 | **0.593** | 63.4 | 45.4 | 0.000 | 0.461 | **1.61** | real_depth |
+
+**Counts: 5 mappability, 1 real depth. Mappability dominates** (the locked rule: at least 4 of 6).
+
+**The control passes, so the measurement separates something.** `fold_any` over a uniform 1 kb
+grid across each event's footprint, all 40 events:
+
+```
+the 6 that warned:  n=6  min 1.18 median 1.46 max 1.61
+  1.18 1.32 1.44 1.47 1.47 1.61
+the other 34:       n=34 min 1.07 median 1.24 max 1.60
+  1.07 1.12 1.15 1.17 1.18 1.18 1.19 1.19 1.19 1.19 1.19 1.20 1.21 1.21 1.22 1.24 1.24 1.24
+  1.24 1.26 1.27 1.27 1.28 1.29 1.30 1.30 1.31 1.33 1.33 1.35 1.39 1.41 1.46 1.60
+
+separation test: warned median 1.46 vs other median 1.24 -> PASS (warned exceeds)
+non-warning events whose grid max exceeds 1.5: 1 of 34 (event 24, dup:chr20:47412662-47422662, 1.60)
+```
+
+**What the four MAPQ<20 shares say, read plainly.** Four of the six worst bins carry **27% to 40%
+of their primary, non-duplicate reads below MAPQ 20** (events 13, 15, 33, 34), against 0.0% to
+0.2% in their own anchors. Those four are the mappability cases in the ordinary sense of the word:
+the bin is not thin, the pool cannot see most of it. Event 33's is the sharpest -- the bin's
+any-MAPQ depth is **45.0x against the anchor's 45.3x**, a `fold_any` of **1.01**, while the pool
+reads 42.1x against 63.5x and warns at 1.51. There is nothing wrong with that locus at all.
+
+**Event 2 is classified mappability but is not a mappability case, and saying otherwise would be
+wrong.** Its worst bin has a MAPQ<20 share of **0.000** and is *deeper* than its anchor at both
+floors: 83.8x against 51.2x in the pool, 56.0x against 39.0x at any MAPQ. It is a real depth rise
+that the pool's own filter amplifies from 1.44-fold to 1.62-fold, enough to cross 1.5. The locked
+label means exactly "this bin would not have warned had the fold been counted at any MAPQ", which
+is true of it; it does **not** mean "this is a mappability artefact". Five of six would be
+silenced by an any-MAPQ fold; four of those five are mappability in the ordinary sense.
+
+**Event 39 is the one real-depth case, and it looks like GC.** Its worst bin is thin at both
+floors (35.5x pool, 28.2x any-MAPQ against the anchor's 63.4x and 45.4x), its MAPQ<20 share is
+only 0.046, and its **GC is 0.593 against the anchor's 0.461** -- the highest GC of any window in
+the table, in a PCR-free library whose coverage still falls at high GC. No threshold was set on GC
+and none is set now; it is named because it is the one column that distinguishes this event from
+the other five.
+
+**What this would change if the metric were measured at any MAPQ** -- measured, not predicted:
+the warning would fire on **2 of the 40** (event 39 at 1.61 and event 24 at 1.60) instead of 6,
+and event 33, whose locus is flat to within 1%, would go quiet. That is the design note this
+result hands to the human (`CLINICAL_SV_DESIGN_NOTES.md`, "T3 -- measuring the depth fold at any
+MAPQ"). **The metric is not changed here:** that is CR2 option A's territory and out of this run.
+
+**A measurement of mine was silently broken first, and the control caught it.** The first run of
+the census returned `any_read_depth = 0.0` for **every** window while the pool depths beside them
+read 55x. `--ff` is `samtools view`'s spelling of the flag filter; `samtools depth` has no such
+option, so it printed usage to stderr, exited non-zero, and wrote nothing to stdout -- which the
+script summed to zero. The script now raises on a non-zero exit instead of returning silence, and
+uses `-G SUPPLEMENTARY` (whose default filter-out list already holds UNMAP, SECONDARY, QCFAIL and
+DUP) with `-J`, so a position a read's CIGAR deletes counts as covered, matching validate's own
+`count_depth_in_region`. **No number in this section comes from the broken run.**

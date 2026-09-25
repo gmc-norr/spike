@@ -205,3 +205,23 @@
   standing choice forbids. **It is also the baseline T5 must be judged against:** a
   per-breakpoint split-read row can only be stricter than a pooled one, so T5's bar has to allow
   for these four before anything about T5's own rate can be read.
+
+### RF7 — the depth fold's worst bin is computed for every event and printed for almost none
+
+- **Where:** `simulate::depth_fold` (`src/simulate.rs:925`) fills `DepthFold::worst_bin` and
+  `worst_depth` for every event; `census::depth_fold_warning` (`src/census.rs:117`) returns `None`
+  at or below `DEPTH_FOLD_WARN_ABOVE`, and the run README's "Donor depth off the scaling depth"
+  line is filtered by the same threshold (`src/main.rs:1902`).
+- **What:** only `SIM_DEPTH_FOLD`, the number, reaches the truth VCF. The bin it was measured over,
+  and the depth in it, exist in memory for all 40 events of a run and are discarded for the 34 that
+  do not warn. A reader who wants to know whether a 1.55-fold warning is unusual for that sample
+  has nothing to compare it against.
+- **How I know:** it blocked T3's own control. The locked control needed all 40 events' worst bins
+  and could not have them, so the statistic had to be amended to a uniform grid the measurement
+  computes for itself (plan amendment `597ad72`).
+- **Severity:** Low for correctness, Medium for interpreting a warning. It also makes the
+  measurement T3 did impossible to repeat from a run's own output.
+- **Not fixed:** adding the bin to `truth.vcf` for every event is a change to what spike emits,
+  which this run's standing choice forbids. The run README is not part of that promise (it "may
+  gain lines"), so a per-event bin column there would be the cheap fix, and it is a design decision
+  rather than a defect.

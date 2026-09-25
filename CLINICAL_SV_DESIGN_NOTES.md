@@ -479,3 +479,84 @@ would have to be given the donor BAM, which today it is not.
 7. **CR2 option A**, **CR3 option A**, **CR7(a)/(b)**, **CR9 option A** — the model work, in
    whatever order the validation scope demands. Design CR3's sample haplotypes and CR7's ploidy
    together; they are one object.
+
+## T3 — measuring the depth fold at any MAPQ
+
+**Status: a decision for the human. Nothing was changed.** From the run after the CR4 and CR2
+census, 2026-09-26. The measurement is in REVIEW.md, "Result: T3 — mappability dominates, 5 of 6".
+
+### The measured problem
+
+`SIM_DEPTH_FOLD` is computed from the donor **pool**, which holds only proper pairs whose both
+mates pass `--min-mapq` (default 20). A 1 kb bin of low mappability therefore reads thin in the
+pool whether or not the library is thin there, and the fold counts that as a depth departure. CR2's
+own plan stated the limit before measuring and left it open.
+
+Measured on the six duplications that warned in CR2's C4 — all 40 seeded spans were re-run and the
+same six warned at the same folds — with each event's worst bin compared against its own anchor
+window at two MAPQ floors:
+
+- **Five of the six would not have warned at any MAPQ** (`fold_any` 1.01, 1.18, 1.21, 1.44, 1.47
+  against the same 1.5 threshold).
+- **Four of those five carry 27%–40% of their reads below MAPQ 20** in the worst bin, against
+  0.0%–0.2% in their own anchor. Event 33's bin is flat to within 1% at any MAPQ (45.0x against
+  45.3x) while the pool reads 42.1x against 63.5x and warns at 1.51.
+- **One of the six is a real depth dip** (event 39, `fold_any` 1.61): thin at both floors, only
+  4.6% low-MAPQ, and GC 0.593 against its anchor's 0.461 — the highest GC in the table.
+- **One of the six is neither** (event 2): 0.0% low-MAPQ and *deeper* than its anchor at both
+  floors, 1.44-fold at any MAPQ amplified to 1.62-fold by the pool's filter.
+- The control separates: over a uniform grid, the six warning events' `fold_any` median is 1.46
+  against the other 34's 1.24, and only 1 of the 34 exceeds 1.5.
+
+**Measured, not predicted: an any-MAPQ fold would fire on 2 of the 40 instead of 6.**
+
+### The governing principle
+
+A warning should say something about the sample, not about the filter the simulator happens to
+apply to its own donor pool. Where the two differ, the user cannot act on the warning.
+
+### What would show the fix works, and what would show it does not
+
+- **Works:** on these 40 spans the warning fires on 2 rather than 6; event 33 (flat to 1% at any
+  MAPQ) goes quiet; event 39 (thin at both floors) still fires; and the `variable` review probe
+  still reports a fold of about 3.9, since its thin interior is thin at *every* MAPQ — that probe
+  is the regression test any change here must keep passing.
+- **Does not:** the `variable` probe's fold falls below 1.5, or a synthetic probe built with a
+  genuinely thin *and* well-mapped interior stops warning. Either means the new estimator has lost
+  the signal the old one had.
+
+### Option A — leave the fold as it is, and say what it measures
+
+Keep `SIM_DEPTH_FOLD` on the pool. Add one sentence to README and to the warning text: the fold is
+measured over the reads spike can actually use, so a bin of low mappability contributes to it even
+when the library is even there, and a fold just above 1.5 on real data is more often mappability
+than depth.
+
+- **Cost:** a documentation change. No behaviour moves, no threshold moves, nothing to re-measure.
+- **What it does not fix:** the warning still fires about three times more often than the sample
+  warrants, and a user cannot tell which kind they have without doing T3's measurement themselves.
+
+### Option B — report both folds, the pool one and an any-MAPQ one
+
+Compute a second fold from primary, non-duplicate, non-QC-fail reads at **any** MAPQ over the same
+bins, write it as a second INFO field (`SIM_DEPTH_FOLD_ANY`), and warn on **that** one while
+keeping `SIM_DEPTH_FOLD` as it is. The two together say what T3 had to measure by hand: a large
+pool fold with a small any-MAPQ fold is mappability; both large is depth.
+
+- **Cost:** a second depth pass per bin over a read stream the pool does not hold, so the pool
+  cannot be reused — a separate BAM query per event, like T2's `coverage_any_mapq` row. Roughly the
+  size of T2.
+- **Risk:** it moves which events warn, and the standing choice says a warning may change but
+  nothing that passes today may start failing. A warning is only a log line and an INFO field, so
+  this stays inside the standing choice — but the *threshold* for the new fold would have to be
+  locked in its own plan before any any-MAPQ fold is seen, and T3's numbers above have already been
+  seen. **A new plan on other chromosomes is the honest way to set it.**
+- **What it does not fix:** nothing about the depth model. The tiling still scales every fragment by
+  one depth; that is CR2 option A, still open.
+
+### Recommendation
+
+**Option A now, option B only with a threshold locked on chromosomes other than 20.** T3's
+distribution is exactly the data a threshold must not be chosen from, and option A costs a sentence
+and removes the misreading that matters — that a 1.5-fold warning on real data means the sample's
+depth is uneven, when four times in six it means the bin is hard to map.
