@@ -219,11 +219,15 @@ fn pick_sample_name(rg_samples: &[String]) -> Option<String> {
     // align.sh quotes the sample name, so punctuation and spaces survive it
     // untouched -- and must, or the simulated read group carries an SM that
     // no longer matches the BAM's own and merged.bam is two-sample again.
-    // A tab ends the SM field and a newline ends the @RG line, so control
-    // characters are the only ones no quoting can carry through.
+    // A tab ends the SM field and a newline ends the @RG line, so no amount
+    // of shell quoting lets either through. A backslash is no safer even
+    // though it is not a control character: bwa-mem2 and minimap2 unescape
+    // `\t`/`\n` inside the -R string themselves, so `LAB\tech01` becomes a
+    // truncated SM plus a bogus extra field once the aligner, not the shell,
+    // does the unescaping -- shell quoting has no say over that at all.
     let safe: String = first
         .chars()
-        .map(|c| if c.is_control() { '_' } else { c })
+        .map(|c| if c.is_control() || c == '\\' { '_' } else { c })
         .collect();
     if safe != *first {
         log::warn!("sample name {} rewritten to {} for the @RG line", first, safe);
@@ -298,6 +302,21 @@ mod tests {
         assert_eq!(
             pick_sample_name(&["HG\t002\n".to_string()]),
             Some("HG_002_".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_sample_name_strips_a_backslash() {
+        // bwa-mem2 and minimap2 unescape `\t`/`\n` inside the -R string they
+        // are handed, so a literal backslash in the sample name forms a new
+        // escape together with whatever letter follows it -- e.g. `LAB\tech01`
+        // becomes an @RG line with SM truncated to "LAB" and a bogus "ech01"
+        // field once the aligner unescapes its own `\t`. Quoting the shell
+        // word (sh_quote) cannot prevent this: the aligner, not the shell,
+        // does the unescaping. Measured with real minimap2 in the report.
+        assert_eq!(
+            pick_sample_name(&["LAB\\tech01".to_string()]),
+            Some("LAB_tech01".to_string())
         );
     }
 

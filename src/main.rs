@@ -753,6 +753,16 @@ fn sh_quote(value: &str) -> String {
 /// `--bam` would resolve against the wrong one -- or nothing at all. Falls
 /// back to a lexically absolute path when the file is not there to
 /// canonicalize, and to the argument itself if even that fails.
+///
+/// `canonicalize` (over a merely-absolute path) is deliberate: both scripts
+/// need the exact file spike ran on, and a directory-level symlink such as
+/// `data/giab_hg38` still resolves to a reference that keeps its `.fai` (and
+/// bwa/`.gzi`) indexes alongside it in the real directory, so the resolved
+/// path still finds them. The hazard is the other direction: if the FASTA
+/// *itself* is a symlink and the aligner's index was built beside the link
+/// rather than beside the real file, resolving it orphans the index --
+/// the same index/name coupling README already warns about for a bgzipped
+/// `--reference`.
 fn script_path(path: &str) -> String {
     std::fs::canonicalize(path)
         .or_else(|_| std::path::absolute(path))
@@ -804,6 +814,13 @@ fn write_align_script(
     // right-hand side is never word-split or globbed.
     let ref_default = sh_quote(&script_path(ref_path));
     let samtools_default = sh_quote(&script_command(samtools));
+    // The aligner name/command line stays verbatim in align_cmd (a custom
+    // --aligner is a command line, quoting it there would break the
+    // documented usage) but this echo banner is a second, undocumented ride
+    // on the same value -- and unlike align_cmd it sits inside a double-quoted
+    // string, so it needs quoting even for a value that is already a
+    // correctly-quoted shell command line.
+    let aligner_echo = sh_quote(aligner);
 
     let script = format!(
         r#"#!/bin/bash
@@ -815,7 +832,7 @@ THREADS="${{2:-{threads}}}"
 SAMTOOLS={samtools_default}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ({aligner}, $THREADS threads)..."
+echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ("{aligner_echo}", $THREADS threads)..."
 {align_cmd} | \
     "$SAMTOOLS" sort -@ "$THREADS" -o "$DIR/sim.bam" -
 
@@ -1992,12 +2009,48 @@ esac
         }
     }
 
+    #[test]
+    fn test_align_script_stays_valid_with_a_quoted_custom_aligner() {
+        // A correctly-quoted custom --aligner command line is left verbatim
+        // in the aligner-invocation position by design (README documents
+        // this). But the same value is also interpolated raw into the echo
+        // banner -- a second, undocumented ride on the value -- where even a
+        // well-formed command line broke the script's own syntax.
+        let dir = scratch_dir("align_custom_aligner_echo");
+        let aligner = r#"al --preset 'a"b'"#;
+
+        write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002")
+            .unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg("-n")
+            .arg(dir.join("align.sh"))
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "align.sh must stay syntactically valid when a correctly-quoted \
+             --aligner value reaches the echo line:\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     /// A file name holding every character that has broken these generated
-    /// scripts: a space, `}` (which ends a `${...}` expansion early), `"`,
-    /// `$`, a backtick and a single quote. The backtick runs `touch pwned` in
-    /// the script's working directory if the shell ever evaluates the path,
-    /// which is what the tests below watch for.
-    const HOSTILE_NAME: &str = "we ird}\"$HOME`touch pwned`'x";
+    /// scripts -- a space, `}` (which ends a `${...}` expansion early), `"`,
+    /// `$`, a backtick and a single quote -- plus `*` and a tab. The
+    /// backtick runs `touch pwned` in the script's working directory if the
+    /// shell ever evaluates the path, which is what the tests below watch
+    /// for. `*` and the tab are not things that have broken the scripts;
+    /// they pin the fix's riskiest-looking claim end-to-end -- that
+    /// `VAR=${1:-'name'}` never word-splits or globs its default, whatever
+    /// the default contains -- rather than leaving it covered only by
+    /// comment and by manual testing during development. A newline is not
+    /// included: this file's `argv_lines` helper records a stub's argv one
+    /// element per line, so an argv element that itself contains a newline
+    /// would (correctly) come back looking like two elements -- a test-
+    /// harness limitation, not a bug in the generated scripts.
+    const HOSTILE_NAME: &str = "we ird}\"$HOME`touch pwned`'x*\ty";
 
     /// A stub aligner that dumps its argv, one argument per line, to
     /// `$ARGV_OUT`. Its (empty) stdout is what `samtools sort` consumes.
@@ -2174,6 +2227,41 @@ esac
     }
 
     #[test]
+    fn test_align_script_passes_a_sample_name_with_a_single_quote_through_the_rg_argument() {
+        // rg_arg (bwa-mem2/minimap2's -R) is the one place that runs the
+        // `'\''` splice from sh_quote through a real shell -- the path tests
+        // exercise that splice on file paths, but no test had ever pushed a
+        // sample name with a single quote through it.
+        let (dir, argv_out, samtools) = align_script_fixture("align_bwa_mem2_quote_sm", "bwa-mem2");
+
+        write_align_script(
+            dir.to_str().unwrap(),
+            "ref.fa",
+            4,
+            "bwa-mem2",
+            samtools.to_str().unwrap(),
+            "O'Brien",
+        )
+        .unwrap();
+
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(
+            output.status.success(),
+            "align.sh failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let argv = argv_lines(&argv_out);
+        assert!(
+            argv.iter().any(|a| a == "@RG\\tID:sim\\tSM:O'Brien\\tPL:ILLUMINA"),
+            "bwa-mem2 must receive the sample name's apostrophe unmangled and \
+             as one -R argument; got {:?}",
+            argv
+        );
+    }
+
+    #[test]
     fn test_merge_script_defaults_survive_shell_metacharacters_in_paths() {
         let dir = scratch_dir("merge_hostile_paths");
         let samtools = write_stub_samtools(&dir);
@@ -2225,6 +2313,120 @@ esac
             assert!(
                 argv.iter().any(|a| std::path::Path::new(a) == want),
                 "samtools must be handed {} unmangled; got {:?}",
+                want.display(),
+                argv
+            );
+        }
+    }
+
+    #[test]
+    fn test_align_script_accepts_a_positional_reference_holding_a_space_and_a_dollar_sign() {
+        // scripts/validate_pipeline.sh (and spike's own run_alignment) never
+        // rely on align.sh's baked-in defaults -- they always call it
+        // positionally: `bash align.sh "$REFERENCE" "$THREADS"`. The quoting
+        // and absolutising this task added is only for the defaults; this
+        // pins that the already-positional path -- untouched by this task --
+        // still carries a value holding a space and a `$` through as one
+        // unmangled argument, the way validate_pipeline.sh depends on it to.
+        let (dir, argv_out, samtools) =
+            align_script_fixture("align_positional_ref", "bwa-mem2");
+        let positional_ref = dir.join("pos arg $HOME.fa");
+        std::fs::write(&positional_ref, b">chr1\nACGT\n").unwrap();
+
+        write_align_script(
+            dir.to_str().unwrap(),
+            "ref.fa", // baked default; irrelevant, the positional argument overrides it
+            4,
+            "bwa-mem2",
+            samtools.to_str().unwrap(),
+            "HG002",
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg(dir.join("align.sh"))
+            .arg(&positional_ref)
+            .arg("4")
+            .current_dir(&dir)
+            .env("ARGV_OUT", argv_out.to_str().unwrap())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    dir.join("bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "align.sh must run when REFERENCE is passed positionally holding a \
+             space and a $, exactly how validate_pipeline.sh invokes it:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let argv = argv_lines(&argv_out);
+        assert!(
+            argv.iter().any(|a| std::path::Path::new(a) == positional_ref),
+            "the aligner must be handed the positional reference unmangled; \
+             wanted {}, got {:?}",
+            positional_ref.display(),
+            argv
+        );
+    }
+
+    #[test]
+    fn test_merge_script_accepts_positional_arguments_holding_a_space_and_a_dollar_sign() {
+        // validate_pipeline.sh's other call site: `bash merge.sh "$BG_BAM"
+        // "$REFERENCE" "$THREADS"`, always positional. Same pin as above, for
+        // merge.sh's ORIGINAL_BAM and REFERENCE.
+        let dir = scratch_dir("merge_positional_paths");
+        let samtools = write_stub_samtools(&dir);
+        let original = dir.join("pos arg $HOME.bam");
+        let ref_path = dir.join("pos ref $USER.fa");
+        std::fs::write(&original, b"").unwrap();
+        std::fs::write(&ref_path, b"").unwrap();
+        let argv_out = dir.join("samtools_argv_positional.txt");
+        let _ = std::fs::remove_file(&argv_out);
+
+        write_merge_script(
+            dir.to_str().unwrap(),
+            "orig.bam", // baked default; irrelevant, the positional arguments override it
+            "ref.fa",
+            4,
+            samtools.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("sim.bam"), b"").unwrap();
+        std::fs::write(dir.join("replaced_reads.txt"), "r1\nr2\n").unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg(dir.join("merge.sh"))
+            .arg(&original)
+            .arg(&ref_path)
+            .arg("4")
+            .current_dir(&dir)
+            .env("SAMTOOLS_ARGV_OUT", argv_out.to_str().unwrap())
+            // Healthy case: the shortfall guard is not what this test is about.
+            .env("SAMTOOLS_FAKE_ACTUAL", "10")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "merge.sh must run when ORIGINAL_BAM and REFERENCE are passed \
+             positionally holding a space and a $, exactly how \
+             validate_pipeline.sh invokes it:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let argv = argv_lines(&argv_out);
+        for want in [&original, &ref_path] {
+            assert!(
+                argv.iter().any(|a| std::path::Path::new(a) == want.as_path()),
+                "samtools must be handed the positional {} unmangled; got {:?}",
                 want.display(),
                 argv
             );
