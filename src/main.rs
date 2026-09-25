@@ -1195,7 +1195,13 @@ fn extract_pool_for_event(
     // Names this event's windows added: `unusable_qual_names` is global, so
     // the delta is what *this* event lost to unreadable qualities.
     let dropped_unusable_qual = unusable_qual_names.len() - unusable_before;
-    let pool = finish_donor_pool(all_pairs, event, &windows_searched, dropped_unusable_qual)?;
+    let pool = finish_donor_pool(
+        all_pairs,
+        event,
+        &windows_searched,
+        dropped_unusable_qual,
+        config.read_length,
+    )?;
     Ok((pool, pool_chrom, dropped_unusable_qual))
 }
 
@@ -1262,6 +1268,7 @@ fn finish_donor_pool(
     event: &SimEvent,
     windows_searched: &[String],
     dropped_unusable_qual: usize,
+    read_length: usize,
 ) -> Result<ReadPool> {
     // Windows can share reads, and the same fragment must not enter the pool
     // -- or the fragment distribution -- twice. Dedup before counting: a
@@ -1290,7 +1297,9 @@ fn finish_donor_pool(
         );
     }
 
-    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
+    // The model is built over the same range the generator samples in, so
+    // `read_length` has to reach it -- see `FragmentDist::from_read_pairs`.
+    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs, read_length);
     Ok(extract::build_read_pool(all_pairs, frag_dist))
 }
 
@@ -3218,6 +3227,11 @@ done"#,
 
     // --- N5: a donor pool too small to simulate from must fail loudly ---
 
+    /// Read length for the donor-pool fixtures: the fragment model keeps
+    /// only insert sizes in [read_length, MAX_FRAGMENT_LEN], and every
+    /// fixture pair's 400bp insert lies inside this one.
+    const TEST_READ_LENGTH: usize = 150;
+
     /// One usable donor pair, 100 bp, at `start`.
     fn donor_pair(name: &str, start: u64) -> ReadPair {
         ReadPair {
@@ -3252,6 +3266,7 @@ done"#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
+            TEST_READ_LENGTH,
         ) {
             Ok(pool) => panic!(
                 "empty donor pool accepted; the run would write a truth VCF off {} pairs",
@@ -3283,6 +3298,7 @@ done"#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
+            TEST_READ_LENGTH,
         ) {
             Ok(_) => panic!("{} donor pairs accepted", MIN_DONOR_PAIRS - 1),
             Err(e) => e.to_string(),
@@ -3303,6 +3319,7 @@ done"#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
+            TEST_READ_LENGTH,
         )
         .expect("a pool at the minimum must be usable");
         assert_eq!(pool.pairs.len(), MIN_DONOR_PAIRS);
@@ -3322,6 +3339,7 @@ done"#,
                 &del("chr20", 30_000_000, 30_010_000),
                 &["chr20:29990000-30020000".to_string()],
                 0,
+                TEST_READ_LENGTH,
             )
             .is_err(),
             "a duplicated fragment must not lift a pool over the floor"
@@ -3341,6 +3359,7 @@ done"#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             40,
+            TEST_READ_LENGTH,
         ) {
             Ok(_) => panic!("12 donor pairs accepted"),
             Err(e) => e.to_string(),
@@ -3574,6 +3593,7 @@ done"#,
                 "chr2:28990000-29010000".to_string(),
             ],
             0,
+            TEST_READ_LENGTH,
         ) {
             Ok(_) => panic!("empty fusion donor pool accepted"),
             Err(e) => e.to_string(),

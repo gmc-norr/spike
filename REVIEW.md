@@ -2714,7 +2714,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence and the AF caps fixed; input GT, ploidy and `af=het` still open) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
-| CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, not fixed |
+| CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
 | CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, not fixed |
 
 Statuses are updated as each fix lands.
@@ -2901,6 +2901,32 @@ failures. Code: `src/validate.rs:587`, `:636`, `:698`.
 in `[read_length, MAX_FRAGMENT_LEN = 1500]` (`src/stats.rs:12`, `src/simulate.rs:705`,
 `src/synth.rs:643`). `compute_tiling_count` normalises by that wider `mean`
 (`src/simulate.rs:667`), so the fragment count does not match the distribution emitted.
+
+**Fixed.** `FragmentDist::from_read_pairs` now takes the read length and keeps only insert sizes
+in `[read_length, MAX_FRAGMENT_LEN]` -- the range every generator call samples -- so `mean` and
+`stddev` describe the distribution that is emitted. The empty case (no donor insert size in that
+range) still warns, but the fallback is the 400 +/- 80 default *clamped into the same range*, not
+a distribution the generator cannot draw from.
+
+**Measured, HG002 chr20**, `del:chr20:38412500-38422500`, seed 1, 35x PCR-free NovaSeq,
+read length 151 bp, donor pool 4,595 pairs from `chr20:38402500-38432500`. Before is commit
+`39361fe` (this fix's parent, tasks 1-5 already in); after is this commit.
+
+| | before | after |
+| --- | --- | --- |
+| donor insert sizes in the model | 4,595 (window `0 < s < 10000`) | 4,557 (window `[151, 1500]`) |
+| model mean / SD (= `mean_frag`, from the `Fragment distribution:` log line) | 418.6 / 179.2 | 421.0 / 178.1 |
+| fragments planted (`Tiling N synthetic reads`) | 291 | 289 |
+| emitted fragment mean / SD (60 seeds pooled, n = 17,460 / 17,340) | 422.2 / 179.2 | 421.2 / 177.2 |
+
+The whole difference is **38 donor pairs (0.83%) whose insert size is shorter than one read**
+(mean 132.3 bp, max 150 bp); this window holds nothing above 1500 bp and nothing at or above
+10 kb, so the old outlier cut never bound. The emitted distribution does not move -- it never
+could, because `sample_in_range` already truncated it -- and both before and after it matches
+the in-range donor mean of 421.0. What was wrong was the *normaliser*: the count was divided by
+418.6 while the fragments emitted averaged 421.0, so spike planted **0.7% more fragments than
+the formula asks for**. On an ordinary WGS library that is the size of the effect; a library
+with a large sub-read-length or >1500 bp tail (amplicon, degraded/FFPE) would see more.
 
 ### CR-BUILD -- the `bcftools` test dependency is undeclared
 
