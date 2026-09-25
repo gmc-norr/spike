@@ -3831,3 +3831,33 @@ six warning events' median `fold_any` must exceed the other 34's median, or T3 i
 - *The bins can lie outside the event span.* Verified in the reproduction: event 13's worst bin
   `chr20:23431622-23432622` starts 2000 bp **before** its event start, because the haplotype
   segments include the flanks. The measurement uses the bin spike named, not the event span.
+
+##### Plan amendment: T3's control statistic (before any `fold_any` was computed)
+
+The plan's control said "the same `fold_any` is computed for all 40 events' worst bins". **Spike
+does not expose the worst bin unless it warns.** `simulate::depth_fold` computes it for every
+event, but `census::depth_fold_warning` returns `None` at or below 1.5 and the run README's
+"Donor depth off the scaling depth" line is filtered by the same threshold
+(`src/main.rs:1902`), so 34 of the 40 have no worst bin anywhere in the output. Only the fold
+itself reaches `SIM_DEPTH_FOLD`. That is recorded as a finding in its own right: the number a
+reader would need to check a warning against its neighbours is computed and discarded.
+
+**Amended control statistic, fixed here, before any `fold_any` has been computed.** For **all
+40** events, `fold_any` is computed over **every 1 kb bin of a uniform grid across
+`[span_start - 2000, span_end + 2000)`** -- the replacement footprint, `HAP_FLANK` on each side
+-- against that event's anchor, and the per-event **maximum** is the control statistic. It is
+the same statistic for all 40 and needs nothing spike withholds.
+
+The footprint bound was verified, not assumed: event 13's worst bin `chr20:23431622-23432622`
+begins exactly `span_start - 2000`, and event 15's `chr20:25332805-25333805` begins exactly
+`span_end`.
+
+The **classification** of the six is unchanged: it uses the worst bin **spike itself named**, as
+locked. The grid maximum is used only for the 40-event separation test. The grid does not
+reproduce spike's own bin edges -- `depth_fold` bins each haplotype *segment* separately, so a
+tandem duplication's bins restart at each junction -- so the grid maximum is not expected to
+equal `SIM_DEPTH_FOLD` and is not compared against it.
+
+**The separation test, unchanged in substance:** if the six warning events' median control
+statistic does not exceed the other 34's, T3 is **inconclusive whatever the six classifications
+say**.
