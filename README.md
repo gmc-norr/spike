@@ -556,6 +556,17 @@ Measured on HG002 35x, graded against GIAB het indels at 0.5:
 | chr21 + chr22 (8,008 indels, not used to choose 10): out of range | 9.3% | 4.1% |
 | fragments kept | | 81% |
 
+Comparing each read with every combination of the truth records near an
+indel (above) was then measured the same way, on chromosomes not used to
+design it (chr17-chr19, 25,903 het indels, with GIAB's other records within
+500 bp in the truth file):
+
+| out of range | before | after |
+| --- | --- | --- |
+| indels with another GIAB record within 25 bp (4,482) | 17.6% | 8.7% |
+| isolated indels (21,421) | 1.4% | 1.4% |
+| all | 4.2% | 2.6% |
+
 SNVs fail at about 0.6-0.8% on the same BAM.
 
 The three rows that measure nothing still push a result row, so the event
