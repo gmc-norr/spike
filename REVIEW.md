@@ -1650,6 +1650,69 @@ It needs a plan of its own.
 against 2.2% of SNVs (N16). Their fractions cluster at 0.25-0.33, so the
 indel counting under-counts carriers generally. Soft clips at read ends and
 reference bias are the obvious suspects; neither was measured.
+*(Measured since: N18 found the cause and fixed it; N19 traced what is left
+to nearby truth records.)*
+
+#### N15 plan, second attempt: the haplotype rule (locked before any code or result)
+
+**Principle.** A read supports a small indel when its own bases over the
+site are closer to the truth haplotype than to the reference. Where the
+aligner put a gap, or whether it wrote one at all, does not decide it. This is
+the MNV rule (N10) applied to indels, with a nearest-match comparison instead
+of an exact one, because the window also holds sequencing errors and the
+sample's own nearby variants.
+
+**The rule:**
+- **The window.** The indel's repeat region from N18, plus the base on each
+  side, plus `INDEL_FLANK` = 10 more on each side. N18 already requires a read
+  to cover exactly this span, so no new cut-off is added.
+- **The two sequences.** `H_ref` is the reference over the window. `H_alt` is
+  the same with the truth record's edit applied.
+- **The read's bases.** They run from the base aligned to the window's first
+  position to the base aligned to its last, inserted bases in between
+  included. A read whose alignment has no `M` base on either end position,
+  because a gap or clip sits there, gives no vote.
+- **The vote.** Compare the read's bases with each sequence by Levenshtein
+  distance. It votes `Carries` if closer to `H_alt`, `Spans` if closer to
+  `H_ref`, and not at all on a tie.
+- **What is unchanged:** one vote per fragment (N16), MAPQ 20, and N14's
+  grade. The pad rule and the CIGAR-kind test go.
+
+**Why no threshold.** A tie is the only "undecided", and the comparison has no
+maximum distance. A read far from both sequences still votes for the nearer
+one, exactly as a read with a different gap voted `Spans` under the pad rule.
+
+**The sites.**
+- **chr20** (seen before): the 6,663 sites, split with N15's lists into 36
+  neighbour, 5,571 isolated and 1,092 not isolated.
+- **chr21 + chr22, held out:** the 8,008 N18 sites. Split the same way from
+  the truth VCF alone, before this commit: **71** neighbour, **6,537**
+  isolated, **1,471** not isolated.
+- **The baseline** is `validate` as it is now (`aba68d5`, the pad rule after
+  N18), run on the same sites with the debug count line.
+
+**Pass criteria (all must hold):**
+- **S1, N15's problem.** At one or more of chr20's 36 neighbour sites, fewer
+  carriers than the baseline.
+- **S2, isolated sites not made worse.** The out-of-range rate at isolated
+  sites rises by no more than **0.5 points**, on chr20 (baseline 1.29%) and on
+  chr21+chr22. The first attempt's S2 counted carriers lost, and assumed every
+  baseline carrier was real. That premise was never verified, so this
+  measures the goal itself: calibration against the rule's design.
+- **S3, spelling-proof.** The three N13 spellings of the chr20:38549586 (AC)n
+  deletion get **identical carries and spans**. All three share one window
+  and one `H_alt`, so this time the criterion asks exactly what the rule
+  claims.
+- **S4, the residual.** At sites that are not isolated, the out-of-range rate
+  falls by at least **5 points**, on chr20 (baseline 16.29%) and on
+  chr21+chr22.
+- **S5, overall.** On chr21+chr22, the overall out-of-range rate is lower
+  than the baseline's.
+
+Carriers gained and lost per class, and verdict flips, are reported but are
+not criteria.
+
+**If any fails,** the rule is reverted, as the first attempt was.
 
 ### N16 · One depth floor, three different denominators
 
