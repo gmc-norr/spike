@@ -79,7 +79,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule was tried and refuted, see the N15 result). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
-| N18 | Medium | **Not fixed; cause measured** (found while measuring N15). 9.3% of real HG002 het indels fall outside `allele_freq`'s range at 0.5 against 0.77% of SNVs; indel fractions average 0.41. Cause: reads that stop inside or near the indel's repeat align as reference and vote `Spans` (see the N18 result) | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
+| N18 | Medium | **Fixed** (found while measuring N15; cause measured, margin confirmed on held-out chr21/chr22). 9.3% of real HG002 het indels fall outside `allele_freq`'s range at 0.5 against 0.77% of SNVs; indel fractions average 0.41. Cause: reads that stop inside or near the indel's repeat align as reference and vote `Spans` (see the N18 result) | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
 
 ## High severity
 
@@ -1991,6 +1991,26 @@ Run with `scripts/n18_indel_flank.py` (unchanged since `d6f4621`) against
 The held-out curve has the same shape as chr20's, sitting about 0.3 points
 higher throughout, and F = 10 keeps 81% of fragments on both. So the rule is
 built.
+
+**Fixed** (`2075ae6`). `count_indel_reads` finds the indel's repeat region
+(`indel_repeat_region`). `cigar_indel_vote` gives no vote, either way, to a
+read whose alignment does not cover `INDEL_FLANK` = 10 bases past the base on
+each side of it.
+
+**Tests.** `test_a_read_that_stops_at_an_indel_does_not_vote_on_it` failed
+first, as predicted: 0.31 (8 of 26), not 0.50. Two unit tests pin the region
+and the both-sides span. Each of these four mutations turns a test red:
+- the span check removed;
+- only the left side checked;
+- no repeat extension;
+- `INDEL_FLANK` = 0.
+
+The N13 vote tests pass `NO_SPAN_NEEDED`, since they test the vote itself.
+
+**End to end.** `spike validate` at `2075ae6` on chr20's 6,663 sites
+reproduces the script's F = 10 carries and spans at **6,663 / 6,663** sites.
+So the Rust rule is the measured rule. `allele_freq` FAIL goes from 638 to
+**338**: 245 out of range (3.73%), and 93 too shallow to grade.
 
 ## Low severity
 
