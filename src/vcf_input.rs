@@ -127,7 +127,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     for record in &records {
         match record.sv_type {
             SvTypeTag::Del => {
-                let Some(end) = resolve_sv_end_or_warn(record, "DEL") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "DEL") else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -137,7 +137,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
 
                 events.push(SimEvent::Deletion {
                     chrom: record.chrom.clone(),
-                    del_start: record.pos,
+                    del_start: start,
                     del_end: end,
                     gene,
                     exons: Vec::new(),
@@ -145,7 +145,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Dup => {
-                let Some(end) = resolve_sv_end_or_warn(record, "DUP") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "DUP") else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -155,14 +155,14 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
 
                 events.push(SimEvent::Duplication {
                     chrom: record.chrom.clone(),
-                    dup_start: record.pos,
+                    dup_start: start,
                     dup_end: end,
                     gene,
                     allele_fraction: af,
                 });
             }
             SvTypeTag::Inv => {
-                let Some(end) = resolve_sv_end_or_warn(record, "INV") else {
+                let Some((start, end)) = resolve_sv_span_or_warn(record, "INV") else {
                     continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
@@ -172,7 +172,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
 
                 events.push(SimEvent::Inversion {
                     chrom: record.chrom.clone(),
-                    inv_start: record.pos,
+                    inv_start: start,
                     inv_end: end,
                     gene,
                     allele_fraction: af,
@@ -187,13 +187,26 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     .to_string();
                 let af = extract_af(&record.info);
 
-                // Check if ALT has explicit sequence (not symbolic <INS>).
-                let ins_seq = if !record.alt.starts_with('<') && record.alt.len() > 1 {
-                    // ALT contains the inserted sequence (first base = ref base).
-                    let seq = record.alt.as_bytes()[1..].to_vec();
-                    Some(seq)
+                // ALT with explicit sequence (not symbolic <INS>) carries the
+                // inserted bases: the ones it adds to the flanks it shares
+                // with REF. REF=AT ALT=ATGGG inserts GGG after the T; taking
+                // ALT past its first base made it a 4 bp insertion of TGGG.
+                let (ins_pos, ins_seq) = if alt_carries_sequence(&record.alt) {
+                    let trimmed = trim_shared_flanks(&record.ref_allele, &record.alt);
+                    if !trimmed.ref_rem.is_empty() || trimmed.alt_rem.is_empty() {
+                        // REF keeps bases ALT drops: a complex record, not an
+                        // insertion. Which bases are inserted and which are
+                        // replaced is a guess, so drop it rather than write a
+                        // plausible-looking wrong truth record.
+                        log::warn!("{}", not_an_insertion_warning(record));
+                        continue;
+                    }
+                    (
+                        event_start(record.pos, trimmed.prefix),
+                        Some(trimmed.alt_rem.to_vec()),
+                    )
                 } else {
-                    None
+                    (record.pos, None)
                 };
 
                 let effective_len = if let Some(ref seq) = ins_seq {
@@ -210,7 +223,7 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
 
                 events.push(SimEvent::Insertion {
                     chrom: record.chrom.clone(),
-                    pos: record.pos,
+                    pos: ins_pos,
                     ins_seq,
                     ins_len: effective_len,
                     gene,
@@ -416,44 +429,126 @@ fn alt_carries_sequence(alt: &str) -> bool {
     !alt.starts_with('<') && alt.len() > 1
 }
 
-/// Resolve a DEL/DUP/INV record's end coordinate: prefer INFO/END, then
-/// INFO/SVLEN, then the alleles.
-///
-/// Only two allele shapes give an unambiguous span. REF = anchor base +
-/// affected bases, with ALT carrying no sequence of its own (symbolic, or
-/// the anchor alone): the span is REF's length. And, for DUP, a single-base
-/// REF anchor with ALT = anchor + the duplicated copy: the span is that
-/// copy's length, read exactly as the INS arm reads an explicit insertion.
-///
-/// When both alleles carry sequence (a REF/ALT pair sharing a prefix, or an
-/// equal-length substitution) the span cannot be read off REF's length: the
-/// event neither starts at POS nor spans all of REF, and guessing turns a
-/// malformed record into a plausible-looking wrong truth record. Such a
-/// record, and one with no length anywhere, return `None`; the caller
-/// rejects it rather than silently emitting a 1 bp event.
-// Stripping a shared REF/ALT prefix (the INS arm's L10 bug) would let the
-// first of those shapes be decoded here too; it is deliberately not done yet.
-fn resolve_sv_end(record: &SvRecord) -> Option<u64> {
-    parse_info_u64(&record.info, "END")
-        .or_else(|| parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs()))
-        .or_else(|| {
-            if alt_carries_sequence(&record.alt) {
-                // ALT = anchor + duplicated copy (the sequence-resolved DUP).
-                return (record.sv_type == SvTypeTag::Dup && record.ref_allele.len() == 1)
-                    .then(|| record.pos + record.alt.len() as u64 - 1);
-            }
-            (record.ref_allele.len() > 1).then(|| record.pos + record.ref_allele.len() as u64 - 1)
-        })
+/// REF and ALT with the flanks they share stripped off: the common prefix
+/// first, then any common suffix the leftovers still share. `prefix` counts
+/// the leading bases both alleles keep, so the last base the record leaves
+/// untouched is 1-based POS + `prefix` - 1 and the event starts after it.
+struct TrimmedAlleles<'a> {
+    prefix: usize,
+    ref_rem: &'a [u8],
+    alt_rem: &'a [u8],
 }
 
-/// Resolve a DEL/DUP/INV end, warning when the record has to be dropped.
+/// Strip the flanks REF and ALT share. Case-insensitive, so a soft-masked
+/// REF is trimmed against an uppercase ALT like any other.
+fn trim_shared_flanks<'a>(ref_allele: &'a str, alt: &'a str) -> TrimmedAlleles<'a> {
+    let (r, a) = (ref_allele.as_bytes(), alt.as_bytes());
+    let prefix = r
+        .iter()
+        .zip(a.iter())
+        .take_while(|(x, y)| x.eq_ignore_ascii_case(y))
+        .count();
+    // Only bases past the shared prefix can also be a shared suffix:
+    // REF=AT ALT=AGGGT is the 3 bp insertion GGG, not T -> GGGT.
+    let (mut r_end, mut a_end) = (r.len(), a.len());
+    while r_end > prefix && a_end > prefix && r[r_end - 1].eq_ignore_ascii_case(&a[a_end - 1]) {
+        r_end -= 1;
+        a_end -= 1;
+    }
+    TrimmedAlleles {
+        prefix,
+        ref_rem: &r[prefix..r_end],
+        alt_rem: &a[prefix..a_end],
+    }
+}
+
+/// The 0-based start of an event whose alleles share `prefix` leading bases:
+/// the base just after the last shared one. `pos` is the record's VCF POS,
+/// which the parser guarantees is >= 1, so alleles sharing nothing — an
+/// equal-length substitution, which carries no padding base — start at POS
+/// itself rather than at the base after it.
+fn event_start(pos: u64, prefix: usize) -> u64 {
+    pos + prefix as u64 - 1
+}
+
+/// True when `alt` is `ref_seq` reverse-complemented: the allele shape an
+/// inversion written as an equal-length substitution has.
+fn is_reverse_complement(ref_seq: &[u8], alt: &[u8]) -> bool {
+    let mut rc = ref_seq.to_vec();
+    crate::extract::reverse_complement(&mut rc);
+    rc.eq_ignore_ascii_case(alt)
+}
+
+/// Resolve a DEL/DUP/INV record's span as 0-based `(start, end)`: prefer
+/// INFO/END, then INFO/SVLEN, then the alleles. With END or SVLEN the start
+/// is POS (the preceding base); read off the alleles it is wherever the
+/// bases the alleles share end.
+fn resolve_sv_span(record: &SvRecord) -> Option<(u64, u64)> {
+    if let Some(end) = parse_info_u64(&record.info, "END") {
+        return Some((record.pos, end));
+    }
+    if let Some(svlen) = parse_info_i64(&record.info, "SVLEN") {
+        return Some((record.pos, record.pos + svlen.unsigned_abs()));
+    }
+    span_from_alleles(record)
+}
+
+/// Read a span off the alleles, for the shapes that state one unambiguously.
+/// Anything else — a complex record, or one with no length anywhere —
+/// returns `None` and the caller rejects it, rather than turning a malformed
+/// record into a plausible-looking wrong truth record.
+fn span_from_alleles(record: &SvRecord) -> Option<(u64, u64)> {
+    if !alt_carries_sequence(&record.alt) {
+        // ALT symbolic (<DEL>) or a single base: REF is the anchor plus the
+        // affected bases, so the span is what REF has past the anchor.
+        return (record.ref_allele.len() > 1)
+            .then(|| (record.pos, record.pos + record.ref_allele.len() as u64 - 1));
+    }
+
+    let trimmed = trim_shared_flanks(&record.ref_allele, &record.alt);
+    let start = event_start(record.pos, trimmed.prefix);
+    let span = |len: usize| Some((start, start + len as u64));
+    let (ref_len, alt_len) = (trimmed.ref_rem.len(), trimmed.alt_rem.len());
+
+    if alt_len == 0 && ref_len > 0 {
+        // REF keeps bases ALT drops. They are reference sequence at
+        // [start, start + ref_len) however long the shared prefix is, so
+        // REF=GTTAAAGTTTATCAGAAAATT ALT=GTTAAAG is the 14 bp event after
+        // the 7 shared bases, not a 21 bp one at POS.
+        return span(ref_len);
+    }
+    if ref_len == 0 && alt_len > 0 {
+        // ALT is the anchor plus a duplicated copy. Only a bare single-base
+        // REF says where that copy comes from; with sequence in REF the
+        // stripped anchor would land on bases the record never spells out,
+        // and the copy could equally be REF's own span.
+        let ref_is_the_anchor = record.ref_allele.len() == 1 && trimmed.prefix == 1;
+        if record.sv_type == SvTypeTag::Dup && ref_is_the_anchor {
+            return span(alt_len);
+        }
+        return None;
+    }
+    if ref_len > 0
+        && ref_len == alt_len
+        && record.sv_type == SvTypeTag::Inv
+        && is_reverse_complement(trimmed.ref_rem, trimmed.alt_rem)
+    {
+        // An equal-length substitution carries no padding base, so POS is
+        // the first affected base — `start` has already backed up over it.
+        // Only an ALT that really is REF reverse-complemented is an INV.
+        return span(ref_len);
+    }
+    None
+}
+
+/// Resolve a DEL/DUP/INV span, warning when the record has to be dropped.
 /// Shared by the three arms so a rejection reads the same whatever the type.
-fn resolve_sv_end_or_warn(record: &SvRecord, sv_type: &str) -> Option<u64> {
-    let end = resolve_sv_end(record);
-    if end.is_none() {
+fn resolve_sv_span_or_warn(record: &SvRecord, sv_type: &str) -> Option<(u64, u64)> {
+    let span = resolve_sv_span(record);
+    if span.is_none() {
         log::warn!("{}", no_length_warning(record, sv_type));
     }
-    end
+    span
 }
 
 /// Message logged when a DEL/DUP/INV record's span cannot be resolved.
@@ -465,6 +560,17 @@ fn no_length_warning(record: &SvRecord, sv_type: &str) -> String {
         "{} record {} at {}:{} has no END and no SVLEN, and its REF/ALT alleles are not a shape \
          a length can be read from; skipping",
         sv_type, record.id, record.chrom, record.pos
+    )
+}
+
+/// Message logged when an INS record's ALT is not its REF plus inserted
+/// bases. Names chrom:pos as well as the ID, for the same reason
+/// [`no_length_warning`] does: `ID=.` is common and identifies nothing.
+fn not_an_insertion_warning(record: &SvRecord) -> String {
+    format!(
+        "INS record {} at {}:{} keeps REF bases its ALT drops, so the bases it inserts are \
+         not a shape they can be read from; skipping",
+        record.id, record.chrom, record.pos
     )
 }
 
@@ -912,37 +1018,84 @@ mod tests {
     /// deleted bases": here REF and ALT share a 7 bp prefix, so the real
     /// event is a 14 bp deletion at 38412507-38412520 anchored at 38412506.
     /// Deriving the span from REF alone gave END=38412520;SVLEN=-20 — a
-    /// plausible-looking record starting 6 bases too early. Until the
-    /// common prefix is stripped (see the INS arm), reject it instead.
+    /// plausible-looking record starting 6 bases too early.
     #[test]
-    fn test_del_sequence_resolved_multibase_alt_is_rejected() {
+    fn test_del_sequence_resolved_multibase_alt_strips_the_shared_prefix() {
         let vcf = format!("chr20\t38412500\t.\t{}\tGTTAAAG\t.\t.\tSVTYPE=DEL\n", REF21);
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
-        assert!(
-            events.is_empty(),
-            "REF/ALT sharing a prefix must not be read as a REF-length event: {:?}",
-            events
-        );
+        assert_eq!(events.len(), 1, "expected one DEL event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
+                // The 14 deleted bases are 1-based 38412507-38412520, so the
+                // preceding base is 38412506 and END is 38412520.
+                assert_eq!(*del_start, 38412506);
+                assert_eq!(*del_end, 38412520);
+            }
+            _ => panic!("expected Deletion"),
+        }
+
+        // The same span must come back out of the truth VCF's END form.
+        let round = "chr20\t38412506\t.\tG\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=38412520;SVLEN=-14\n";
+        let records = parse_vcf_records(round.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        match &events[0] {
+            SimEvent::Deletion {
+                del_start, del_end, ..
+            } => {
+                assert_eq!((*del_start, *del_end), (38412506, 38412520));
+            }
+            _ => panic!("expected Deletion"),
+        }
     }
 
     /// An INV written as an equal-length substitution (REF = the inverted
     /// span, ALT = its reverse complement). VCF 4.3 uses no padding base
-    /// when neither allele is empty, so POS is the first inverted base and
-    /// spike's "POS is the preceding base" reading is off by one. Deriving
-    /// from REF gave END=38412520 over a 20 bp span starting at 38412501 —
-    /// one base short and one base right of the true 21 bp span.
+    /// when neither allele is empty, so POS is the first inverted base, not
+    /// the preceding one: the span is the 21 bases 38412500-38412520.
+    /// Deriving from REF as if POS were a padding base gave END=38412520
+    /// over a 20 bp span starting at 38412501 — one base short and one base
+    /// right of the truth.
     #[test]
-    fn test_inv_equal_length_ref_and_alt_is_rejected() {
+    fn test_inv_equal_length_ref_and_alt_spans_ref_from_pos() {
         let vcf = format!(
             "chr20\t38412500\t.\t{}\t{}\t.\t.\tSVTYPE=INV\n",
             REF21, RC21
         );
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INV event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Inversion {
+                inv_start, inv_end, ..
+            } => {
+                assert_eq!(*inv_start, 38412499);
+                assert_eq!(*inv_end, 38412520);
+                assert_eq!(*inv_end - *inv_start, REF21.len() as u64);
+            }
+            _ => panic!("expected Inversion"),
+        }
+    }
+
+    /// An equal-length REF/ALT pair whose ALT is not REF reverse-complemented
+    /// does not spell an inversion at all. Reading its length off REF anyway
+    /// is exactly the plausible-looking-but-wrong record this arm must not
+    /// emit, so it is rejected.
+    #[test]
+    fn test_inv_equal_length_alt_that_is_not_the_reverse_complement_is_rejected() {
+        let not_rc = "ACGTACGTACGTACGTACGTA";
+        assert_eq!(not_rc.len(), REF21.len());
+        let vcf = format!(
+            "chr20\t38412500\t.\t{}\t{}\t.\t.\tSVTYPE=INV\n",
+            REF21, not_rc
+        );
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
         assert!(
             events.is_empty(),
-            "an equal-length REF/ALT substitution must not be read as a REF-length event: {:?}",
+            "an equal-length pair that is not an inversion must not decode: {:?}",
             events
         );
     }
@@ -1017,6 +1170,112 @@ mod tests {
             }
             _ => panic!("expected Duplication"),
         }
+    }
+
+    /// The inserted bases are what ALT adds, not everything past ALT's first
+    /// base: REF=AT ALT=ATGGG inserts the 3 bases GGG after the T, and taking
+    /// ALT[1..] made it a 4 bp insertion of TGGG.
+    #[test]
+    fn test_sequence_ins_strips_the_prefix_ref_and_alt_share() {
+        let vcf = "chr1\t100\ttest_ins\tAT\tATGGG\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INS event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Insertion {
+                pos,
+                ins_seq,
+                ins_len,
+                ..
+            } => {
+                assert_eq!(*ins_len, 3);
+                assert_eq!(ins_seq.as_deref(), Some(b"GGG".as_slice()));
+                // The last base both alleles keep is 1-based 101 (the T), so
+                // the novel bases go in after it.
+                assert_eq!(*pos, 101);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    /// REF and ALT may share a suffix as well (REF=AT ALT=AGGGT is the same
+    /// 3 bp insertion, written unnormalised). The anchor is then the shared
+    /// prefix's last base, exactly as for a left-aligned record.
+    #[test]
+    fn test_sequence_ins_strips_a_shared_suffix_too() {
+        let vcf = "chr1\t100\ttest_ins\tAT\tAGGGT\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INS event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Insertion {
+                pos,
+                ins_seq,
+                ins_len,
+                ..
+            } => {
+                assert_eq!(*ins_len, 3);
+                assert_eq!(ins_seq.as_deref(), Some(b"GGG".as_slice()));
+                assert_eq!(*pos, 100);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    /// The ordinary padded form — REF the anchor base alone — is unchanged.
+    #[test]
+    fn test_sequence_ins_with_single_base_ref_is_unchanged() {
+        let vcf = "chr1\t100\ttest_ins\tA\tAGGG\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        match &events[0] {
+            SimEvent::Insertion {
+                pos,
+                ins_seq,
+                ins_len,
+                ..
+            } => {
+                assert_eq!(*ins_len, 3);
+                assert_eq!(ins_seq.as_deref(), Some(b"GGG".as_slice()));
+                assert_eq!(*pos, 100);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    /// REF bases that ALT drops make the record a complex indel, not an
+    /// insertion: which bases are inserted and which replaced is a guess.
+    /// Drop it loudly rather than invent an inserted sequence.
+    #[test]
+    fn test_sequence_ins_with_ref_bases_alt_drops_is_rejected() {
+        let vcf = "chr1\t100\ttest_ins\tATT\tATGGG\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(
+            events.is_empty(),
+            "a complex REF/ALT pair must not decode as an insertion: {:?}",
+            events
+        );
+    }
+
+    /// Like the DEL/DUP/INV skip warning, the INS one must locate the record
+    /// it dropped — `ID=.` is common — so L11 can count what was lost.
+    #[test]
+    fn test_not_an_insertion_warning_identifies_record_by_chrom_and_pos() {
+        let vcf = "chr20\t38412500\t.\tATT\tATGGG\t.\t.\tSVTYPE=INS\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let msg = not_an_insertion_warning(&records[0]);
+        assert!(
+            msg.contains("chr20:38412500"),
+            "warning must locate the record: {}",
+            msg
+        );
+        assert!(msg.contains("INS"), "warning must name the type: {}", msg);
+        assert!(
+            msg.contains("skipping"),
+            "warning must say the record is dropped: {}",
+            msg
+        );
     }
 
     /// SV records routinely carry `ID=.`, so the skip warning must name
