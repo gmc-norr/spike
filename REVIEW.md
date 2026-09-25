@@ -2012,6 +2012,55 @@ reproduces the script's F = 10 carries and spans at **6,663 / 6,663** sites.
 So the Rust rule is the measured rule. `allele_freq` FAIL goes from 638 to
 **338**: 245 out of range (3.73%), and 93 too shallow to grade.
 
+### N19 · The indel failures N18 leaves
+
+*Found by N18's result. Diagnosis plan, locked before the script is written
+or run.*
+
+After N18, **3.73%** of real HG002 het indels on chr20 are out of range
+(245 of 6,570 gradable sites), against about 0.7% of SNVs. The binomial rule
+is built for 1% or less. This entry only diagnoses: it measures where those
+failures sit and what their reads look like. Any fix gets a plan of its own.
+
+**Candidate causes, each with the readout that points to it:**
+- **Repeat noise.** In a repeat, reads show the indel as a different gap
+  (another length, split in two, a gap plus mismatches), or the sequencer
+  slips a unit (stutter). Readout: failures concentrate in long repeats, and
+  the failing sites' reads carry *other* gaps more often.
+- **The mapping filter.** Carrier reads get MAPQ < 20 more often than
+  reference reads and are dropped before they vote. Readout: among the reads
+  MAPQ 20 removes, carriers are over-represented.
+- **The truth set.** GIAB's genotype or representation is off at a site. It
+  cannot be tested with this BAM alone; it is what is left over.
+
+**Measured** (`scripts/n19_indel_residual.py`): `validate`'s current rule (N18,
+F = 10), over chr20's 6,663 sites. It re-uses N18's script, whose counting
+matched `validate` at every site.
+
+- **R1, context.** Each site is classed by how far its repeat region extends
+  past the bare indel: **unique** (not at all), **short repeat** (1-9 bp),
+  **long repeat** (10 bp or more). Reported per class: the out-of-range rate,
+  split into too low and too high.
+- **R2, other gaps.** Among voting reads, the share with an `I` or `D`
+  operation within the span they need (repeat region plus 10 bp each side)
+  that is not the counted carrier operation. Reported for failing vs passing
+  sites.
+- **R3, mapping.** The same votes counted from reads at MAPQ below 20.
+  Reported: their carrier share against the carrier share at MAPQ 20 or more,
+  and how many reads the filter removes.
+- **R4, how far off.** The failing sites' fractions, binned below 0.2,
+  0.2-0.35, 0.65-0.8 and above 0.8.
+
+**Readout rules:**
+- **Repeat noise is a main cause** if the long-repeat out-of-range rate is at
+  least 3 times the unique rate, *and* reads at failing sites carry other gaps
+  at least twice as often as reads at passing sites.
+- **The mapping filter is a main cause** if the carrier share among MAPQ < 20
+  voting reads is 0.6 or more, while at MAPQ 20 or more it is under 0.5.
+
+Either, both or neither can hold. Nothing in `validate` changes in this
+entry.
+
 ## Low severity
 
 | ID | Problem | Where | Fix |
