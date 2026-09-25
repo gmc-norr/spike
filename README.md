@@ -77,7 +77,7 @@ needs:
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `459 passed; 2 failed; 1 ignored`, the
+  with all of them off PATH the suite is `474 passed; 2 failed; 1 ignored`, the
   two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
