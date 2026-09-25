@@ -63,7 +63,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | M16 | Medium | **Fixed.** LOH pileup memory ~1 GB per Mb | `loh.rs:580-583` |
 | M17 | Medium | **Fixed.** `validate_pipeline.sh` no longer runs | `scripts/validate_pipeline.sh` |
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) for which are fixed |
-| N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
+| N1 | Medium | **Moved to the cross-sample validation plan** (found during the fix run; see the end of the N1 entry). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `count_alleles_cram`, `collect_snp_alleles_cram` (`loh.rs`); `count_depth_in_region`, `split_reads_to_partner`, `pileup_region` (`validate.rs`) -- function names, because the line numbers this row first carried have drifted twice |
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured, at every breakpoint side rather than the first only (N12) | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-210, 379-495, 519-521, 573-587` (now) |
@@ -444,6 +444,23 @@ Two related decisions are **open, and deliberately not taken here**:
   on the confounded checks. The honest alternative is to drop the `spike
   validate` check count from the verdict altogether rather than leave an inert
   gate in it — a judgement call for a human, recorded here rather than made.
+
+**Moved, not fixed (decided 2026-09-25).** The root cause is the truth set:
+the harness spikes deletions that the background sample already carries. The
+planned cross-sample validation fixes that at its root. It spikes HG001-only
+variants into HG002 and the reverse, so no truth event is in the background
+by construction. That plan has to carry these three things from this entry:
+- **Truth events the background does not carry.** Chosen from the other
+  sample's truth set, and checked in the background BAM itself (depth ratio
+  near 1.0 for a deletion, no alt reads for a small variant).
+- **A background baseline for every check.** Each check is read as spiked
+  minus unspiked, never as an absolute.
+- **The `spike validate` check count out of the verdict,** unless it becomes
+  a background-relative delta. `split_reads` expects SA tags that bwa-mem2
+  does not write for deletions under 2 kb, so it cannot count toward any
+  verdict for them.
+
+`scripts/validate_pipeline.sh` stays as it is until then.
 
 ### N3 · Five more CRAM query sites walk the whole chromosome's index
 
