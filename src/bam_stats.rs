@@ -216,15 +216,14 @@ fn pick_sample_name(rg_samples: &[String]) -> Option<String> {
             first,
         );
     }
+    // align.sh quotes the sample name, so punctuation and spaces survive it
+    // untouched -- and must, or the simulated read group carries an SM that
+    // no longer matches the BAM's own and merged.bam is two-sample again.
+    // A tab ends the SM field and a newline ends the @RG line, so control
+    // characters are the only ones no quoting can carry through.
     let safe: String = first
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "._+@:-".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_control() { '_' } else { c })
         .collect();
     if safe != *first {
         log::warn!("sample name {} rewritten to {} for the @RG line", first, safe);
@@ -293,10 +292,24 @@ mod tests {
 
     #[test]
     fn test_pick_sample_name_strips_characters_unsafe_in_the_generated_scripts() {
-        // The name is interpolated into align.sh's -R '@RG\t...' argument.
+        // A tab ends the SM field and a newline ends the @RG line, so no
+        // amount of shell quoting lets either through align.sh's
+        // -R '@RG\t...' argument.
         assert_eq!(
-            pick_sample_name(&["HG'002 x".to_string()]),
-            Some("HG_002_x".to_string())
+            pick_sample_name(&["HG\t002\n".to_string()]),
+            Some("HG_002_".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pick_sample_name_keeps_a_name_the_scripts_can_quote() {
+        // align.sh quotes the sample name, so a space or an apostrophe needs
+        // no rewriting. Rewriting one would give the simulated reads an SM
+        // that no longer matches the original read groups -- a two-sample
+        // merged BAM, which reusing the BAM's own SM exists to prevent.
+        assert_eq!(
+            pick_sample_name(&["Patient 123's".to_string()]),
+            Some("Patient 123's".to_string())
         );
     }
 

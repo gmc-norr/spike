@@ -741,6 +741,36 @@ fn event_regions_for_overlap(event: &SimEvent) -> Vec<(String, u64, u64)> {
     }
 }
 
+/// Quote a value as a single shell word for the generated scripts. Single
+/// quotes suppress every expansion; `'` is the one character they cannot
+/// contain, so it is spliced back in as `'\''`.
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Resolve a path for the generated scripts. They are run from whatever
+/// directory the user happens to be in, so a relative `--reference` or
+/// `--bam` would resolve against the wrong one -- or nothing at all. Falls
+/// back to a lexically absolute path when the file is not there to
+/// canonicalize, and to the argument itself if even that fails.
+fn script_path(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// `--samtools` is either a bare command name to look up on `$PATH` (the
+/// default) or a path to a binary; only the latter needs resolving. Tell them
+/// apart the way the shell itself does.
+fn script_command(command: &str) -> String {
+    if command.contains('/') {
+        script_path(command)
+    } else {
+        command.to_string()
+    }
+}
+
 /// Write a convenience shell script for alignment.
 ///
 /// Supports presets: bwa-mem2, minimap2, bowtie2, or a custom command.
@@ -752,25 +782,37 @@ fn write_align_script(
     samtools: &str,
     sample: &str,
 ) -> Result<()> {
-    let script_path = Path::new(output_dir).join("align.sh");
+    let script_file = Path::new(output_dir).join("align.sh");
 
+    // The sample comes from the BAM's own @RG, so it can hold anything the
+    // SAM spec allows -- a space, an apostrophe -- and must reach the aligner
+    // as one word with those characters intact.
+    let rg_arg = sh_quote(&format!("@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA"));
+    let rg_sm = sh_quote(&format!("SM:{sample}"));
     let align_cmd = match aligner {
-        "bwa-mem2" => format!("bwa-mem2 mem -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
-        "minimap2" => format!("minimap2 -a -x sr -t \"$THREADS\" \\\n    -R '@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA' \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
-        "bowtie2" => format!("bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg SM:{sample} --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\""),
+        "bwa-mem2" => format!("bwa-mem2 mem -t \"$THREADS\" \\\n    -R {rg_arg} \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
+        "minimap2" => format!("minimap2 -a -x sr -t \"$THREADS\" \\\n    -R {rg_arg} \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
+        "bowtie2" => format!("bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg {rg_sm} --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\""),
         custom => format!(
             "{custom} \"$REF\" \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\"",
         ),
     };
+
+    // Defaults are baked into the script, so they must be absolute (align.sh
+    // is run from anywhere) and quoted (a path may hold `}`, `"`, `$`, a
+    // backtick or a space). `VAR=${1:-'...'}` is safe unquoted: an assignment
+    // right-hand side is never word-split or globbed.
+    let ref_default = sh_quote(&script_path(ref_path));
+    let samtools_default = sh_quote(&script_command(samtools));
 
     let script = format!(
         r#"#!/bin/bash
 set -euo pipefail
 # Align simulated reads and sort.
 # Usage: bash align.sh [REF] [THREADS]
-REF="${{1:-{ref_path}}}"
+REF=${{1:-{ref_default}}}
 THREADS="${{2:-{threads}}}"
-SAMTOOLS="{samtools}"
+SAMTOOLS={samtools_default}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ({aligner}, $THREADS threads)..."
@@ -788,13 +830,13 @@ echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
 "#
     );
 
-    std::fs::write(&script_path, script)?;
+    std::fs::write(&script_file, script)?;
 
     // Make executable.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))?;
     }
 
     Ok(())
@@ -1232,7 +1274,14 @@ fn write_merge_script(
     threads: usize,
     samtools: &str,
 ) -> Result<()> {
-    let script_path = Path::new(output_dir).join("merge.sh");
+    let script_file = Path::new(output_dir).join("merge.sh");
+
+    // As in align.sh: baked-in defaults must be absolute (merge.sh is run
+    // from anywhere) and quoted (a path may hold `}`, `"`, `$`, a backtick or
+    // a space).
+    let original_default = sh_quote(&script_path(original_bam));
+    let ref_default = sh_quote(&script_path(ref_path));
+    let samtools_default = sh_quote(&script_command(samtools));
 
     let script = format!(
         r#"#!/bin/bash
@@ -1255,10 +1304,10 @@ set -euo pipefail
 #
 # REFERENCE_FASTA is required when ORIGINAL_BAM is a CRAM file.
 # Requires: samtools (>= 1.13 for -N and -U flag support)
-ORIGINAL="${{1:-{original_bam}}}"
-REF="${{2:-{ref_path}}}"
+ORIGINAL=${{1:-{original_default}}}
+REF=${{2:-{ref_default}}}
 THREADS="${{3:-{threads}}}"
-SAMTOOLS="{samtools}"
+SAMTOOLS={samtools_default}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ ! -f "$DIR/sim.bam" ]; then
@@ -1307,12 +1356,12 @@ echo "Done: $DIR/merged.bam ($TOTAL reads)"
 "#
     );
 
-    std::fs::write(&script_path, script)?;
+    std::fs::write(&script_file, script)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))?;
     }
 
     Ok(())
@@ -1769,6 +1818,9 @@ mod tests {
         let path = dir.join("fake_samtools.sh");
         let script = r#"#!/bin/bash
 set -u
+if [ -n "${SAMTOOLS_ARGV_OUT:-}" ]; then
+  printf '%s\n' "$@" >> "$SAMTOOLS_ARGV_OUT"
+fi
 case "$1" in
   view)
     if [ "$2" = "-c" ]; then
@@ -1936,6 +1988,245 @@ esac
                 "{} align.sh must not invent a second sample:\n{}",
                 aligner,
                 script
+            );
+        }
+    }
+
+    /// A file name holding every character that has broken these generated
+    /// scripts: a space, `}` (which ends a `${...}` expansion early), `"`,
+    /// `$`, a backtick and a single quote. The backtick runs `touch pwned` in
+    /// the script's working directory if the shell ever evaluates the path,
+    /// which is what the tests below watch for.
+    const HOSTILE_NAME: &str = "we ird}\"$HOME`touch pwned`'x";
+
+    /// A stub aligner that dumps its argv, one argument per line, to
+    /// `$ARGV_OUT`. Its (empty) stdout is what `samtools sort` consumes.
+    fn write_stub_aligner(path: &std::path::Path) {
+        let script = "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$ARGV_OUT\"\n";
+        std::fs::write(path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    /// Run a generated script with no arguments, so it uses the defaults it
+    /// was written with, from a working directory that is not spike's.
+    fn run_generated_script(
+        dir: &std::path::Path,
+        name: &str,
+        envs: &[(&str, &str)],
+    ) -> std::process::Output {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(dir.join(name)).current_dir(dir);
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
+        cmd.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                dir.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+        cmd.output().unwrap()
+    }
+
+    fn argv_lines(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    /// Set up a scratch dir with `bin/<aligner>` and a stub samtools, and
+    /// return (dir, aligner argv file, samtools path).
+    fn align_script_fixture(
+        name: &str,
+        aligner: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let dir = scratch_dir(name);
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        write_stub_aligner(&bin.join(aligner));
+        let samtools = write_stub_samtools(&dir);
+        let argv_out = dir.join("aligner_argv.txt");
+        let _ = std::fs::remove_file(&argv_out);
+        let _ = std::fs::remove_file(dir.join("pwned"));
+        (dir, argv_out, samtools)
+    }
+
+    #[test]
+    fn test_align_script_defaults_survive_shell_metacharacters_in_paths() {
+        let (dir, argv_out, samtools) =
+            align_script_fixture("align_hostile_ref", "bwa-mem2");
+        let ref_path = dir.join(format!("{}.fa", HOSTILE_NAME));
+        std::fs::write(&ref_path, b">chr1\nACGT\n").unwrap();
+
+        write_align_script(
+            dir.to_str().unwrap(),
+            ref_path.to_str().unwrap(),
+            4,
+            "bwa-mem2",
+            samtools.to_str().unwrap(),
+            "Patient 123",
+        )
+        .unwrap();
+
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(
+            output.status.success(),
+            "align.sh must run when --reference holds shell metacharacters:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !dir.join("pwned").exists(),
+            "align.sh ran the backtick in the reference path as a command"
+        );
+        let argv = argv_lines(&argv_out);
+        let want = std::fs::canonicalize(&ref_path).unwrap();
+        assert!(
+            argv.iter().any(|a| std::path::Path::new(a) == want),
+            "the aligner must be handed the reference path unmangled; wanted {}, got {:?}",
+            want.display(),
+            argv
+        );
+        assert!(
+            argv.iter()
+                .any(|a| a == "@RG\\tID:sim\\tSM:Patient 123\\tPL:ILLUMINA"),
+            "the aligner must be handed the sample name unmangled; got {:?}",
+            argv
+        );
+    }
+
+    #[test]
+    fn test_align_script_default_reference_is_absolute() {
+        // A relative --reference is relative to spike's working directory;
+        // align.sh is normally run from somewhere else entirely, so a
+        // relative default resolves against the wrong directory or not at all.
+        let (dir, argv_out, samtools) =
+            align_script_fixture("align_relative_ref", "bwa-mem2");
+
+        write_align_script(
+            dir.to_str().unwrap(),
+            "ref.fa",
+            4,
+            "bwa-mem2",
+            samtools.to_str().unwrap(),
+            "HG002",
+        )
+        .unwrap();
+
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(
+            output.status.success(),
+            "align.sh failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let argv = argv_lines(&argv_out);
+        let want = std::env::current_dir().unwrap().join("ref.fa");
+        assert!(
+            argv.iter().any(|a| std::path::Path::new(a) == want),
+            "a relative --reference must be resolved against spike's working \
+             directory; wanted {}, got {:?}",
+            want.display(),
+            argv
+        );
+    }
+
+    #[test]
+    fn test_align_script_passes_a_sample_name_with_a_space_as_one_argument() {
+        // bowtie2's `--rg SM:...` is the one read-group argument that is not
+        // already inside single quotes.
+        let (dir, argv_out, samtools) = align_script_fixture("align_bowtie2_sm", "bowtie2");
+
+        write_align_script(
+            dir.to_str().unwrap(),
+            "ref.fa",
+            4,
+            "bowtie2",
+            samtools.to_str().unwrap(),
+            "Patient 123",
+        )
+        .unwrap();
+
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(
+            output.status.success(),
+            "align.sh failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let argv = argv_lines(&argv_out);
+        assert!(
+            argv.iter().any(|a| a == "SM:Patient 123"),
+            "bowtie2 must receive SM: and the sample name as one argument; got {:?}",
+            argv
+        );
+    }
+
+    #[test]
+    fn test_merge_script_defaults_survive_shell_metacharacters_in_paths() {
+        let dir = scratch_dir("merge_hostile_paths");
+        let samtools = write_stub_samtools(&dir);
+        let original = dir.join(format!("{}.bam", HOSTILE_NAME));
+        let ref_path = dir.join(format!("{}.fa", HOSTILE_NAME));
+        std::fs::write(&original, b"").unwrap();
+        std::fs::write(&ref_path, b"").unwrap();
+        let argv_out = dir.join("samtools_argv.txt");
+        let _ = std::fs::remove_file(&argv_out);
+        let _ = std::fs::remove_file(dir.join("pwned"));
+
+        write_merge_script(
+            dir.to_str().unwrap(),
+            original.to_str().unwrap(),
+            ref_path.to_str().unwrap(),
+            4,
+            samtools.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("sim.bam"), b"").unwrap();
+        std::fs::write(dir.join("replaced_reads.txt"), "r1\nr2\n").unwrap();
+
+        let output = run_generated_script(
+            &dir,
+            "merge.sh",
+            &[
+                ("SAMTOOLS_ARGV_OUT", argv_out.to_str().unwrap()),
+                // Healthy case: the guard is not what this test is about.
+                ("SAMTOOLS_FAKE_ACTUAL", "10"),
+            ],
+        );
+
+        assert!(
+            output.status.success(),
+            "merge.sh must run when the BAM and reference paths hold shell \
+             metacharacters:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !dir.join("pwned").exists(),
+            "merge.sh ran the backtick in a path as a command"
+        );
+        let argv = argv_lines(&argv_out);
+        for want in [
+            std::fs::canonicalize(&original).unwrap(),
+            std::fs::canonicalize(&ref_path).unwrap(),
+        ] {
+            assert!(
+                argv.iter().any(|a| std::path::Path::new(a) == want),
+                "samtools must be handed {} unmangled; got {:?}",
+                want.display(),
+                argv
             );
         }
     }

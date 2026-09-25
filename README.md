@@ -349,6 +349,16 @@ bash output/align.sh                    # Uses defaults from spike run
 bash output/align.sh /path/to/ref 8    # Override reference and thread count
 ```
 
+The defaults baked into `align.sh` and `merge.sh` are absolute paths, resolved
+when spike writes the scripts, so a relative `--reference` or `--bam` still
+works when the script is run from another directory. They are also
+single-quoted, so a path holding a space, `}`, `"`, `$`, a backtick or a single
+quote is passed through unchanged rather than being expanded or breaking the
+script. `--samtools` is resolved the same way only when it contains a `/`; a
+bare command name is left alone for `$PATH` to find. A custom `--aligner` is a
+command line, not a path, so it is emitted verbatim -- quote it yourself if it
+contains anything the shell would act on.
+
 ### Merging into the original BAM
 
 After aligning, `merge.sh` substitutes the spiked reads back into the original BAM:
@@ -371,7 +381,7 @@ Records spike extracted and then suppressed (the deleted copy of a heterozygous 
 
 The records kept because spike never extracted them (PCR duplicates, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
 
-`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. Characters outside `[A-Za-z0-9._+@:-]` are replaced with `_` so the name is safe inside the generated `@RG` line.
+`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; only control characters are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting.
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
 
