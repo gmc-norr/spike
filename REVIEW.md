@@ -3414,7 +3414,7 @@ the exit status.
 | ID | What | Status |
 | --- | --- | --- |
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
-| T2 | `coverage_ratio` at every MAPQ, advisory | Not started |
+| T2 | `coverage_ratio` at every MAPQ, advisory | Plan locked |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Not started |
 | T4 | CR4 on a real hard locus (measurement only) | Not started |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
@@ -3594,3 +3594,74 @@ fixed with them, and four are recorded in `CLINICAL_SV_NEW_FINDINGS.md` as RF2-R
 no number for an event (`src/truth.rs:807`'s test pins it), so failing on `.` would make spike
 advisory-FAIL its own output. Anything else unparseable is an advisory FAIL quoting what it
 found.
+
+### T2 -- `coverage_ratio` at every MAPQ, advisory
+
+#### Plan: T2, the any-MAPQ coverage row (locked before any code or measurement)
+
+**Why.** `spike validate`'s own `--min-mapq` default of 20 hides the very reads CR4 found. On
+the `lowmap` probe -- half the donor pairs at MAPQ 0 -- an AF=1 deletion leaves 37.5x of
+unedited depth inside it and `coverage_ratio` still reports `observed 0.00, pass`, because the
+check cannot see the reads that are still there.
+
+**Claim.** The same ratio, counted with no MAPQ floor, fails on that case, passes on correct
+data, and fires on ordinary real deletions no more often than the bar locked below.
+
+**Metric.** A new advisory row **`coverage_any_mapq`**, for the same event types
+`coverage_ratio` covers (DEL and DUP) and computed by the **same** code -- the same
+`count_depth_in_region`, the same `--flank` window, the same flank-averaging rule for an event
+near a contig end, the same expected ratio (`1 - VAF` for DEL, `1 + VAF` for DUP) and the same
+0.30 tolerance -- with one difference: **every depth is counted at a MAPQ floor of 0**. The
+record filter is otherwise untouched: mapped, primary (not secondary, not supplementary),
+non-duplicate, non-QC-fail. Nothing is duplicated: `coverage_ratio_result` and
+`count_depth_in_region` are reused as they stand.
+
+The row is **not conditional**. When the user passes `--min-mapq 0` the two rows are identical
+by construction, and both are still printed; a row that appears and disappears with a flag is
+harder to read than a repeated one.
+
+**Output.** One advisory row per DEL and DUP event, printing `PASS (advisory)` or
+`FAIL (advisory)` and carrying `"advisory": true` in `--json`, on T1's mechanism. No new flag:
+`--strict` already covers it.
+
+**Criteria.** Each is run and its real output recorded in the result commit and in STATUS.md.
+
+- **C1, it must reject the known case.** The `lowmap` probe through the whole loop -- spike,
+  `align.sh`, `merge.sh` -- with `del:chrT:10000-14000;af=1`, validated at the default
+  `--min-mapq`: `coverage_any_mapq` reads expected `0.00`, observed **in [0.40, 0.60]**, and
+  `FAIL (advisory)`, while `coverage_ratio` on the same run still reads `0.00 PASS`. The two
+  rows disagreeing on one run is the whole point of the row.
+- **C2, it must accept a correct control.** The `uniform` probe through the same loop with the
+  same event: `coverage_any_mapq` reads `PASS (advisory)`, its observed within 0.30 of 0.00.
+- **C3, the default is unchanged.** On both probe runs and on the real control
+  (`del:chr20:1136743-1146743` through `scripts/slice_loop.sh`), master's binary and T2's have
+  the same exit status without `--strict`, and the non-advisory rows are byte-identical once the
+  advisory rows and the summary line are removed. `spike --help` is byte-identical and
+  `spike validate --help 2>&1` gains no flag line. Each binary built in its own
+  `CARGO_TARGET_DIR` and md5'd (NF4).
+- **C4, its false-failure rate on correct real data.** The same 40 spans CR4's and CR2's C4
+  used -- the list `scripts/cr4_placements.py` draws, md5 `8f30486221e221e76c7a863ae0755c4b` --
+  each as a `del:` event run on its own through `scripts/slice_loop.sh` on
+  `HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam` at the default AF.
+  **`coverage_any_mapq` fires on at most 8 of them (20%)**, the same bar CR4's and CR2's C4
+  used. An event spike or the loop refuses is reported and left out of the count; more than 4
+  such refusals makes C4 inconclusive, and fewer than 20 scored events makes it inconclusive
+  too. The bar is set here, before any rate is seen.
+- **C5, the gates.** `cargo test` at 494 passed / 0 failed or better;
+  `cargo clippy --all-targets` at 13 warnings (bin) / 14 (test) or fewer.
+
+**Outcome rules.**
+
+- C1-C5 pass: supported, keep.
+- **C1 or C2 fails:** the row does not measure what it claims. Revert the code.
+- **C3 fails:** the default changed. Revert the code.
+- **Only C4 fails:** the row stays -- it is advisory, so nothing that passes today starts
+  failing -- but **no new tolerance is chosen after seeing the distribution**. README records the
+  measured false-failure rate and the full distribution beside the row, and whether a different
+  tolerance is wanted goes to the human as a design note, to be locked by a new plan on other
+  chromosomes.
+
+**Known limit, stated before measuring.** A real locus of low mappability reads thin in the
+donor pool and thick at any MAPQ whether or not the library is uneven, so this row cannot tell
+"spike could not edit these reads" from "this locus is hard". That is what C4 measures the cost
+of. It also double-counts work: three more region queries per DEL and DUP event.
