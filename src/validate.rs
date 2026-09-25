@@ -1638,14 +1638,32 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        // Back off to the nearest char boundary at or before the cut point:
+        // slicing mid-character (e.g. a non-ASCII gene name) would panic.
+        let mut end = max_len.saturating_sub(3).min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
 fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1836,6 +1854,24 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
     fn test_escape_json() {
         assert_eq!(escape_json("hello \"world\""), "hello \\\"world\\\"");
         assert_eq!(escape_json("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn test_truncate_does_not_panic_on_multibyte_char_boundary() {
+        // "IFN-\u{3b3}" (interferon gamma) is a real gene alias whose Greek
+        // letter is a 2-byte UTF-8 character. The naive byte slice used to
+        // land inside that character and panic ("byte index N is not a char
+        // boundary"); it must instead back off to the previous boundary.
+        let name = "IFN-\u{3b3}-associated-deletion-event";
+        assert_eq!(truncate(name, 8), "IFN-...");
+    }
+
+    #[test]
+    fn test_escape_json_escapes_all_control_chars() {
+        assert_eq!(escape_json("a\tb\rc\nd"), "a\\tb\\rc\\nd");
+        // Every other C0 control character below 0x20 must become \u00XX,
+        // as bare JSON requires -- \u{1} (SOH) has no short-form escape.
+        assert_eq!(escape_json("a\u{1}b"), "a\\u0001b");
     }
 
     // --- N4: `validate`'s CRAM queries must not read another contig's reads ---
