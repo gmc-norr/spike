@@ -136,7 +136,10 @@ class Probe:
                 if adjacent:
                     events += [f"del:chrT:12000-13000;af={fraction}"]
                 label = f'del_{fraction}_{"adjacent" if adjacent else "single"}'
-                destination = self.run(label, uniform, events)
+                # Since CR1 spike refuses two events this close unless told
+                # --allow-overlap; the probe measures what happens when it is.
+                extra = ["--allow-overlap"] if adjacent else []
+                destination = self.run(label, uniform, events, extra)
                 self.results[label] = {
                     "depths": self.depths(destination, records, windows), "baseline_depth": 75,
                 }
