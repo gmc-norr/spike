@@ -51,7 +51,7 @@ struct Args {
     ///   --event "del:GENE:exon4-exon8"                  (gene-based, requires --exon-bed)
     ///   --event "dup:GENE:exon4-exon8"                  (gene-based duplication)
     ///   --event "inv:GENE:exon4-exon8"                  (gene-based inversion)
-    ///   --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion, requires --exon-bed)
+    ///   --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion: adds one junction, not a balanced translocation; requires --exon-bed)
     ///   --event "dup:chr20:30000000-30005000"
     ///   --event "inv:chr20:30000000-30005000"
     ///   --event "ins:chr20:30000000:500"                (random insertion sequence)
@@ -233,6 +233,28 @@ fn resolve_af_spec(af_spec: Option<AfSpec>) -> Option<f64> {
         Some(AfSpec::Hom) => Some(1.0),
         None => None, // will use global default
     }
+}
+
+/// What fusion mode is, said once per run that has a fusion (CR6). It keeps
+/// every original read and adds reads across one junction, so it is not a
+/// balanced translocation: nothing on either partner is replaced, and there
+/// is no reciprocal junction.
+fn fusion_mode_warning(events: &[SimEvent]) -> Option<String> {
+    let n = events
+        .iter()
+        .filter(|e| matches!(e, SimEvent::Fusion { .. }))
+        .count();
+    if n == 0 {
+        return None;
+    }
+    Some(format!(
+        "{} fusion event(s): fusion mode keeps every original read and adds junction \
+         reads for one join on top. It is not a balanced translocation: no read on \
+         either partner is replaced and there is no reciprocal junction, so the \
+         junction evidence is stronger than a copy-neutral sample would show. See \
+         CR6 in CLINICAL_SV_DESIGN_NOTES.md.",
+        n
+    ))
 }
 
 fn validate_flank(flank: u64) -> Result<()> {
@@ -451,6 +473,10 @@ fn main() -> Result<()> {
 
     // Append VCF-sourced events (AF already embedded from VCF INFO).
     events.extend(vcf_events);
+
+    if let Some(warning) = fusion_mode_warning(&events) {
+        log::warn!("{}", warning);
+    }
 
     // Load reference sequence for synthetic read generation.
     let chroms_needed: Vec<String> = events
@@ -2103,6 +2129,21 @@ mod tests {
         assert_eq!(resolve_af_spec(Some(AfSpec::Exact(0.15))), Some(0.15));
         assert_eq!(resolve_af_spec(Some(AfSpec::Hom)), Some(1.0));
         assert_eq!(resolve_af_spec(None), None);
+    }
+
+    #[test]
+    fn test_a_fusion_run_warns_that_it_adds_one_junction_only() {
+        // CR6: fusion mode keeps every original read and adds junction reads
+        // on top. That is not a balanced translocation, and a user reading
+        // "fusion" could take it for one.
+        let warning = fusion_mode_warning(&[del("chr1", 100, 200), fusion("chr1", 5, "chr2", 9)])
+            .expect("a run with a fusion must say what fusion mode is");
+        assert!(warning.contains("1 fusion event"), "{}", warning);
+        assert!(warning.contains("adds junction reads"), "{}", warning);
+        assert!(warning.contains("not a balanced translocation"), "{}", warning);
+        assert!(warning.contains("no reciprocal junction"), "{}", warning);
+
+        assert_eq!(fusion_mode_warning(&[del("chr1", 100, 200), ins("chr1", 500)]), None);
     }
 
     #[test]
