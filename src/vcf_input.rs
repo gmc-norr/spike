@@ -18,26 +18,39 @@ pub fn load_events_from_vcf(path: &str, use_info_af: bool) -> Result<Vec<SimEven
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open VCF: {}", path))?;
 
-    let (events, stats) = if path.ends_with(".gz") {
+    let (result, stats) = if path.ends_with(".gz") {
         let decoder = noodles::bgzf::Reader::new(file);
-        ingest_vcf(BufReader::new(decoder), use_info_af)?
+        ingest_vcf(BufReader::new(decoder), use_info_af)
     } else {
-        ingest_vcf(BufReader::new(file), use_info_af)?
+        ingest_vcf(BufReader::new(file), use_info_af)
     };
 
-    log::info!("Loaded {} events from VCF: {}", events.len(), path);
+    // Log what was counted even if the ingest aborted partway through (L9's
+    // identical-allele bail!, a bad BND): the counts from every record
+    // before the fatal one are exactly what the user needs when a run does
+    // not finish, so they must not be lost along with the error.
     stats.log_summary();
+    let events = result?;
+    log::info!("{}: {}", path, stats.totals_line(events.len()));
     Ok(events)
 }
 
 /// Read events, and the per-reason tally of what was not turned into one,
 /// from an open VCF stream. Split out of [`load_events_from_vcf`] so the
-/// counting can be tested without a file on disk.
-fn ingest_vcf<R: BufRead>(reader: R, use_info_af: bool) -> Result<(Vec<SimEvent>, VcfIngestStats)> {
+/// counting can be tested without a file on disk. The stats returned are
+/// whatever was counted before an `Err`, not discarded along with it — see
+/// [`load_events_from_vcf`].
+fn ingest_vcf<R: BufRead>(
+    reader: R,
+    use_info_af: bool,
+) -> (Result<Vec<SimEvent>>, VcfIngestStats) {
     let mut stats = VcfIngestStats::default();
-    let records = parse_vcf_records(reader, &mut stats)?;
-    let events = records_to_events(records, use_info_af, &mut stats)?;
-    Ok((events, stats))
+    let records = match parse_vcf_records(reader, &mut stats) {
+        Ok(records) => records,
+        Err(e) => return (Err(e), stats),
+    };
+    let events = records_to_events(records, use_info_af, &mut stats);
+    (events, stats)
 }
 
 /// Per-reason tally of what a VCF ingest did not turn into a simulated event,
@@ -47,6 +60,10 @@ fn ingest_vcf<R: BufRead>(reader: R, use_info_af: bool) -> Result<(Vec<SimEvent>
 /// records that affects.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct VcfIngestStats {
+    /// Every non-blank, non-header line spike read from the VCF body,
+    /// whether or not it was well-formed enough to keep. The denominator
+    /// for [`VcfIngestStats::totals_line`].
+    records_read: usize,
     /// Lines with fewer than the 8 mandatory VCF columns.
     short_line: usize,
     /// POS that is not a positive integer.
@@ -134,6 +151,21 @@ impl VcfIngestStats {
             );
         }
     }
+
+    /// One line logged after every ingest that finished, whether or not
+    /// anything was skipped. The per-reason summary above only fires when
+    /// `dropped > 0`, so a "0 skipped" run and a run where the counting
+    /// itself did not fire both used to log nothing — indistinguishable by
+    /// grepping for "skipped". This line always names all three numbers, so
+    /// their arithmetic can be checked.
+    fn totals_line(&self, simulated: usize) -> String {
+        format!(
+            "read {} VCF record(s), simulated {}, skipped {}",
+            self.records_read,
+            simulated,
+            self.total_dropped()
+        )
+    }
 }
 
 /// Raw parsed VCF record for SV processing.
@@ -166,6 +198,13 @@ fn parse_vcf_records<R: BufRead>(reader: R, stats: &mut VcfIngestStats) -> Resul
         if line.starts_with('#') {
             continue;
         }
+        if line.trim().is_empty() {
+            // A blank line is not a record at all, malformed or otherwise;
+            // counting it under "short line" would overstate how many VCF
+            // records the run actually had trouble with.
+            continue;
+        }
+        stats.records_read += 1;
 
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() < 8 {
@@ -538,6 +577,11 @@ fn extract_af(record: &SvRecord, use_info_af: bool, stats: &mut VcfIngestStats) 
     } else {
         &["SIM_VAF", "VAF"]
     };
+    // Counted once per record, not once per unusable key: `SIM_VAF=nan`
+    // followed by a usable `VAF` still returns that VAF below, so
+    // --allele-fraction is never used for it and af_unusable must stay 0;
+    // `SIM_VAF=nan;VAF=nan` falls back to --allele-fraction once, not twice.
+    let mut saw_unusable_key = false;
     for key in keys {
         if let Some(val) = parse_info_field(&record.info, key) {
             // Negated so NaN, for which both comparisons are false, is
@@ -545,11 +589,14 @@ fn extract_af(record: &SvRecord, use_info_af: bool, stats: &mut VcfIngestStats) 
             match val.parse::<f64>() {
                 Ok(v) if v > 0.0 && v <= 1.0 => return Some(v),
                 _ => {
-                    stats.af_unusable += 1;
+                    saw_unusable_key = true;
                     log::warn!("{}", unusable_af_warning(record, key, val));
                 }
             }
         }
+    }
+    if saw_unusable_key {
+        stats.af_unusable += 1;
     }
     if !use_info_af && parse_info_field(&record.info, "AF").is_some() {
         stats.af_info_ignored += 1;
@@ -796,17 +843,35 @@ fn before_first_base_warning(record: &SvRecord, sv_type: &str) -> String {
 }
 
 /// Map a VCF `SVTYPE` value to the tag spike simulates it as, or `None` for
-/// a type spike has no model for (`CNV`). VCF v4.3 spells subtypes with a
-/// colon — `DUP:TANDEM`, `DEL:ME:ALU`, `INS:ME:L1` — and the base type before
-/// the first one is what decides the simulation, so a tandem duplication is
-/// a duplication rather than an unknown type to drop (L11).
+/// a type spike has no model for (`CNV`) or a subtype spike's model does not
+/// match.
+///
+/// VCF v4.3 spells subtypes with a colon. For DEL and INS the subtype names
+/// what was deleted or inserted (a mobile element: `DEL:ME:ALU`,
+/// `INS:ME:L1`) without changing the event's shape — a deletion is still
+/// just a span, an insertion still just a point plus sequence/length — so
+/// any suffix is accepted there; only the base type before the first colon
+/// is read. DUP is different: `DUP:TANDEM` is the local, adjacent copy
+/// spike's duplication model produces, but `DUP:DISPERSED` (and `DUP:INT`,
+/// which some callers emit) is a copy placed *elsewhere* in the genome —
+/// simulating one as a tandem duplication would write a truth `SVTYPE=DUP`
+/// at the wrong span with no warning, turning a silent drop into silently
+/// *wrong* truth output, the exact failure L11 exists to close. So DUP
+/// accepts only the bare type and `:TANDEM`; anything else — `DISPERSED`,
+/// `INT`, or an unrecognised suffix — falls through to the unsimulated-type
+/// count instead of being guessed at. INV and BND have no subtypes in the
+/// spec, so a colon after either is unrecognised and rejected the same way.
 fn sv_type_tag(sv_type: &str) -> Option<SvTypeTag> {
-    match sv_type.split(':').next()? {
-        "DEL" => Some(SvTypeTag::Del),
-        "INS" => Some(SvTypeTag::Ins),
-        "DUP" => Some(SvTypeTag::Dup),
-        "INV" => Some(SvTypeTag::Inv),
-        "BND" => Some(SvTypeTag::Bnd),
+    let (base, subtype) = match sv_type.split_once(':') {
+        Some((base, subtype)) => (base, Some(subtype)),
+        None => (sv_type, None),
+    };
+    match (base, subtype) {
+        ("DEL", _) => Some(SvTypeTag::Del),
+        ("INS", _) => Some(SvTypeTag::Ins),
+        ("DUP", None) | ("DUP", Some("TANDEM")) => Some(SvTypeTag::Dup),
+        ("INV", None) => Some(SvTypeTag::Inv),
+        ("BND", None) => Some(SvTypeTag::Bnd),
         _ => None,
     }
 }
@@ -852,9 +917,11 @@ mod tests {
     }
 
     /// Read a whole VCF body the way `load_events_from_vcf` does, keeping
-    /// the per-reason counts.
+    /// the per-reason counts. Panics on a fatal record; use `ingest_vcf`
+    /// directly to assert on the error itself.
     fn ingest(vcf: &str) -> (Vec<SimEvent>, VcfIngestStats) {
-        ingest_vcf(vcf.as_bytes(), false).unwrap()
+        let (result, stats) = ingest_vcf(vcf.as_bytes(), false);
+        (result.unwrap(), stats)
     }
 
     /// A record carrying just an INFO field, for the AF tests.
@@ -874,7 +941,6 @@ mod tests {
     fn af_of(info: &str) -> Option<f64> {
         extract_af(&info_record(info), false, &mut VcfIngestStats::default())
     }
-
 
     /// Decode one ALT form for a record at chr1 POS 100, partner chr2:200.
     fn decode(alt: &str) -> BndFusion {
@@ -1893,7 +1959,8 @@ mod tests {
     #[test]
     fn test_plain_info_af_is_read_when_opted_in() {
         let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tAF=0.001\n";
-        let (events, stats) = ingest_vcf(vcf.as_bytes(), true).unwrap();
+        let (result, stats) = ingest_vcf(vcf.as_bytes(), true);
+        let events = result.unwrap();
         assert_eq!(events[0].allele_fraction(), Some(0.001));
         assert_eq!(stats.af_info_ignored, 0);
     }
@@ -1939,6 +2006,111 @@ mod tests {
                    chr1\t100\tsnp1\tA\tT\t.\tPASS\tSIM_VAF=0.3\n";
         let (events, stats) = ingest(vcf);
         assert_eq!(events.len(), 1);
-        assert_eq!(stats, VcfIngestStats::default());
+        assert_eq!(stats.records_read, 1, "the one clean record was read");
+        assert_eq!(stats.total_dropped(), 0, "and nothing about it was dropped");
+        assert_eq!(
+            stats,
+            VcfIngestStats {
+                records_read: 1,
+                ..VcfIngestStats::default()
+            }
+        );
+    }
+
+    /// A blank line is not a record spike had trouble with — it is not a
+    /// record at all — so it must not inflate `short_line`, and it must not
+    /// be read as a record either.
+    #[test]
+    fn test_blank_line_is_not_counted_as_a_short_line() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=0.3\n\
+                   \n\
+                   chr1\t200\tsnp2\tA\tT\t.\t.\tSIM_VAF=0.3\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(events.len(), 2);
+        assert_eq!(stats.short_line, 0);
+        assert_eq!(stats.records_read, 2);
+    }
+
+    /// `DUP:DISPERSED` places the copy elsewhere in the genome; it is not
+    /// the local, adjacent copy spike's DUP model simulates. Splitting on
+    /// the first colon alone would accept it and silently write a truth
+    /// `SVTYPE=DUP` at the wrong span — a silent drop turned into silently
+    /// *wrong* truth, which is the failure L11 exists to close.
+    #[test]
+    fn test_dup_dispersed_subtype_is_not_simulated_as_tandem() {
+        let vcf = "chr1\t100\tdup1\tN\t<DUP>\t.\t.\tSVTYPE=DUP:DISPERSED;END=200\n";
+        let (events, stats) = ingest(vcf);
+        assert!(
+            events.is_empty(),
+            "a dispersed duplication must not be simulated as a tandem one"
+        );
+        assert_eq!(stats.unsimulated_sv_type, 1);
+    }
+
+    /// Some callers spell an interspersed duplication `DUP:INT` instead of
+    /// `DUP:DISPERSED`; both must be rejected on the same grounds.
+    #[test]
+    fn test_dup_int_subtype_is_not_simulated_as_tandem() {
+        let vcf = "chr1\t100\tdup1\tN\t<DUP>\t.\t.\tSVTYPE=DUP:INT;END=200\n";
+        let (events, stats) = ingest(vcf);
+        assert!(events.is_empty());
+        assert_eq!(stats.unsimulated_sv_type, 1);
+    }
+
+    /// A record with an unusable `SIM_VAF` but a usable `VAF` still finds
+    /// its VAF from the second key, so --allele-fraction is never used for
+    /// it and af_unusable must not fire.
+    #[test]
+    fn test_af_unusable_does_not_fire_when_a_later_key_is_usable() {
+        let vaf = af_of("SIM_VAF=nan;VAF=0.3");
+        assert_eq!(vaf, Some(0.3));
+        let mut stats = VcfIngestStats::default();
+        extract_af(&info_record("SIM_VAF=nan;VAF=0.3"), false, &mut stats);
+        assert_eq!(
+            stats.af_unusable, 0,
+            "the record found a usable VAF, so --allele-fraction was never used for it"
+        );
+    }
+
+    /// Two unusable keys on the same record must count once, for that one
+    /// record's fallback to --allele-fraction — not once per bad key.
+    #[test]
+    fn test_af_unusable_with_two_bad_keys_counts_the_record_once() {
+        let mut stats = VcfIngestStats::default();
+        let vaf = extract_af(&info_record("SIM_VAF=nan;VAF=nan"), false, &mut stats);
+        assert_eq!(vaf, None);
+        assert_eq!(stats.af_unusable, 1, "one record, not one per unusable key");
+    }
+
+    /// L9's identical-allele check aborts the whole ingest with `bail!`, but
+    /// every record counted before it must not vanish along with the error
+    /// — the counts are most useful exactly when a run does not finish.
+    #[test]
+    fn test_counts_survive_a_fatal_record() {
+        let vcf = "chr1\t100\tcnv1\tN\t<CNV>\t.\t.\tSVTYPE=CNV;END=200\n\
+                   chr1\t200\tbad1\tA\ta\t.\t.\t.\n";
+        let (result, stats) = ingest_vcf(vcf.as_bytes(), false);
+        assert!(
+            result.is_err(),
+            "the identical-allele record must still be fatal"
+        );
+        assert_eq!(
+            stats.unsimulated_sv_type, 1,
+            "the CNV record read before the fatal one must still be counted"
+        );
+    }
+
+    /// The totals line is logged unconditionally, so a "0 skipped" run and
+    /// a run whose counting silently did not fire are no longer
+    /// indistinguishable by grepping for "skipped".
+    #[test]
+    fn test_totals_line_reports_read_simulated_and_skipped() {
+        let vcf = "chr1\t100\tsnp1\tA\tT\t.\t.\tSIM_VAF=0.3\n\
+                   chr1\t200\tcnv1\tN\t<CNV>\t.\t.\tSVTYPE=CNV;END=300\n";
+        let (events, stats) = ingest(vcf);
+        assert_eq!(
+            stats.totals_line(events.len()),
+            "read 2 VCF record(s), simulated 1, skipped 1"
+        );
     }
 }

@@ -79,9 +79,10 @@ struct Args {
     /// Off by default: in a population VCF (gnomAD, 1000G) AF is the allele
     /// frequency in the population, not the fraction of this sample's reads
     /// that should carry the allele, so using it silently produces a truth
-    /// set at the wrong VAF. Without this flag only SIM_VAF and VAF are read
-    /// and a record with only AF falls back to --allele-fraction, with a
-    /// count of how many did on stderr.
+    /// set at the wrong VAF. Without this flag only SIM_VAF and VAF are
+    /// read, and a record that carries AF but has no usable SIM_VAF or VAF
+    /// falls back to --allele-fraction, with a count of how many did on
+    /// stderr.
     #[arg(long)]
     vcf_info_af: bool,
 
