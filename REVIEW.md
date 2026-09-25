@@ -3415,7 +3415,7 @@ the exit status.
 | --- | --- | --- |
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
-| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Not started |
+| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Plan locked |
 | T4 | CR4 on a real hard locus (measurement only) | Not started |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
 | T6 | INS sequence identity, advisory | Not started |
@@ -3747,3 +3747,87 @@ loci and finds it zero there; it says nothing about a hard locus, which is T4's 
 also does not share its record stream with `coverage_ratio` -- it runs three more region queries
 per DEL and DUP event -- so the two rows differ only in the floor **by construction of the same
 code**, not by construction of the same pass over the reads.
+
+### T3 -- what CR2's six depth-fold warnings are
+
+#### Plan: T3, mappability or real depth (locked before any measurement)
+
+**Measurement only. No production code changes.**
+
+**Governing principle.** A warning is only worth acting on if it says something about the sample.
+`SIM_DEPTH_FOLD` is measured from the donor **pool**, which holds only proper pairs whose both
+mates pass `--min-mapq` (`extract.rs`'s `passes_filters_*` plus `is_properly_segmented`). A bin of
+low mappability therefore reads thin in the pool whether or not the library is thin there. CR2's
+own plan stated that limit before measuring and left it open; this measures it.
+
+**The events.** The six DUPs that warned in CR2's C4: events 2, 13, 15, 33, 34 and 39 of the
+seeded list (`scripts/cr4_placements.py`, output md5 `8f30486221e221e76c7a863ae0755c4b`, with
+`del:` rewritten to `dup:`). Reproduced before planning, with master's binary and the same
+`--seed 1`: all six still warn, at folds **1.62, 1.71, 2.46, 1.51, 1.51 and 1.75** -- CR2's own
+"6 of 40, max 2.46 at event 15, two of the six at 1.51", term for term.
+
+**Metric.** For each event, in two windows:
+
+- the **worst bin**, the 1 kb window spike names in its own warning text (`DepthFold::worst_bin`);
+- the **anchor window**, 2 kb centred on the breakpoint position the tiling was scaled at
+  (`estimate_coverage_at(pool, chrom, pos, 2000)`, so `[pos-1000, pos+1000)`).
+
+four numbers each:
+
+- `pool_frag_depth` -- mean **fragment** depth over proper pairs whose both mates pass MAPQ >= 20
+  and the standard flag filters: the donor pool's own rule, and the estimator
+  `SIM_DEPTH_FOLD` uses.
+- `any_read_depth` -- mean **read** depth over mapped, primary (not secondary, not supplementary),
+  non-duplicate, non-QC-fail records at **any** MAPQ.
+- `lowmapq_share` -- the share of those records with MAPQ < 20.
+- `gc` -- the GC fraction of the reference over the window. Descriptive: no threshold is set on
+  it, and none is chosen afterwards.
+
+**Identifying the anchor.** Its position is not in the log. The candidates are the DUP's two
+breakpoints. The anchor is the candidate whose `pool_frag_depth` comes within **10%** of the
+`scaled_by` spike printed. If neither does, both are reported, the event is marked *anchor
+unidentified* and left out of the classification count.
+
+**Classification, locked here.** With `r = any_read_depth(bin) / any_read_depth(anchor)` and
+`fold_any = max(r, 1/r)`:
+
+- **mappability** if `fold_any <= 1.5`;
+- **real depth** if `fold_any > 1.5`.
+
+1.5 is not a new number: it is `census::DEPTH_FOLD_WARN_ABOVE`, the threshold spike already warns
+at. So "mappability" means exactly *this bin would not have warned had the fold been counted at
+any MAPQ*.
+
+**Verdict rule.** **Mappability dominates** if at least **4 of the 6** classify as mappability.
+Real depth dominates if at least 4 classify as real depth. Otherwise inconclusive.
+
+**The control, because a measurement that separates nothing measures nothing.** The same
+`fold_any` is computed for **all 40** events' worst bins, warning and non-warning alike, and the
+two distributions are reported side by side. If the six warning events' `fold_any` values are not
+separated from the other 34's, the measurement does not distinguish a mappability dip from an
+ordinary bin and the classification is **inconclusive whatever the counts say**. Concretely: the
+six warning events' median `fold_any` must exceed the other 34's median, or T3 is inconclusive.
+
+**Outcome rules.**
+
+- **Mappability dominates:** write the option of measuring the fold at any MAPQ as a design note
+  for the human, with the measured table. **Do not change the metric** -- that is CR2 option A,
+  and it is out of this run.
+- **Real depth dominates:** record it. The warning is about the library, not about the filter, and
+  no design note proposing an any-MAPQ fold is written.
+- **Inconclusive, or the control fails:** report the table and say so. Propose nothing.
+
+**What must be true of the inputs, and how each was verified.**
+
+- *The six are the right six.* Verified by re-running them: all six warn, at the folds CR2
+  recorded.
+- *The worst bin in the warning is the bin the fold was computed over.* Verified by reading
+  `simulate::depth_fold`: `worst_bin` is written in the same iteration that sets `worst.fold`.
+- *`scaled_by` is a fragment depth, not a read depth.* Verified by reading
+  `simulate::estimate_coverage_at`: it counts `pool.pairs`, one per fragment. So
+  `pool_frag_depth` is measured per fragment too, and **no measurement here is compared against a
+  read depth across estimators** -- every comparison is a ratio of two windows under one
+  estimator.
+- *The bins can lie outside the event span.* Verified in the reproduction: event 13's worst bin
+  `chr20:23431622-23432622` starts 2000 bp **before** its event start, because the haplotype
+  segments include the flanks. The measurement uses the bin spike named, not the event span.
