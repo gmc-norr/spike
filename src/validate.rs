@@ -964,10 +964,11 @@ enum IndelVote {
     Spans,
 }
 
-/// Read one alignment's vote off its CIGAR, or `None` if it does not span the
-/// junction at all -- clipped across it, or carrying a *different* indel that
-/// swallows one of the two reference bases the vote is anchored on. Such a
-/// read is evidence for neither allele and enters neither count.
+/// Read one alignment's vote off its CIGAR, or `None` if it neither carries
+/// the allele nor spans the junction without it -- clipped across it, or
+/// carrying a *different* indel that swallows one of the two reference bases
+/// the "spans" vote is anchored on. Such a read is evidence for neither allele
+/// and enters neither count.
 fn cigar_indel_vote(
     ops: &[noodles::sam::alignment::record::cigar::Op],
     align_start: u64,
@@ -976,8 +977,8 @@ fn cigar_indel_vote(
     kind: Kind,
     indel_len: u64,
 ) -> Option<IndelVote> {
-    // The two reference bases a vote is anchored on: the anchor base the REF
-    // allele starts at, and the first base past the REF allele.
+    // The two reference bases a "spans" vote is anchored on: the anchor base
+    // the REF allele starts at, and the first base past the REF allele.
     let far_side = pos + ref_len;
     let mut ref_pos = align_start;
     let (mut carries, mut covers_anchor, mut covers_far_side) = (false, false, false);
@@ -1004,14 +1005,20 @@ fn cigar_indel_vote(
         }
     }
 
+    // An operation of this allele's own kind and length inside the pad *is*
+    // the junction, so the read has already shown it reaches it. Asking for M
+    // coverage of the two anchor bases on top of that dropped every read whose
+    // own `D` swallowed one of them -- which is every deletion spelled 1..=len
+    // bases off the aligner's left-alignment, exactly the case the pad is
+    // there for. The anchors are only needed to tell "spans it without one"
+    // from "never reached it".
+    if carries {
+        return Some(IndelVote::Carries);
+    }
     if !(covers_anchor && covers_far_side) {
         return None;
     }
-    Some(if carries {
-        IndelVote::Carries
-    } else {
-        IndelVote::Spans
-    })
+    Some(IndelVote::Spans)
 }
 
 /// Allele fraction of an MNV: reads whose bases are the whole alt run against
@@ -3630,4 +3637,112 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A 2 bp deletion's `D` operation, shifted `shift` bases from the
+    /// junction just past the truth record's anchor base. `ACG` > `A` at
+    /// 0-based 1000, read aligned over 950..1050.
+    fn shifted_deletion_vote(shift: i64) -> Option<IndelVote> {
+        const POS: u64 = 1_000;
+        const REF_LEN: u64 = 3;
+        const DEL_LEN: usize = 2;
+        let align_start = POS - 50;
+        let first = (POS as i64 + 1 + shift - align_start as i64) as usize;
+        let ops = [
+            Op::new(Kind::Match, first),
+            Op::new(Kind::Deletion, DEL_LEN),
+            Op::new(Kind::Match, 100 - first),
+        ];
+        cigar_indel_vote(
+            &ops,
+            align_start,
+            POS,
+            REF_LEN,
+            Kind::Deletion,
+            DEL_LEN as u64,
+        )
+    }
+
+    #[test]
+    fn test_deletion_vote_is_the_same_across_the_whole_pad() {
+        // INDEL_POS_PAD exists because an aligner left-aligns an indel inside
+        // a repeat, so the same 2 bp deletion is legally spelled a few bases
+        // either way. The vote was read off M coverage of POS and POS+REF_LEN,
+        // and a `D` shifted by 1..=indel_len swallows one of those two bases:
+        // the read then entered neither count and both numerator and
+        // denominator shrank. Non-monotonic in the shift -- Carries at -3 and
+        // at 0, dropped at -2 and -1 -- which is what makes it a bug.
+        for shift in -(INDEL_POS_PAD as i64)..=(INDEL_POS_PAD as i64) {
+            assert_eq!(
+                shifted_deletion_vote(shift),
+                Some(IndelVote::Carries),
+                "a 2 bp deletion {} bp from the junction is inside INDEL_POS_PAD, \
+                 so it carries the allele",
+                shift
+            );
+        }
+    }
+
+    #[test]
+    fn test_deletion_beyond_the_pad_is_a_different_variant() {
+        // Past the pad the operation is somebody else's indel, and the read
+        // still spans this junction without one: it speaks against the allele.
+        for shift in [-(INDEL_POS_PAD as i64) - 1, INDEL_POS_PAD as i64 + 1] {
+            assert_eq!(
+                shifted_deletion_vote(shift),
+                Some(IndelVote::Spans),
+                "a deletion {} bp away is not this one",
+                shift
+            );
+        }
+    }
+
+    #[test]
+    fn test_insertion_vote_is_the_same_across_the_whole_pad() {
+        // An insertion consumes no reference, so it never swallowed either
+        // anchor base and was never affected. Pinned so the deletion fix
+        // cannot quietly change it.
+        const POS: u64 = 1_000;
+        const INS_LEN: usize = 4;
+        let align_start = POS - 50;
+        for shift in -(INDEL_POS_PAD as i64)..=(INDEL_POS_PAD as i64) {
+            let first = (POS as i64 + 1 + shift - align_start as i64) as usize;
+            let ops = [
+                Op::new(Kind::Match, first),
+                Op::new(Kind::Insertion, INS_LEN),
+                Op::new(Kind::Match, 100 - first),
+            ];
+            assert_eq!(
+                cigar_indel_vote(&ops, align_start, POS, 1, Kind::Insertion, INS_LEN as u64),
+                Some(IndelVote::Carries),
+                "a 4 bp insertion {} bp from the junction is inside INDEL_POS_PAD",
+                shift
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_read_that_does_not_reach_the_junction_votes_neither_way() {
+        // The `None` arm still has to exist: a read clipped across the
+        // junction, or carrying a *different* indel that swallows one of the
+        // two anchor bases, is evidence for neither allele.
+        const POS: u64 = 1_000;
+        // Ends on the anchor base: never sees the far side.
+        let short = [Op::new(Kind::Match, 51), Op::new(Kind::SoftClip, 49)];
+        assert_eq!(
+            cigar_indel_vote(&short, POS - 50, POS, 3, Kind::Deletion, 2),
+            None,
+            "a read clipped before the far side votes neither way"
+        );
+        // A 4 bp deletion one base left of the junction: wrong length, and it
+        // swallows the anchor base.
+        let other = [
+            Op::new(Kind::Match, 50),
+            Op::new(Kind::Deletion, 4),
+            Op::new(Kind::Match, 50),
+        ];
+        assert_eq!(
+            cigar_indel_vote(&other, POS - 50, POS, 3, Kind::Deletion, 2),
+            None,
+            "a different indel over the anchor base is evidence for neither allele"
+        );
+    }
 }

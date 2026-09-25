@@ -501,9 +501,16 @@ the allele's own length and within 10 bp of POS -- an aligner left-aligns an
 indel to the start of the repeat it sits in, so it may place the operation a
 few bases away. An MNV's bases are read **jointly**, one read at a time: a
 fraction per base would answer a different question at each offset, and a read
-carrying only one of the two substitutions is not this variant. A read that
-carries neither allele whole -- clipped across the junction, or carrying a
-different indel there -- is evidence for neither and enters neither count.
+carrying only one of the two substitutions is not this variant.
+
+That 10 bp window is what decides an indel read's vote on its own: an operation
+of the allele's kind and length inside it *is* the junction, so the read
+carries the allele however far its own deletion has drifted from POS. The two
+reference bases either side of the REF allele are only asked about for the
+other verdict -- they separate "spans this junction without the indel" from
+"never reached it". A read that carries neither allele whole -- clipped across
+the junction, or carrying a *different* indel there -- is evidence for neither
+and enters neither count.
 
 The three rows that measure nothing still push a result row, so the event
 counts as covered, and the row says out loud that nothing was measured. Only a

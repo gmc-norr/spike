@@ -69,6 +69,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N10 | Medium | **Fixed** (found by the whole-branch review). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
 | N12 | Medium | **Fixed** (found while closing N10). N5's donor-coverage refusal measured the **first** breakpoint only, so the same fusion was refused or accepted depending on which partner was named first. Now every breakpoint side is measured, scoped to the loci the pool was extracted from: both sides for a fusion, at least one for a single-locus event | `simulate.rs:196-220` (at `ad9881e`); `simulate.rs:203-210, 379-495` (now) |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
+| N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
 
 ## High severity
 
@@ -1125,6 +1126,69 @@ contrasts **1** chr2 pair against **100** instead of none against 100; its
 assertion -- that the chr1 breakpoint tiles the same number of chimeric pairs
 either way -- is unchanged, and the contrast still fails loudly if chr2's depth
 leaks into chr1's window.
+
+### N13 · `cigar_indel_vote` drops every read whose deletion is spelled off the junction
+
+*Found by the verification review of the fix wave, **fixed here**.*
+
+`ad9881e` gave `allele_freq` a counting rule for small indels: a read carries
+the allele if its CIGAR holds an operation of the allele's own kind and length
+within `INDEL_POS_PAD = 10` bases of the junction just past the anchor base.
+The pad is there because an aligner left-aligns an indel to the start of the
+repeat it sits in, so a truth record spelled a few bases the other way still
+has to match.
+
+It did not. The vote also required two `M`-covered reference bases -- `pos` and
+`pos + ref_len` -- and a `D` operation consumes reference. Shifted left by *s*
+it swallows `pos`; shifted right by *s* it swallows `pos + ref_len`. So for
+every *s* in `[1, indel_len]` **neither** anchor is covered by an `M` block,
+`cigar_indel_vote` returned `None`, and the read entered neither the numerator
+nor the denominator. Insertions consume no reference and were never affected.
+
+Measured at unit level (`ACG` > `A` at 0-based 1000, read 950..1050), the vote
+was **non-monotonic in the shift**, which is what makes it a bug rather than an
+exact-placement rule:
+
+```
+shift  -6 -4 -3 | -2 -1 | 0 | +1 +2 | +3 +4 +6
+before  C  C  C |  N  N | C |  N  N |  C  C  C      (C = Carries, N = dropped)
+after   C  C  C |  C  C | C |  C  C |  C  C  C
+```
+
+End to end on the chr20 37.5-41.5 Mb HG002 slice, the **same physical 2 bp
+deletion** in an `(AC)n` repeat at chr20:38549586, three legal VCF spellings
+differing only by repeat unit, `SIM_VAF=0.10`:
+
+| spelling | before (`99f1a8e`) | after |
+| --- | --- | --- |
+| `38549585 TAC>T` (left-aligned, where bwa put the `D`) | carries 14, spans 23, **0.38 FAIL** | unchanged: **0.38 FAIL** |
+| `38549587 CAC>C` (one `AC` unit right, shift -2) | carries **1**, spans 26, **0.04 PASS** | carries 14, spans 26, **0.35 FAIL** |
+| `38549589 CAC>C` (two `AC` units right, shift -4) | carries 14, spans 27, **0.34 FAIL** | unchanged: **0.34 FAIL** |
+
+13 of the 14 carrying reads vanished from *both* numerator and denominator at
+shift -2 and came back at shift -4, and the verdict was inverted by a spelling
+change that does not change the variant. The N10 entry's fail-safe rationale --
+that such reads "would be counted as reference support ... a FAIL, not a false
+PASS" -- was **wrong in mechanism**: the denominator shrank with the numerator.
+
+The trigger is a **non-normalized REF/ALT** in the truth record, which spike
+accepts without complaint and writes verbatim. A `bcftools norm`-ed record is
+safe, because bwa left-aligns too.
+
+**Fixed.** An operation of the allele's own kind and length inside the pad *is*
+the junction, so it is now enough on its own: `cigar_indel_vote` returns
+`Carries` before it looks at the anchors. The anchors still gate the other
+verdict -- they are what separates "spans this junction without the indel" from
+"never reached it", and a read carrying a *different* indel over one of them
+still votes neither way. Beyond the pad the operation is somebody else's indel
+and the read votes `Spans`, as before.
+
+`cigar_indel_vote` had **no direct unit test at all**; its only coverage was a
+CRAM fixture whose `D`/`I` ops sit exactly at `POS+1`, the one shift the bug
+does not touch -- the weak-test shape [Test gaps](#test-gaps) names. Four
+direct tests now pin the whole shift range: every shift in +/-10 votes
+`Carries` for a deletion and for an insertion, +/-11 votes `Spans`, and a
+clipped read or a different-length `D` over the anchor still votes neither way.
 
 ## Low severity
 
