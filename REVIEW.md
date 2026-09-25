@@ -19,10 +19,10 @@ and is never edited. The two right columns were added later (bookkeeping fix,
 commits — measure both at the row's own command, not by scaling the "At
 review" figure.
 
-| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `7c680f4`) |
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `a368a98`) |
 | --- | --- | --- | --- |
 | `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | not re-measured |
-| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **260** passed, 0 failed |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **383** passed, 0 failed |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run held the line here |
 | `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
@@ -62,6 +62,9 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`) |
+| N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
+| N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
+| N8 | Medium | **Not fixed** (found during the fix run). No `validate` check covers INS, and an uncovered event is now a *failed* result, so any truth VCF holding an INS can never report all-PASS | `validate.rs:133-180` |
 
 ## High severity
 
@@ -584,6 +587,113 @@ only thing left that could notice, and it did not.
   the right behaviour for a genuinely thin but non-empty region. A fix would
   have to decide what a VAF means where there is no local depth to take a
   fraction of, which is a separate question from this one.
+
+### N6 · `BamStats` carries four dead fields, one of which spike prints wrong
+
+*Found while reviewing the L19 fix. Recorded, not fixed: removing public
+struct fields, the `info!` line the user reads them from, and the reason
+recorded in `scan_is_complete`'s doc comment is a change of its own, and it
+interacts with L19's decision (below).*
+
+`main.rs:375` reads `bam_stats.read_length` and nothing else. `insert_mean`,
+`insert_stddev`, `mean_coverage` and `records_sampled` are read nowhere in the
+crate outside `bam_stats.rs`'s own `info!` line and its tests' assertions.
+
+`mean_coverage` (`bam_stats.rs:258-261`) is `total_records * read_length /
+genome_size`, and the two ends of that fraction do not belong together. The
+numerator is the *sample*: the scan stops as soon as it holds `sample_size`
+insert sizes. The denominator is the whole header genome -- all 195 GRCh38
+contigs, 3,099,922,541 bp -- even when the file is a 4 Mb chr20 slice.
+Measured, `--seed 1`, branch HEAD:
+
+| input | records sampled | read_len | header genome | printed | actual depth |
+| --- | --- | --- | --- | --- | --- |
+| HG002 NovaSeq 35x, whole BAM | 101,798 | 151 | 3,099,922,541 (195 contigs) | `est_coverage=0.0x` (0.00496) | ~35x |
+| chr20 37.5-41.5 Mb slice | 100,923 | 151 | 3,099,922,541 (same header) | `est_coverage=0.0x` (0.00492) | ~35x |
+| that slice subsampled to 1.2% | 185 | 151 | 3,099,922,541 | `est_coverage=0.0x` | ~0.4x |
+
+Because the scan bounds the numerator, the figure is near-constant for any
+151 bp paired WGS BAM carrying a GRCh38 header -- about 0.005x whatever the
+file's real depth, 7000x low on the two 35x inputs and 80x low on the 0.4x
+one. It is not a poor estimate; it carries no information about the file.
+
+**This is also L19's residual.** `scan_is_complete`'s doc gives, as the reason
+for not capping the *paired* record scan, that "a cap on the record count
+would truncate that sample on a BAM whose proper pairs are sparse" -- that is,
+it protects `insert_mean` and `insert_stddev`. The distribution the simulation
+samples from is not those: it is built in `stats.rs` by
+`FragmentDist::from_read_pairs` over the extracted donor pool
+(`main.rs:1142`), and `FragmentDist::from_stats` is called only by
+`default_dist()` (a hard-coded 400/80) and by tests, so `BamStats`'s insert
+numbers never reach a read. Removing the four dead fields would leave nothing
+for the uncapped paired scan to protect, and L19's exception with it.
+
+### N7 · A degenerate quality profile is used without a warning
+
+*Found while fixing N5. Recorded, not fixed: unlike N5's floor this is a
+matter of degree, and choosing the census that deserves a warning needs a
+measurement of how far the realised quality distribution drifts before it
+matters.*
+
+`QualityProfile::from_read_pairs` (`synth.rs:92`) logs its bin census at
+`info!` (`synth.rs:199-222`) and never warns, whatever the census says.
+Measured on branch HEAD with N5's 30-pair floor already in place -- a real
+run, exit 0, nothing on stderr -- against the chr20 38.40-38.44 Mb slice
+subsampled to 1.2%, `del:chr20:38412500-38422500 --seed 1 --flank 2000`:
+
+```
+INFO spike::extract] Built read pool: 32 pairs
+INFO spike::synth] Quality profile: 32 pairs, 151 cycles. R1 mean Q: start=37.0 mid=35.4 end=35.0,
+     R2: start=35.8 end=34.2. Base-conditioned bins: 0/1208 usable.
+     Markov bins: base 0/4832, cycle 146/1208 usable
+```
+
+**0 of 1208** base-conditioned bins and **0 of 4832** Markov base bins reach
+`MIN_BASE_OBS`, and 1062 of 1208 Markov cycle bins do not either, so almost
+every quality byte is drawn from the level-4 cycle-only marginal: the model
+has collapsed to "the per-cycle distribution of 32 pairs" and says nothing
+about having done so. N5 closes only the far end of this band (0 pairs, where
+nothing is drawn at all); everything between the floor and a well-trained
+profile is silent. Even a healthy run is partly so -- the 4559-pair pool of
+`del:chr20:38412500-38422500` on the full HG002 BAM still leaves 1877/4832
+Markov base bins and 308/1208 Markov cycle bins unusable.
+
+### N8 · Any truth VCF holding an INS loses one check to "not evaluable"
+
+*Found while reviewing the L15 fix pass (`af9d9fa`). Recorded, not fixed: the
+fix is an INS-specific check, which is new work rather than a correction.*
+
+`check_event` (`validate.rs:133-180`) dispatches on `sv_type` alone:
+`coverage_ratio` for DEL/DUP, `split_reads` for DEL/DUP/INV/BND, `allele_freq`
+for SNP. INS matches none of them, so it falls to the "no check applies"
+branch added by `af9d9fa`, which records an `event_checked` result with
+`pass: false`. Nothing about the BAM can change that -- the dispatch never
+looks at one -- so **one INS in a truth VCF is one permanent FAIL**, and
+`spike validate` on that VCF can never report all-PASS or exit 0, however
+good the spike-in is.
+
+Measured on branch HEAD, truth VCF from
+`--event del:chr20:38412500-38422500 --event ins:chr20:38430000:500 --seed 1`,
+validated against the chr20 slice:
+
+```
+DEL chr20:38412500-38422500 (un...  coverage_ratio     0.50   0.91           FAIL
+DEL chr20:38412500-38422500 (un...  split_reads        >=2    0              FAIL
+INS chr20:38430000 (unknown)        event_checked      a check applies  none for INS  FAIL
+[global] insert_size / dup_rate / mean_mapq                                   3x PASS
+
+Result: 3/6 PASS          exit 1
+WARN spike::validate] no check applies to INS chr20:38430000 (unknown), so it was not evaluated
+```
+
+(The DEL rows fail because this run validates against the *unspiked* slice;
+the INS row is the finding, and it is independent of the BAM.) `af9d9fa`'s
+branch is right for what it was for -- M11, where an INS-only truth VCF scored
+3/3 PASS on the three global checks alone -- but the cost now lands on every
+mixed truth set: the honest "we did not check this" is indistinguishable, in
+the verdict and in the exit status, from "this spike-in is wrong". The real
+fix is a check INS can pass: split reads at the insertion point, or reads
+carrying the inserted sequence.
 
 ## Low severity
 
