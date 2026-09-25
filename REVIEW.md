@@ -76,7 +76,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
 | N14 | High | **Fixed** (`3c6937d`; found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
-| N15 | Medium | **Not fixed** (found by the verification review). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
+| N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule was tried and refuted, see the N15 result). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
 
@@ -1592,6 +1592,62 @@ het -m2 -M2 -v indels` gives **6,663** sites (6,641 `0/1`, 22 `1/0`). Over
 those sites, the same subset rules give **36 neighbour** and **5,571
 isolated** sites. The rules and criteria are unchanged; only these counts
 move.
+
+#### N15 result: refuted as locked (S2 and S3 fail), so the rule is reverted
+
+- **Baseline:** `3e3f658`, the pad rule with the debug count line.
+- **New rule:** `1f23b3b`.
+- Both were run with `spike validate` on the untouched HG002 35x BAM, over all
+  6,663 sites and the three N13 spellings.
+
+| criterion | measured | verdict |
+| --- | --- | --- |
+| S1: fewer carriers at a neighbour site | 11 of 36 (e.g. chr20:6371961 34/46 -> 17/47, chr20:32705373 34/38 -> 11/38) | **pass** |
+| S2: isolated-site carriers lost <= 1% | 1,889 of 89,178 = **2.12%**, at 1,353 of 5,571 sites; none gained | **fail** |
+| S3: the three spellings agree | carries 13 / 13 / 13; spans 22 / 25 / 25 | **fail as written** |
+
+**S3 was written wrong.** The spans rule does not change, and it depends on
+the spelling: the baseline already gave spans 21 / 24 / 24 (carries
+14 / 14 / 14), and N13's own table showed 23 / 26 / 27. I saw this in the
+baseline before the new rule's numbers were in. The criterion was not
+changed; it is reported as written. The part S3 was meant to guard, that
+carries do not depend on the spelling, holds.
+
+**S2 is a real failure, and it is worse for insertions.** Deletions lose
+0.6-1.4% of carriers by length, insertions 2.7-4.1%. Across all 6,663 sites,
+`allele_freq` FAIL rises from 638 to 730. 101 sites flip PASS -> FAIL, mostly
+fractions of 0.25-0.33 falling further, and 9 flip FAIL -> PASS, mostly
+neighbour sites where the pad rule read 0.74-0.89.
+
+**What the dropped reads are, at the three sites with the largest loss.** In
+every case the read has a same-size gap a few bases from the junction that
+spells a *different* sequence, at an STR edge:
+- **chr20:10061050 `C>CAT`:** 15 reads insert `AT` at the junction; 16 insert
+  `TG` 3 bp on, at the start of a (TG)n run.
+- **chr20:41002059 `A>AT`:** 9 reads insert `T` 8 bp earlier, in a `TTTA`
+  unit, not in the poly-T.
+- **chr20:11003701 `T>TTCC`:** 18 reads insert `TTC` 3 bp earlier; 11 insert
+  `TCC` at the junction.
+
+GIAB lists no other variant within 25 bp of any of the three. From the CIGAR
+alone it cannot be told whether those reads carry the truth allele, written
+by the aligner as a different gap plus mismatches, or a second allele the
+truth set leaves out. So S2's premise was not verified beforehand: it assumed
+every pad-rule carrier at an isolated site is a real one. The criterion still
+stands as written, and it failed.
+
+**Consequence, as the plan says:** the rule is not merged, and `1f23b3b` is
+reverted. The debug count line (`3e3f658`) stays. The next attempt is the
+step the plan named: compare each read's own bases over the site with the
+truth haplotype and with the reference, the MNV rule applied to indels. That
+is also the tool that settles which of the dropped reads were real carriers.
+It needs a plan of its own.
+
+**Found along the way, not measured further.** Even under the baseline,
+**638 of 6,663 (9.6%)** real HG002 het indels fail `allele_freq` at 0.5,
+against 2.2% of SNVs (N16). Their fractions cluster at 0.25-0.33, so the
+indel counting under-counts carriers generally. Soft clips at read ends and
+reference bias are the obvious suspects; neither was measured.
 
 ### N16 · One depth floor, three different denominators
 
