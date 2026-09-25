@@ -793,6 +793,52 @@ profile is silent. Even a healthy run is partly so -- the 4559-pair pool of
 `del:chr20:38412500-38422500` on the full HG002 BAM still leaves 1877/4832
 Markov base bins and 308/1208 Markov cycle bins unusable.
 
+#### N7 plan (locked before any code or result)
+
+**Principle.** spike should warn when its quality model learned from so few
+read pairs that the fake reads' qualities differ from the sample's own reads
+by more than real reads from one part of the genome differ from another's.
+That second difference is the scale spike already accepts, because it trains
+on one local window.
+
+**Inputs.**
+- HG002 35x, the same BAM as N6 and N16.
+- **Test pool:** `extract_read_pairs` over chr20:38,402,500-38,432,500, MAPQ
+  20. That is `del:chr20:38412500-38422500` with the default 10 kb flank.
+- The pool is split in two by a hash of the read name: a **train** half and
+  a **held-out** half.
+
+**What gets computed** (an `#[ignore]` measurement test, committed before it
+is run):
+- Pool sizes n = 30, 60, 125, 250, 500, 1000, and the whole train half. Each
+  size is repeated 20 times with fixed seeds.
+- Each repeat draws n pairs from train and builds
+  `QualityProfile::from_read_pairs`. Then, for every held-out pair, it draws R1
+  and R2 qualities over that read's own bases, carrying the previous quality
+  forward as `generate_from_template` does.
+- Three distances between the drawn qualities and the held-out reads' real
+  ones:
+  - **M1:** the mean, over cycles and over R1 and R2, of |mean Q drawn − mean
+    Q real| per cycle, in Phred units.
+  - **M2:** |fraction of bases under Q20, drawn − real|.
+  - **M3:** |P(Q < 20 at cycle c+1 given Q < 20 at c), drawn − real|.
+- **Tolerance T for each metric:** the same distance between the held-out
+  reads' real qualities and all real pairs from each of 10 other chr20
+  windows, 30 kb long, starting at 32, 33, 34, 35, 36, 37, 40, 41, 42 and 43
+  Mb (MAPQ 20). T is the largest of those 10 values.
+
+**Decision rule.** N* is the smallest tested n at which the median over 20
+repeats of every metric is at or below its T, at that n and at every larger
+tested n.
+- **If N* = 30** (the donor-pool floor from N5), even the smallest allowed
+  pool is inside the tolerance. No warning is needed, N7 is closed as
+  "measured, no warning needed", and no code changes.
+- **If N* is above 30**, spike warns when the donor pool has fewer than N*
+  pairs. The warning names N* and the bin census.
+- **If no tested n qualifies**, even a full pool differs more than regions
+  do. That is a model problem outside N7, so it is recorded, and there is no
+  warning.
+
 ### N8 · Any truth VCF holding an INS loses one check to "not evaluable"
 
 *Found while reviewing the L15 fix pass (`af9d9fa`). Recorded unfixed at the
