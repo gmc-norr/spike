@@ -115,3 +115,70 @@
   the README's first attempt at one, unverifiable.
 - **Not fixed** in this run: pinning a tool version is a harness policy change.
 
+
+## The run after the CR4 and CR2 census (2026-09-26)
+
+### RF1 — `cargo test --release` fails three tests on an untouched tree
+
+- **Where:** `src/truth.rs`, the tests
+  `test_truth_refuses_a_depth_fold_slice_that_does_not_match_the_events`,
+  `test_truth_refuses_a_resistant_slice_that_does_not_match_the_events` and
+  `test_truth_refuses_an_adjusted_af_slice_that_does_not_match_the_events`.
+- **What:** each expects a refusal that only fires in a debug build, so a release test run
+  reports `473 passed; 3 failed` on code that is not broken.
+- **How I know:** measured at `985e50f` with nothing changed. `cargo test --release` →
+  `test result: FAILED. 473 passed; 3 failed; 1 ignored`; `cargo test` →
+  `test result: ok. 476 passed; 0 failed; 1 ignored`.
+- **Severity:** Low for correctness; Medium for anyone who runs the suite in release and reads
+  the failure as a real defect.
+- **Not fixed:** out of that run's scope. The fix is either `#[cfg(debug_assertions)]` on the
+  three tests or a refusal checked in both profiles.
+
+### RF2 — README's `spike validate` row counts are stale measurements
+
+- **Where:** `README.md:797`, `:798`, `:804`, `:806`.
+- **What:** each quotes a `<pass>/<total> PASS` from a round trip run before the census fields
+  and the advisory rows existed. The `exit 0` / `exit 1` claims beside them all still hold --
+  advisory rows stay out of the exit status -- but the totals are now two rows per event low.
+- **How I know:** read, after T1 measured the same shape on a real slice: a one-event truth VCF
+  that used to print `Result: 5/5 PASS` now prints `7/7`.
+- **Severity:** Low. A reader comparing their own output against the README sees a mismatch
+  that is not a defect.
+- **Not fixed** in T1's fix pass: re-measuring needs a chr20 slice and a probe run, which was
+  outside that pass.
+
+### RF3 — `--json`'s `summary.fail` can be nonzero on an exit-0 run
+
+- **Where:** `src/validate.rs`, `print_results_json`'s `summary` object.
+- **What:** `summary.total` and `summary.fail` count every row, advisory included, so a run
+  whose only failing row is advisory reports `fail: 1` and still exits 0. Nothing in `--json`
+  records whether `--strict` was given, so a consumer cannot tell which rows the exit status
+  counted.
+- **How I know:** the T1 reviewer measured `fail: 7` on a run that exited on
+  `5/5 validation checks failed`.
+- **Severity:** Low. `scripts/validate_pipeline.sh` reads only `passed` and `len(checks)`, so
+  its verdict is unaffected. A JSON consumer keying on `summary.fail` would now disagree with
+  the exit status.
+- **Not fixed:** the shape of `summary` was not in T1's locked plan, and changing it is a
+  default output change for existing parsers.
+
+### RF4 — a negative `SIM_RESIST` or `SIM_DEPTH_FOLD` passes its advisory row
+
+- **Where:** `src/validate.rs`, the two census row builders.
+- **What:** the rule is `value <= threshold`, so `SIM_RESIST=-1` passes. Nothing is recomputed
+  from the BAM, so a nonsense number is believed as long as it parses.
+- **How I know:** read, and flagged independently by T1's implementer and its reviewer.
+- **Severity:** Low. No spike version writes a negative value; only a hand-edited truth VCF can
+  produce one.
+- **Not fixed:** the comparison is what T1's plan locked.
+
+### RF5 — `spike validate --help` never says what `(advisory)` means
+
+- **Where:** `src/validate.rs`, `print_usage()`'s "Checks, by truth-event type" block.
+- **What:** the block lists the checks each event type gets but not the two advisory rows a user
+  now sees in the output, and nothing in `--help` defines `(advisory)` beyond the footer
+  sentence saying they are left out of the exit status.
+- **How I know:** read; raised by T1's reviewer.
+- **Severity:** Low. README.md covers both.
+- **Not fixed:** T1's plan allowed the help text one new flag line; the footer sentences were
+  added in the fix pass, and extending the checks table was not ratified.

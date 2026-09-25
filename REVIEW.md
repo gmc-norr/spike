@@ -3578,6 +3578,18 @@ limit), and a truth VCF edited between the run and the validation is believed. C
 at all only because of that. A hard *real* locus where the `resistant` row should fire is T4's
 question, not T1's: every firing above is synthetic or hand-edited.
 
+**Reviewed and fixed (`f1fe4a4`).** The reviewer passed T1 on spec and found three Important
+issues, all fixed and all four criteria re-measured against the fixed binary (`d4e56e54…`),
+with the same results: `check_outcome` hardcoded `advisory: false`, so an *errored* advisory
+check would have entered the exit status and satisfied the `event_checked` fallback -- breaking
+the standing choice and re-opening M11 for T2, T5 and T6 (it now takes the flag; all six call
+sites pass `false`); the malformed-field diagnostic `unreadable: "lots"` was always longer than
+the frozen 14-character Observed column, so every bad value printed as `unreadable:...` (now
+`bad: <raw>`, column unchanged, and `0.1.2.3.4` was measured to print whole); and
+`print_usage()`'s footer still claimed "exit 0 means every check ran and every check passed",
+which an advisory FAIL without `--strict` falsifies (two sentences added). Four Minor ones were
+fixed with them, and four are recorded in `CLINICAL_SV_NEW_FINDINGS.md` as RF2-RF5.
+
 `.` is treated as **absent**, not malformed: `truth.rs` writes `SIM_RESIST=.` whenever spike has
 no number for an event (`src/truth.rs:807`'s test pins it), so failing on `.` would make spike
 advisory-FAIL its own output. Anything else unparseable is an advisory FAIL quoting what it
