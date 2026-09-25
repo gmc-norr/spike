@@ -1401,6 +1401,30 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
     }
 
     #[test]
+    fn test_bed_score_at_the_top_of_the_spec_range_is_still_a_score() {
+        // 1000 is the highest score the BED spec defines, so column 5 is
+        // ignored and the gene comes from the name. Without this the whole
+        // upper end of the range is untested: the four tests above use only
+        // `0`, `0`, `.` and `LDLR`, which `value == "." || value == "0"`
+        // would satisfy just as well.
+        let bed = "chr1\t1000\t1100\tGENEA_exon1\t1000\t+\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(genes[0].gene, "GENEA");
+    }
+
+    #[test]
+    fn test_a_number_above_the_bed_score_range_is_read_as_a_gene_symbol() {
+        // The other edge of the same boundary, and the one that shows the
+        // rule is a range rather than "looks numeric": 1001 is outside what
+        // the spec allows a score to be, so spike takes column 5 at its word
+        // and names the gene "1001". Loud, not silent -- an event naming a
+        // real symbol then fails with `gene not found. Available: 1001`.
+        let bed = "chr1\t1000\t1100\tGENEA_exon1\t1001\t+\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(genes[0].gene, "1001");
+    }
+
+    #[test]
     fn test_fifth_column_gene_symbol_still_wins_over_the_exon_name() {
         // spike's own layout (data/ldlr_deletions/ldlr_exons_hg38.bed) names
         // the gene in column 5; a name that does not begin with the symbol

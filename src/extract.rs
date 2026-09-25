@@ -921,6 +921,18 @@ pub(crate) mod test_fixtures {
     ///
     /// Returns `(fasta_path, cram_path)`.
     pub(crate) fn write_two_contig_cram(dir: &std::path::Path) -> (String, String) {
+        write_two_contig_cram_with_flags(dir, 0x63, 0x93)
+    }
+
+    /// As `write_two_contig_cram`, but with the SAM flags of each record of a
+    /// pair chosen by the caller. `bam_stats`'s tests need the same file
+    /// written single-end (`0x0`, `0x0`) to reach the CRAM branch of the
+    /// stats scan, which behaves differently from the BAM one (M15, L2).
+    pub(crate) fn write_two_contig_cram_with_flags(
+        dir: &std::path::Path,
+        first_flags: u16,
+        last_flags: u16,
+    ) -> (String, String) {
         use std::num::NonZeroUsize;
 
         const CONTIG_LEN: usize = 2000;
@@ -978,9 +990,9 @@ pub(crate) mod test_fixtures {
             let seq = &sequences[ref_id].1[pos - 1..pos - 1 + READ_LEN];
             noodles::cram::Record::builder()
                 .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
-                    0x63u16
+                    first_flags
                 } else {
-                    0x93u16
+                    last_flags
                 }))
                 .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
                 .set_reference_sequence_id(ref_id)

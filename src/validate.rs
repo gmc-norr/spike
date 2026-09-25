@@ -1874,6 +1874,27 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         assert_eq!(escape_json("a\u{1}b"), "a\\u0001b");
     }
 
+    #[test]
+    fn test_escape_json_uses_the_short_escapes_for_backspace_and_form_feed() {
+        // \b (0x08) and \f (0x0c) have short forms in JSON, and the escaper
+        // emits them rather than \u0008 / \u000c. Nothing exercised those
+        // two arms: the tests above cover \t, \r, \n and the \u00XX
+        // fallback only.
+        assert_eq!(escape_json("a\u{8}b\u{c}c"), "a\\bb\\fc");
+    }
+
+    #[test]
+    fn test_truncate_backs_off_across_a_four_byte_character() {
+        // The cut point can land 1, 2 or 3 bytes into a character. An emoji
+        // in a gene name is far-fetched, but a 4-byte codepoint is the widest
+        // UTF-8 gets and the deepest the walk-back loop has to go; the test
+        // above only ever backs off one byte inside a 2-byte character.
+        let name = "AB\u{1f600}CDEFGHIJ";
+        assert_eq!(name.len(), 14, "2 + 4 + 8 bytes");
+        // max_len 8 cuts at byte 5, which is inside the emoji's bytes 2..6.
+        assert_eq!(truncate(name, 8), "AB...");
+    }
+
     // --- N4: `validate`'s CRAM queries must not read another contig's reads ---
 
     /// The shared two-contig CRAM fixture in a scratch directory of its own.

@@ -185,6 +185,17 @@ fn scan_is_complete(
 /// synthetic pairs off an empty quality profile (all-zero qualities) and a
 /// default fragment distribution. Failing here, after `sample_size` records
 /// rather than after the whole file, says why.
+///
+/// The message distinguishes the two ways the scan can have ended, because
+/// they carry different weight. At end of file `total_records` is every
+/// primary record there is and the verdict is certain. At the cap it is a
+/// window, and a file that does hold pairs but puts `sample_size` consecutive
+/// primary records without `0x1` at its head would be reported the same way.
+/// That is bounded rather than impossible: spike's own input is a
+/// coordinate-sorted indexed BAM/CRAM, where a mixed library's single- and
+/// paired-end reads interleave at every locus, so no supported input is known
+/// to reach it -- but the message says what the cap cannot rule out instead
+/// of claiming certainty it does not have.
 fn reject_single_end(
     path: &str,
     saw_segmented: bool,
@@ -192,13 +203,21 @@ fn reject_single_end(
     sample_size: usize,
 ) -> Result<()> {
     if total_records > 0 && !saw_segmented {
+        let scanned = if total_records >= sample_size {
+            format!(
+                "all {} primary records examined (scan capped at {}); a paired library whose \
+                 first {} primary records all lacked 0x1 would look the same from here, so \
+                 this does not rule out pairs elsewhere in the file",
+                total_records, sample_size, sample_size,
+            )
+        } else {
+            format!("all {} primary records in the file", total_records)
+        };
         anyhow::bail!(
-            "{} holds no paired reads: SAM flag 0x1 is unset on all {} primary records examined \
-             (scan capped at {}). spike simulates from extracted read pairs, so a single-end \
-             library gives it nothing to work with.",
+            "{} holds no paired reads: SAM flag 0x1 is unset on {}. spike simulates from \
+             extracted read pairs, so a single-end library gives it nothing to work with.",
             path,
-            total_records,
-            sample_size,
+            scanned,
         );
     }
     Ok(())
@@ -519,6 +538,115 @@ mod tests {
         let stats = compute_stats(bam.to_str().unwrap(), 50, None).unwrap();
         assert_eq!(stats.records_sampled, 50);
         assert!((stats.insert_mean - 300.0).abs() < f64::EPSILON);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_single_end_bam_shorter_than_the_cap_does_not_claim_the_cap_bound() {
+        // The scan reached end of file after 100 records, so "scan capped at
+        // 50000" is not what happened and the 100 is the whole file, not a
+        // sample of it. Saying the cap bound when it did not sends the reader
+        // looking for the other 49900 records.
+        let dir = scratch_dir("bam_stats_short_single_end");
+        let bam = dir.join("short_single_end.bam");
+        write_flat_bam(&bam, 100, 0x0, 0);
+
+        let err = compute_stats(bam.to_str().unwrap(), 50_000, None)
+            .expect_err("a single-end BAM is unusable however short it is")
+            .to_string();
+        assert!(
+            err.contains("100 primary records"),
+            "the error must name the 100 records it examined: {}",
+            err
+        );
+        assert!(
+            !err.contains("cap"),
+            "the scan hit end of file, not the cap; the message must not claim otherwise: {}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_capped_single_end_scan_says_the_verdict_is_bounded_by_the_cap() {
+        // When the cap *does* bind, the verdict rests on a window rather than
+        // on the whole file, and the message has to admit that: 50000
+        // consecutive primary records without 0x1 in a file that does hold
+        // pairs would be reported as "holds no paired reads" too.
+        let dir = scratch_dir("bam_stats_capped_single_end");
+        let bam = dir.join("capped_single_end.bam");
+        write_flat_bam(&bam, 500, 0x0, 0);
+
+        let err = compute_stats(bam.to_str().unwrap(), 50, None)
+            .expect_err("a single-end BAM is unusable")
+            .to_string();
+        assert!(
+            err.contains("scan capped at 50"),
+            "the cap bound here and the message must say so: {}",
+            err
+        );
+        assert!(
+            err.contains("elsewhere in the file"),
+            "a capped verdict must say what it cannot rule out: {}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The shared two-contig CRAM fixture, written with the given per-record
+    /// SAM flags, in a scratch directory of its own.
+    fn two_contig_cram(tag: &str, first_flags: u16, last_flags: u16) -> (std::path::PathBuf, String, String) {
+        let dir = scratch_dir(tag);
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram_with_flags(
+            &dir,
+            first_flags,
+            last_flags,
+        );
+        (dir, fasta, cram)
+    }
+
+    #[test]
+    fn test_compute_stats_accepts_a_paired_cram() {
+        // CRAM is a first-class input and its scan is a second loop, not a
+        // shared one: M15 (index pruning) and L2 (container leakage) both
+        // found it behaving differently from the BAM path, and nothing here
+        // was covered either way.
+        let (dir, fasta, cram) = two_contig_cram("bam_stats_cram_paired", 0x63, 0x93);
+
+        let stats = compute_stats(&cram, 50, Some(&fasta)).expect("a paired CRAM is usable");
+        assert_eq!(stats.records_sampled, 10, "5 pairs = 10 primary records");
+        assert!(
+            (stats.insert_mean - 300.0).abs() < f64::EPSILON,
+            "every pair's positive template length is 300, got {}",
+            stats.insert_mean
+        );
+        assert!(
+            (stats.read_length - 100.0).abs() < f64::EPSILON,
+            "every read is 100 bp, got {}",
+            stats.read_length
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_compute_stats_rejects_a_single_end_cram() {
+        // The same rejection as the BAM path, through the CRAM loop's own
+        // copy of the scan and its own `reject_single_end` call.
+        let (dir, fasta, cram) = two_contig_cram("bam_stats_cram_single_end", 0x0, 0x0);
+
+        let err = compute_stats(&cram, 50, Some(&fasta))
+            .expect_err("a single-end CRAM gives spike nothing to extract from")
+            .to_string();
+        assert!(
+            err.contains("holds no paired reads"),
+            "the error must say why the CRAM is unusable: {}",
+            err
+        );
+        assert!(
+            err.contains("10 primary records") && !err.contains("cap"),
+            "10 records is the whole file, well under the 50-record cap: {}",
+            err
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
