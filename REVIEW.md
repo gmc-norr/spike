@@ -67,6 +67,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
 | N10 | Medium | **Not fixed** (found by the whole-branch review, recorded). No `validate` check measures a small indel's or an MNV's allele fraction. Now that N9 stops calling them a pass, a truth VCF holding one cannot report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT | `validate.rs:753-762` |
+| N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 
 ## High severity
 
@@ -877,6 +878,47 @@ reference position, and the same walk over `I` and `D` operations of the
 allele's own length, divided by the pileup depth there, is an indel allele
 fraction. An MNV needs the per-base pileup at each differing offset. Neither
 was in scope for this pass.
+
+
+### N11 · Two `--help` strings contradicted the code, and the refusals had no single home
+
+*Found by the whole-branch review.*
+
+- `main.rs:93` said `Target allele fraction (0.0-1.0)`, but `main.rs:199-206`
+  refuses `0` and `0.0` (and NaN, and the infinities). A user who reads the
+  help and passes `--allele-fraction 0` is refused by a tool that told them 0
+  was in range.
+- `main.rs:120-123`'s `--flank` help never mentioned the **2000** minimum
+  `main.rs:210-219` enforces -- the likeliest accidental refusal of the lot,
+  since 10000 is the default and a user narrowing the window has no reason to
+  expect a floor.
+
+**Fixed:** both help strings now state the bound they are checked against, and
+`test_help_states_the_bounds_the_code_enforces` renders the long help and
+asserts it names `(0.0, 1.0]` and `HAP_FLANK`, next to the validator calls that
+enforce them -- so the two cannot drift apart again without a red test. No flag
+was removed, renamed or re-defaulted; only the descriptions changed. README's
+CLI-reference block was regenerated from the new `--help`.
+
+**Also fixed (the review's Important 10):** the refusals were documented in
+nine separate README places and four were not documented at all --
+`--allele-fraction` outside `(0,1]` including NaN, `--flank` below 2000, a
+gzip-compressed FASTA under a non-`.gz` name (`reference.rs:98-105`), and a
+bcftools failure on `--gvcf` (`loh.rs:418`). README now has one **"What spike
+refuses"** section listing every command-line-reachable refusal with the exact
+message text, each one measured by running it rather than read off the format
+string.
+
+- **Correction to the review's list:** a bcftools failure on `--gvcf` is **not**
+  a refusal. `loh.rs:418` does bail, but `simulate.rs:94`'s `unwrap_or_else`
+  catches it, logs a `WARN` and falls back to `SampleCopies::default()`, so the
+  run continues and exits **0**. Measured with an unindexed `.vcf.gz`:
+  `WARN spike::simulate] could not read the sample's SNPs in
+  chr20:38410500-38424500: bcftools exited with status exit status: 255 on gVCF
+  'bad.vcf.gz': Failed to open bad.vcf.gz: not compressed with bgzip. LOH is
+  skipped for this region: original reads are suppressed at random.` -- exit 0,
+  FASTQ and truth VCF written. The README section records it under **"Not a
+  refusal"** with that text, since a user looking for it will expect it there.
 
 ## Low severity
 

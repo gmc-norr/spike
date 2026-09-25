@@ -639,7 +639,9 @@ Options:
           Exon BED file. Required when using gene-based --event specs (e.g. "del:GENE:exon4-exon8")
 
       --allele-fraction <ALLELE_FRACTION>
-          Target allele fraction (0.0-1.0)
+          Target allele fraction, in (0.0, 1.0] -- above 0 and at most 1.
+          
+          0 is rejected, not treated as "plant nothing": an event asked for at AF 0 would still be written to the truth VCF. NaN is rejected for the same reason.
           
           [default: 0.5]
 
@@ -662,7 +664,9 @@ Options:
           Extra read extraction region (e.g. "chr19:11080000-11140000"), on top of event ± flank -- it does not replace the event window. Use this to ensure the output BAM covers the full gene/region of interest. For an event on the same chromosome, the region and the event ± flank are merged into one query when they overlap or touch, and kept as two queries when they do not, so a distant fusion partner costs one extra event-sized window rather than every read in between. A region on another chromosome than the event is ignored for that event
 
       --flank <FLANK>
-          Flanking region (bp) to include around events. Always defines the event window; when --region is also set, the region adds another window alongside it (see --region) rather than replacing this one
+          Flanking region (bp) to include around events. Always defines the event window; when --region is also set, the region adds another window alongside it (see --region) rather than replacing this one.
+          
+          Minimum 2000, and a smaller value is rejected: synthetic reads cover event +/- 2000bp, so a narrower extraction window would leave original reads the synthetic ones are meant to replace outside it.
           
           [default: 10000]
 
@@ -708,6 +712,48 @@ Options:
   -V, --version
           Print version
 ```
+
+
+## What spike refuses
+
+spike would rather stop than write a truth VCF that does not describe the reads
+beside it, so most input problems are a non-zero exit with nothing written
+rather than a warning. Every refusal below is reachable from the command line;
+the message is the exact text spike prints, measured by running it.
+
+| What | Message | Checked in |
+| --- | --- | --- |
+| No events at all | `no events specified (use --event or --vcf)` | `main.rs` |
+| `--allele-fraction` outside `(0.0, 1.0]` — including `0`, a negative, `inf` and `nan` | `allele-fraction must be in (0.0, 1.0]` | `validate_allele_fraction` |
+| `--flank` below 2000 | `--flank 500 is too small: it must be at least 2000 so every original read replaced by synthetic reads is extracted` | `validate_flank` |
+| `--dup-model` other than `full`/`junction` | `invalid --dup-model 'tandem', expected 'full' or 'junction'` | `main.rs` |
+| `--region` with a 0 start (it is 1-based) | `region start must be >= 1 (1-based), got 0 in 'chr20:0-1000'` | `parse_region` |
+| `--region` with start after end | `region start > end (5000 > 1000) in 'chr20:5000-1000'; check your interval` | `parse_region` |
+| A long-read BAM (mean read length above spike's max fragment length) | `input BAM's mean read length (1501bp) exceeds spike's max supported fragment length (1500bp); spike simulates fixed-length paired-end reads and does not support long-read (PacBio/ONT) libraries` | `validate_read_length` |
+| An event beyond the end of its chromosome | `DEL event start on chr20 is at or beyond chromosome length (99000000 >= 64444167)` | `validate_interval` / `validate_point` |
+| An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
+| A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
+| Two events overlapping without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 overlap on chr20 (38412500-38422500 vs 38415000-38420000)` | `main.rs` |
+| A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0 read pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike needs. ...` | `finish_donor_pool` |
+| No donor coverage at the event's first breakpoint ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at its first breakpoint chr20:29999999: the pool holds 6117 read pair(s) but none of them cover that position. ...` | `simulate.rs` |
+| A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
+| A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
+| A read whose quality string does not match its sequence, or holds a byte outside `!`-`~` | `read <name>/1 has 150 quality byte(s) for 151 base(s); refusing to write invalid FASTQ` | `write_paired_fastq` |
+
+`--exon-bed` has a family of related refusals of its own — a duplicate exon
+number under one gene, an exon range whose start is after its end, a malformed
+BED line — each naming the gene and the line; see
+[Gene/exon-based events](#geneexon-based-events).
+
+**Not a refusal:** a `--gvcf` that `bcftools` cannot read is a **warning with a
+stated fallback**, not an error. spike logs, for the region concerned,
+`could not read the sample's SNPs in chr20:38410500-38424500: bcftools exited
+with status exit status: 255 on gVCF 'bad.vcf.gz': Failed to open bad.vcf.gz:
+not compressed with bgzip. LOH is skipped for this region: original reads are
+suppressed at random.` and carries on at exit 0. The run is still a valid
+simulation — it just loses the haplotype phasing gVCF-based LOH would have
+given it, which the message says. See
+[The sample's SNPs from a gVCF](#the-samples-snps-from-a-gvcf).
 
 ## Architecture
 

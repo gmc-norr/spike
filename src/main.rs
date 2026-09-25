@@ -90,7 +90,11 @@ struct Args {
     #[arg(long)]
     exon_bed: Option<String>,
 
-    /// Target allele fraction (0.0-1.0).
+    /// Target allele fraction, in (0.0, 1.0] -- above 0 and at most 1.
+    ///
+    /// 0 is rejected, not treated as "plant nothing": an event asked for at
+    /// AF 0 would still be written to the truth VCF. NaN is rejected for the
+    /// same reason.
     #[arg(long, default_value_t = 0.5)]
     allele_fraction: f64,
 
@@ -120,6 +124,10 @@ struct Args {
     /// Flanking region (bp) to include around events. Always defines the event
     /// window; when --region is also set, the region adds another window
     /// alongside it (see --region) rather than replacing this one.
+    ///
+    /// Minimum 2000, and a smaller value is rejected: synthetic reads cover
+    /// event +/- 2000bp, so a narrower extraction window would leave original
+    /// reads the synthetic ones are meant to replace outside it.
     #[arg(long, default_value_t = 10000)]
     flank: u64,
 
@@ -1752,6 +1760,36 @@ mod tests {
         assert!(validate_allele_fraction(f64::NAN).is_err());
         assert!(validate_allele_fraction(f64::INFINITY).is_err());
         assert!(validate_allele_fraction(f64::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_help_states_the_bounds_the_code_enforces() {
+        // The help said `--allele-fraction (0.0-1.0)` while the code rejects
+        // 0, and said nothing at all about `--flank`'s 2000 minimum -- the
+        // likeliest accidental refusal. A user who reads --help and is
+        // refused anyway has been told the wrong thing.
+        use clap::CommandFactory;
+        let help = Args::command().render_long_help().to_string();
+
+        assert!(
+            help.contains("(0.0, 1.0]"),
+            "--allele-fraction's help must state the interval the code enforces"
+        );
+        assert!(
+            validate_allele_fraction(0.0).is_err(),
+            "the help above claims 0 is refused"
+        );
+
+        assert!(
+            help.contains(&HAP_FLANK.to_string()),
+            "--flank's help must state its {} minimum",
+            HAP_FLANK
+        );
+        assert!(
+            validate_flank(HAP_FLANK - 1).is_err(),
+            "the help above claims below {} is refused",
+            HAP_FLANK
+        );
     }
 
     #[test]
