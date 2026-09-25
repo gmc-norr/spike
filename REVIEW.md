@@ -1280,6 +1280,34 @@ against 0.02 rather than against 0.15. Not attempted here: it changes the
 verdict of every existing `allele_freq` row and wants its own before/after on
 real data.
 
+**Locked rule (agreed before the fix was written).** Grade the alt count `x`
+out of `n` reads against the requested fraction `p`, with an error rate
+`e = 0.001` per read for a specific wrong allele:
+
+1. **Error floor.** `m = max(3, smallest k with P(Bin(n, e) >= k) < 0.005)`:
+   fewer alt reads than `m` could be errors alone.
+2. **Too shallow.** If a correct run would reach the floor less than 99% of
+   the time, `P(Bin(n, p) >= m) < 0.99`, the check is **not evaluable**
+   (`pass: false`, with the depth it needs). At ordinary depth that is about
+   8 expected alt reads, `n * p < ~8`.
+3. **Pass** only if `x >= m` **and** `x` is inside the central 99% of
+   `Bin(n, p')`: `P(X <= x) >= 0.005` and `P(X >= x) >= 0.005`. Here `p'`
+   is `p` clamped to `[0.001, 0.99]`, so a hom (`p = 1`) truth tolerates a
+   few reference reads.
+4. `n = 0` and `n < MIN_PILEUP_DEPTH` keep their existing verdicts.
+
+**Pass criteria for the fix**, all computed exactly from the binomial:
+- Over the grid `n in {20, 44, 100, 300, 1000, 3000}` and
+  `p in {0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0}`, wherever the
+  check is evaluable:
+  - a correct run (`x ~ Bin(n, p)`) passes with probability **>= 0.98**, and
+  - a run that planted nothing (`x ~ Bin(n, e)`) passes with probability
+    **<= 0.005**.
+- The table above: `x = 0` at `n = 44` never passes, for any `SIM_VAF`.
+- Real data: `validate` on spike runs at VAF 0.02 / 0.05 / 0.1 / 0.2 / 0.5 at
+  one SNV site gives pass or not-evaluable, never fail-on-mismatch at
+  evaluable depth. On the unspiked BAM it never passes.
+
 ### N15 · Two rules for the same physical mark, 250 lines apart
 
 *Found by the verification review. **Not fixed**.*
