@@ -76,11 +76,11 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
 | N14 | High | **Fixed** (`3c6937d`; found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
-| N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule was tried and refuted, see the N15 result). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
+| N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule and then the haplotype rule were tried, and both were refuted as locked; see the N15 results). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
 | N18 | Medium | **Fixed** (found while measuring N15; cause measured, margin confirmed on held-out chr21/chr22). 9.3% of real HG002 het indels fall outside `allele_freq`'s range at 0.5 against 0.77% of SNVs; indel fractions average 0.41. Cause: reads that stop inside or near the indel's repeat align as reference and vote `Spans` (see the N18 result) | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
-| N19 | Low | **Diagnosed** (found by N18's result). After N18, 3.73% of real het indels are out of range; isolated ones are at 1.29%, those with another GIAB variant within 25 bp at 16.3%, where one truth record does not describe the reads' haplotype. The fix is N15's read-bases rule | `validate.rs` `count_indel_reads` |
+| N19 | Low | **Diagnosed** (found by N18's result). After N18, 3.73% of real het indels are out of range; isolated ones are at 1.29%, those with another GIAB variant within 25 bp at 16.3%, where one truth record does not describe the reads' haplotype. N15's haplotype rule cut the not-isolated rate to 10.5% (chr20) and 11.2% (held-out chr21+chr22). That missed its locked 5-point bar on the held-out set, so it was reverted | `validate.rs` `count_indel_reads` |
 
 ## High severity
 
@@ -1713,6 +1713,53 @@ Carriers gained and lost per class, and verdict flips, are reported but are
 not criteria.
 
 **If any fails,** the rule is reverted, as the first attempt was.
+
+#### N15 result, second attempt: refuted as locked (S4 fails on chr21+chr22), so the rule is reverted
+
+- **Baseline:** `aba68d5` (the pad rule after N18). **New rule:** `26d7c87`.
+- Both were run with `spike validate` on the untouched HG002 35x BAM, over the
+  6,663 chr20 sites, the 8,008 held-out chr21+chr22 sites and the three N13
+  spellings.
+- **Ruler.** Scored from the baseline run, the chr20 rates come out at 1.29%
+  (isolated) and 16.29% (not isolated), the numbers the plan locked. The
+  chr21+chr22 overall rate is 4.07%, N18's held-out result.
+- "Out of range" is an `allele_freq` FAIL among sites whose observed value is
+  a fraction. Sites below depth 5 are left out, as in N18 and N19.
+
+| criterion | chr20 | chr21+chr22 (held out) | verdict |
+| --- | --- | --- | --- |
+| S1: fewer carriers at a neighbour site | 4 of 36 | 19 of 71 | **pass** |
+| S2: isolated out of range rises <= 0.5 pts | 1.29% -> 1.15% (-0.14) | 1.57% -> 1.53% (-0.04) | **pass** |
+| S3: the three spellings agree | carries 13 / 13 / 13, spans 14 / 14 / 14 | | **pass** |
+| S4: not-isolated out of range falls >= 5 pts | 16.29% -> 10.49% (**-5.81**) | 15.31% -> 11.21% (**-4.11**) | **fail** |
+| S5: chr21+chr22 overall out of range falls | | 4.07% -> 3.26% | **pass** |
+
+**S4 fails on the held-out set, and it is the bar that decides it.** The
+rule cleared 5 points on chr20, where N19 had found the problem, and fell
+short on the chromosomes that were not looked at. The bar is not moved after
+the fact.
+
+**Reported, not criteria:**
+- **Overall FAILs:** chr20 245 -> 173 of about 6,550 graded sites;
+  chr21+chr22 320 -> 255 of about 7,830.
+- **Verdict flips:** chr20 205 (125 FAIL -> PASS, 80 PASS -> FAIL);
+  chr21+chr22 243 (133 -> PASS, 110 -> FAIL).
+- **Carriers gained and lost** (per-site positive parts):
+  - Isolated sites: chr20 +810 / -528; chr21+chr22 +990 / -573.
+  - Not isolated: chr20 +1,717 / -154; chr21+chr22 +1,939 / -506.
+- **Graded sites** drop a little (chr21+chr22 not isolated 1,430 -> 1,401),
+  because tied reads no longer vote and some sites fall below depth 5.
+- In the baseline the three spellings already agreed, at 13 / 14 each.
+
+**What this says.** The rule did not make anything measured worse. Every
+rate went down, on both sets, and isolated sites held. It did not remove as
+much of N19's residual as the plan asked of it: about 11% of not-isolated
+sites stay out of range. That is still seven times the isolated rate.
+
+**Consequence, as the plan says:** the rule is not merged, and `26d7c87` is
+reverted. A third attempt needs a fresh plan, with its criteria locked before
+it looks at sites that neither attempt has seen. chr20, chr21 and chr22 have
+now all been seen.
 
 ### N16 · One depth floor, three different denominators
 
