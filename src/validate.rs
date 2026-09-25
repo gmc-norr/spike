@@ -261,6 +261,11 @@ fn failure_message(results: &[CheckResult], strict: bool) -> Option<String> {
     Some(format!("{}/{} validation checks failed", n_fail, n_total))
 }
 
+/// The advisory coverage row's name: `coverage_ratio` recomputed with no MAPQ
+/// floor. 17 characters, so it fits the Check column's 18 without moving a
+/// thing.
+const COVERAGE_ANY_MAPQ: &str = "coverage_any_mapq";
+
 /// Run every check that applies to one truth event, pushing one result per
 /// check. An event no check applies to gets one failed "not evaluable"
 /// result, so a truth VCF of such events cannot report all-PASS (M11).
@@ -281,8 +286,29 @@ fn check_event(
             event,
             args.flank_bp,
             args.min_mapq,
+            "coverage_ratio",
+            false,
         );
         results.push(check_outcome(&label, "coverage_ratio", r, false));
+
+        // The same check, same window, no MAPQ floor. `coverage_ratio` cannot
+        // see a read its own `--min-mapq` rejects, and those are exactly the
+        // reads spike could not edit: its donor pool has the same floor, so an
+        // AF=1 deletion over a window of low-MAPQ reads leaves them where they
+        // were and still reports `observed 0.00, pass` (CR4). This row counts
+        // every primary, non-duplicate, non-QC-fail read instead. It is
+        // advisory and unconditional: at `--min-mapq 0` the two rows are
+        // identical by construction, and both are still printed.
+        let r = check_coverage_ratio(
+            &args.bam_path,
+            &args.ref_path,
+            event,
+            args.flank_bp,
+            0,
+            COVERAGE_ANY_MAPQ,
+            true,
+        );
+        results.push(check_outcome(&label, COVERAGE_ANY_MAPQ, r, true));
     }
 
     // Split reads joining the two breakpoints (not INS: its inserted
@@ -692,12 +718,22 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
 // ---------------------------------------------------------------------------
 
 /// Check coverage ratio: event depth vs flanking depth.
+///
+/// `min_mapq` is the floor every depth here is counted at, and `check_name`
+/// names the row it produces, so one body serves both coverage rows: the real
+/// `coverage_ratio` at the run's own `--min-mapq`, and the advisory
+/// [`COVERAGE_ANY_MAPQ`] at a floor of 0. Everything else -- the window, the
+/// flank-averaging rule, the expected ratio and its tolerance -- is shared by
+/// construction rather than by agreement, so the two rows can only ever differ
+/// in the reads the floor admits.
 fn check_coverage_ratio(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
     flank_bp: u64,
     min_mapq: u8,
+    check_name: &str,
+    advisory: bool,
 ) -> Result<CheckResult> {
     let label = format_event_label(event);
 
@@ -745,6 +781,8 @@ fn check_coverage_ratio(
 
     Ok(coverage_ratio_result(
         label,
+        check_name,
+        advisory,
         &event.sv_type,
         event.expected_vaf,
         event_depth,
@@ -752,9 +790,16 @@ fn check_coverage_ratio(
     ))
 }
 
-/// Judge an event's depth against its flanks.
+/// Judge an event's depth against its flanks, as the row `check_name`.
+///
+/// The name and the `advisory` standing are the caller's, because the same
+/// judgement serves the two coverage rows (see [`check_coverage_ratio`]); the
+/// expectations and the tolerance below are not, because the two rows compare
+/// their depths against exactly the same thing.
 fn coverage_ratio_result(
     label: String,
+    check_name: &str,
+    advisory: bool,
     sv_type: &str,
     expected_vaf: f64,
     event_depth: f64,
@@ -763,11 +808,11 @@ fn coverage_ratio_result(
     if flank_depth < 1.0 {
         return CheckResult {
             event_label: label,
-            check_name: "coverage_ratio".to_string(),
+            check_name: check_name.to_string(),
             expected: "N/A".to_string(),
             observed: "no flanking coverage".to_string(),
             pass: false, // can't evaluate: don't report it as a pass
-            advisory: false,
+            advisory,
         };
     }
 
@@ -796,11 +841,11 @@ fn coverage_ratio_result(
 
     CheckResult {
         event_label: label,
-        check_name: "coverage_ratio".to_string(),
+        check_name: check_name.to_string(),
         expected: expected_str,
         observed: format!("{:.2}", ratio),
         pass,
-        advisory: false,
+        advisory,
     }
 }
 
@@ -2998,7 +3043,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
 
     #[test]
     fn test_coverage_ratio_without_flank_coverage_fails() {
-        let r = coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 0.0, 0.0);
+        let r = coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 0.0, 0.0);
         assert!(!r.pass, "an unevaluable coverage check must not pass");
     }
 
@@ -3006,15 +3051,15 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
     fn test_coverage_ratio_has_no_verdict_for_a_type_without_an_expected_ratio() {
         // Only DEL and DUP reach this check. Any other type has no expected
         // ratio, so an untouched region must not pass it by default (NF6).
-        let r = coverage_ratio_result("INV".to_string(), "INV", 0.5, 35.0, 35.0);
+        let r = coverage_ratio_result("INV".to_string(), "coverage_ratio", false, "INV", 0.5, 35.0, 35.0);
         assert!(!r.pass, "observed {}, expected {}", r.observed, r.expected);
         assert_eq!(r.expected, "N/A");
     }
 
     #[test]
     fn test_coverage_ratio_tells_deletion_from_untouched() {
-        assert!(coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 17.5, 35.0).pass);
-        assert!(!coverage_ratio_result("DEL".to_string(), "DEL", 0.5, 35.0, 35.0).pass);
+        assert!(coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 17.5, 35.0).pass);
+        assert!(!coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 35.0, 35.0).pass);
     }
 
     #[test]
@@ -5266,4 +5311,336 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             "--strict counts the advisory row, against the advisory row"
         );
     }
+
+    /// A one-contig CRAM whose deletion window holds nothing but MAPQ 0
+    /// reads, and a second window that holds nothing at all.
+    ///
+    /// chrA is 20 kb of cycling bases. Every read is 100 bp, primary, mapped,
+    /// unmarked and unpaired, so the depth over a window is exactly the bases
+    /// its reads put there.
+    ///
+    /// - `chrA:[10000,11000)` -- the *hidden* deletion: 10 reads at **MAPQ 0**
+    ///   (depth 1.0), the reads a spike-in could not touch because they never
+    ///   entered its donor pool. Its flanks `[9000,10000)` and `[11000,12000)`
+    ///   carry 20 reads each at MAPQ 60 (depth 2.0).
+    /// - `chrA:[14000,15000)` -- the *clean* deletion: no read at any MAPQ,
+    ///   with the same two flanks at depth 2.0 (`[13000,14000)` and
+    ///   `[15000,16000)`).
+    ///
+    /// So with `--flank 1000`, a floor of 20 reads the hidden window as ratio
+    /// 0.00 and a floor of 0 reads it as 0.50, while the clean window reads
+    /// 0.00 at either floor.
+    ///
+    /// Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
+    fn mapq_hidden_deletion_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        use std::num::NonZeroUsize;
+
+        let seq = cycling_contig();
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_validate_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut fasta = String::from(">chrA\n");
+        let offset = fasta.len();
+        for chunk in seq.chunks(60) {
+            fasta.push_str(std::str::from_utf8(chunk).unwrap());
+            fasta.push('\n');
+        }
+        let fasta_path = dir.join("mapq_hidden.fa");
+        std::fs::write(&fasta_path, &fasta).unwrap();
+        std::fs::write(
+            dir.join("mapq_hidden.fa.fai"),
+            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
+        )
+        .unwrap();
+
+        let header = noodles::sam::Header::builder()
+            .add_reference_sequence(
+                "chrA",
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
+            )
+            .build();
+
+        // 20 reads at MAPQ 60 over a 1000 bp flank is depth 2.0; 10 inside a
+        // 1000 bp window is depth 1.0. Every read lies wholly inside the
+        // window it is meant to cover, so no depth leaks across a boundary.
+        let mut plan: Vec<(usize, u8)> = Vec::new();
+        for (flank_start, _) in [(9_000usize, ()), (11_100, ()), (13_000, ()), (15_100, ())] {
+            for i in 0..20usize {
+                plan.push((flank_start + i * 40, 60));
+            }
+        }
+        for i in 0..10usize {
+            plan.push((10_050 + i * 80, 0));
+        }
+        plan.sort_unstable();
+
+        let record = |name: &str, start0: usize, mapq: u8| {
+            noodles::cram::Record::builder()
+                .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
+                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
+                .set_reference_sequence_id(0)
+                .set_read_length(TEST_READ_LEN)
+                .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+                .set_name(name)
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
+                )
+                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
+                    seq[start0..start0 + TEST_READ_LEN].to_vec(),
+                ))
+                .set_quality_scores(
+                    noodles::sam::alignment::record_buf::QualityScores::from(vec![
+                        40u8;
+                        TEST_READ_LEN
+                    ]),
+                )
+                .build()
+        };
+
+        let cram_path = dir.join("mapq_hidden.cram");
+        let repository =
+            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
+        {
+            let mut writer = noodles::cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(repository)
+                .build_from_path(&cram_path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            for (i, &(start0, mapq)) in plan.iter().enumerate() {
+                writer
+                    .write_record(&header, record(&format!("read{}", i), start0, mapq))
+                    .unwrap();
+            }
+            writer.try_finish(&header).unwrap();
+        }
+
+        let index = noodles::cram::index(&cram_path).unwrap();
+        let mut index_writer = noodles::cram::crai::io::Writer::new(
+            std::fs::File::create(dir.join("mapq_hidden.cram.crai")).unwrap(),
+        );
+        index_writer.write_index(&index).unwrap();
+        index_writer.finish().unwrap();
+
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// An AF=1 DEL over [start, end) on chrA, with `--flank 1000`.
+    fn hom_del_args(cram: &str, fasta: &str) -> ValidateArgs {
+        ValidateArgs {
+            flank_bp: 1_000,
+            ..args_for(cram, fasta)
+        }
+    }
+
+    fn hom_del(start: u64, end: u64) -> TruthEvent {
+        TruthEvent {
+            expected_vaf: 1.0,
+            ..del_event("chrA", start, end)
+        }
+    }
+
+    /// The row with this name, or a panic naming what was there instead.
+    fn named<'a>(rows: &'a [CheckResult], check_name: &str) -> &'a CheckResult {
+        rows.iter()
+            .find(|r| r.check_name == check_name)
+            .unwrap_or_else(|| panic!("no {} row in {:?}", check_name, row_names(rows)))
+    }
+
+    #[test]
+    fn test_the_any_mapq_row_sees_the_depth_the_mapq_floor_hides() {
+        // CR4 on one input: half the donor pairs at MAPQ 0 leave half the
+        // original depth inside an AF=1 deletion, and `coverage_ratio` cannot
+        // see it, because the check applies the same `--min-mapq 20` floor
+        // that kept those reads out of the donor pool. The two rows must
+        // disagree here -- that disagreement is the row's whole purpose.
+        let (dir, fasta, cram) = mapq_hidden_deletion_cram("any_mapq_hidden");
+        let args = hom_del_args(&cram, &fasta);
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &hom_del(10_000, 11_000), &NearbyRecords::default(), &mut results);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let floored = named(&results, "coverage_ratio");
+        assert_eq!(floored.expected, "0.00");
+        assert_eq!(floored.observed, "0.00", "the MAPQ 0 reads are invisible here");
+        assert!(floored.pass, "the deletion looks perfect at --min-mapq 20");
+        assert!(!floored.advisory, "coverage_ratio stays a real check");
+
+        let any_mapq = named(&results, "coverage_any_mapq");
+        assert_eq!(any_mapq.expected, "0.00", "the same expectation as the floored row");
+        assert_eq!(any_mapq.observed, "0.50", "half the flank depth is still there");
+        assert!(!any_mapq.pass, "0.50 is outside the 0.30 tolerance of 0.00");
+        assert!(any_mapq.advisory, "the any-MAPQ row is always advisory");
+    }
+
+    #[test]
+    fn test_a_deletion_with_nothing_left_inside_it_passes_at_every_mapq() {
+        // The other side of the same fixture: a window emptied at every MAPQ
+        // must not be reported as a problem by the new row. Without this, a
+        // row that always failed would look just as "right" as one that
+        // reads the depth.
+        let (dir, fasta, cram) = mapq_hidden_deletion_cram("any_mapq_clean");
+        let args = hom_del_args(&cram, &fasta);
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &hom_del(14_000, 15_000), &NearbyRecords::default(), &mut results);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        for name in ["coverage_ratio", "coverage_any_mapq"] {
+            let r = named(&results, name);
+            assert_eq!(r.observed, "0.00", "{} read {}", name, r.observed);
+            assert!(r.pass, "{} must pass a deletion that really is empty", name);
+        }
+    }
+
+    #[test]
+    fn test_min_mapq_zero_still_prints_both_coverage_rows() {
+        // At `--min-mapq 0` the two rows are identical by construction. Both
+        // are still produced: a row that disappeared when the floor reached
+        // its own would make the report's shape depend on a flag.
+        let (dir, fasta, cram) = mapq_hidden_deletion_cram("any_mapq_floor_zero");
+        let args = ValidateArgs {
+            min_mapq: 0,
+            ..hom_del_args(&cram, &fasta)
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &hom_del(10_000, 11_000), &NearbyRecords::default(), &mut results);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let floored = named(&results, "coverage_ratio");
+        let any_mapq = named(&results, "coverage_any_mapq");
+        assert_eq!(floored.observed, "0.50", "the floor is gone from the real check too");
+        assert_eq!(any_mapq.observed, floored.observed);
+        assert_eq!(any_mapq.expected, floored.expected);
+        assert_eq!(any_mapq.pass, floored.pass);
+        assert!(!floored.advisory, "the real check is still in the exit status");
+        assert!(any_mapq.advisory, "its twin is still out of it");
+    }
+
+    #[test]
+    fn test_the_any_mapq_row_is_advisory_in_the_table_and_in_the_json() {
+        // No BAM here: a check that cannot run must stay advisory too, or a
+        // missing file would start failing runs that exit 0 today (T1's F1).
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &hom_del(10_000, 11_000), &NearbyRecords::default(), &mut results);
+
+        let any_mapq = named(&results, "coverage_any_mapq");
+        assert!(any_mapq.advisory, "an errored any-MAPQ row is still advisory");
+        assert_eq!(any_mapq.expected, "check runs");
+        assert!(!any_mapq.pass);
+        assert_eq!(
+            failure_message(&results, false).as_deref(),
+            Some("2/2 validation checks failed"),
+            "the advisory row is in neither the count nor the total"
+        );
+        assert_eq!(
+            failure_message(&results, true).as_deref(),
+            Some("3/3 validation checks failed"),
+            "--strict counts it with the rest"
+        );
+
+        let report = text_report(&results, false);
+        assert!(
+            line_for(&report, "coverage_any_mapq").ends_with("FAIL (advisory)"),
+            "the table must mark the row; got {:?}",
+            line_for(&report, "coverage_any_mapq")
+        );
+        assert!(
+            line_for(&report, "coverage_ratio").ends_with(" FAIL"),
+            "the real check's row is untouched; got {:?}",
+            line_for(&report, "coverage_ratio")
+        );
+
+        let mut json: Vec<u8> = Vec::new();
+        print_results_json(&mut json, &results, results.len(), 0).unwrap();
+        let json = String::from_utf8(json).unwrap();
+        assert!(
+            line_for(&json, "coverage_any_mapq").contains("\"advisory\": true"),
+            "{}",
+            json
+        );
+        assert!(
+            line_for(&json, "\"check\": \"coverage_ratio\"").contains("\"advisory\": false"),
+            "{}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_the_any_mapq_row_covers_the_types_coverage_ratio_covers_and_no_others() {
+        // The row is the coverage check at another floor, so it applies
+        // exactly where a ratio of event depth to flank depth means
+        // something: a DEL and a DUP, and nothing else.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event_of = |sv_type: &str| TruthEvent {
+            sv_type: sv_type.to_string(),
+            ..hom_del(10_000, 11_000)
+        };
+
+        for sv_type in ["DEL", "DUP"] {
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event_of(sv_type), &NearbyRecords::default(), &mut results);
+            let names = row_names(&results);
+            assert!(
+                names.contains(&"coverage_ratio") && names.contains(&"coverage_any_mapq"),
+                "{} must get both coverage rows; got {:?}",
+                sv_type,
+                names
+            );
+        }
+
+        for sv_type in ["INV", "BND", "INS", "SNP", "CNV"] {
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event_of(sv_type), &NearbyRecords::default(), &mut results);
+            let names = row_names(&results);
+            assert!(
+                !names.contains(&"coverage_any_mapq"),
+                "{} has no expected coverage ratio, so it gets no any-MAPQ row; got {:?}",
+                sv_type,
+                names
+            );
+            assert!(
+                !names.contains(&"coverage_ratio"),
+                "{} gets no coverage_ratio either -- the two rows must cover the same types; got {:?}",
+                sv_type,
+                names
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_event_whose_rows_are_all_advisory_still_reports_event_checked() {
+        // M11 again, now with three advisory rows in play: the "a check
+        // applies" fallback counts the non-advisory rows only, so an event no
+        // real check covers must still report `event_checked FAIL` however
+        // many advisory rows sit beside it.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event = TruthEvent {
+            sv_type: "CNV".to_string(),
+            census: CensusInfo::from_info("SIM_RESIST=0.500;SIM_DEPTH_FOLD=3.88"),
+            ..hom_del(10_000, 11_000)
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &event, &NearbyRecords::default(), &mut results);
+
+        assert_eq!(row_names(&results), vec!["resistant", "depth_fold", "event_checked"]);
+        let checked = named(&results, "event_checked");
+        assert!(!checked.pass, "an event no check covers may not pass");
+        assert!(!checked.advisory, "it is the row that fails the run");
+    }
+
 }
