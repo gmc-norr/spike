@@ -304,6 +304,29 @@ fn print_usage() {
 // Truth VCF parsing
 // ---------------------------------------------------------------------------
 
+/// A symbolic SV record's `END`, checked against its own POS.
+///
+/// An `END` at or before POS leaves the event region empty, and
+/// `count_depth_in_region` answers a zero-length region with a hard-coded
+/// `0.0`. A DEL at a high `SIM_VAF` then PASSes `coverage_ratio` -- expected
+/// 0.10, observed 0.00 -- on a region no query ever read. Refuse the record
+/// rather than grade the run on it.
+fn sv_end(info: &str, chrom: &str, id: &str, start: u64) -> Result<u64> {
+    let end = parse_info_u64(info, "END").unwrap_or(start + 1);
+    if end <= start {
+        bail!(
+            "truth record {} at {}:{} has END={}, at or before its own POS: the event \
+             region is empty, so no check can read it and a coverage ratio taken over \
+             it means nothing. Fix the record's END.",
+            id,
+            chrom,
+            start,
+            end,
+        );
+    }
+    Ok(end)
+}
+
 /// Load truth events from a spike-produced truth VCF.
 fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
     let content = std::fs::read_to_string(path)
@@ -344,7 +367,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
 
         match sv_type_str {
             Some("DEL") => {
-                let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let end = sv_end(info, &chrom, &id, vcf_pos)?;
                 let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
@@ -360,7 +383,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                 });
             }
             Some("DUP") => {
-                let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let end = sv_end(info, &chrom, &id, vcf_pos)?;
                 let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
@@ -376,7 +399,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                 });
             }
             Some("INV") => {
-                let end = parse_info_u64(info, "END").unwrap_or(vcf_pos + 1);
+                let end = sv_end(info, &chrom, &id, vcf_pos)?;
                 let partner = Some((chrom.clone(), end));
                 events.push(TruthEvent {
                     chrom,
@@ -432,7 +455,35 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ins_len: None,
                 });
             }
-            _ => {
+            Some(other) => {
+                // An SVTYPE no check covers. It used to fall into the small
+                // variant arm below, where a symbolic ALT like `<CNV>` is
+                // longer than one base and took `check_allele_freq`'s indel
+                // exit -- one silent PASS per unrecognised type. Keep the
+                // type: `check_event` then reports it as `event_checked`,
+                // which is a failed result, so an unknown type is visible.
+                let end = sv_end(info, &chrom, &id, vcf_pos)?;
+                log::warn!(
+                    "truth record {} at {}:{} has SVTYPE={}, which no check covers",
+                    id,
+                    chrom,
+                    vcf_pos,
+                    other
+                );
+                events.push(TruthEvent {
+                    chrom,
+                    start: vcf_pos,
+                    end,
+                    sv_type: other.to_string(),
+                    partner: None,
+                    expected_vaf: sim_vaf,
+                    gene,
+                    ref_allele: None,
+                    alt_allele: None,
+                    ins_len: None,
+                });
+            }
+            None => {
                 // No SVTYPE: small variant (SNP/indel).
                 // VCF POS is 1-based for small variants in truth VCF.
                 let pos_0based = vcf_pos.saturating_sub(1);
@@ -673,6 +724,18 @@ fn check_ins_reads(
     })
 }
 
+/// Column of an `allele_counts` entry for one base, or None for anything
+/// that is not A, C, G or T.
+fn pileup_base_index(base: u8) -> Option<usize> {
+    match base.to_ascii_uppercase() {
+        b'A' => Some(0),
+        b'C' => Some(1),
+        b'G' => Some(2),
+        b'T' => Some(3),
+        _ => None,
+    }
+}
+
 /// Check allele frequency for small variants via pileup.
 fn check_allele_freq(
     bam_path: &str,
@@ -681,22 +744,38 @@ fn check_allele_freq(
     min_mapq: u8,
 ) -> Result<CheckResult> {
     let label = format_event_label(event);
+    let expected = format!("{:.2}", event.expected_vaf);
 
     let ref_allele = event.ref_allele.as_ref().unwrap();
     let alt_allele = event.alt_allele.as_ref().unwrap();
 
-    // Only check single-base variants (SNPs) for now.
+    // This check is a single-position pileup of A/C/G/T, so it can only
+    // measure a single-base substitution. An indel or an MNV is not measured
+    // here, and an unmeasured allele fraction is a failed check, not a pass:
+    // a result row is still pushed, so the event counts as covered and the
+    // row says out loud that nothing was measured.
     if ref_allele.len() != 1 || alt_allele.len() != 1 {
-        return Ok(CheckResult {
-            event_label: label,
-            check_name: "allele_freq".to_string(),
-            expected: format!("{:.2}", event.expected_vaf),
-            observed: "N/A (indel)".to_string(),
-            pass: true, // skip indel AF check
-        });
+        return Ok(event_not_evaluable(
+            &label,
+            "allele_freq",
+            &expected,
+            "N/A (indel or MNV)",
+            "the pileup counts single bases, so no allele fraction was measured",
+        ));
     }
 
+    // A non-ACGT alt has no column in the pileup. Checked before the BAM is
+    // read: it is a property of the truth record, not of the data.
     let alt_base = alt_allele[0].to_ascii_uppercase();
+    let Some(alt_idx) = pileup_base_index(alt_base) else {
+        return Ok(event_not_evaluable(
+            &label,
+            "allele_freq",
+            &expected,
+            "unknown alt base",
+            "the alt allele is not one of A, C, G, T",
+        ));
+    };
 
     // Pileup at the variant position.
     let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
@@ -715,31 +794,18 @@ fn check_allele_freq(
 
     if let Some(counts) = allele_counts.get(&event.start) {
         let total: u32 = counts.iter().sum();
-        if total < 5 {
-            return Ok(CheckResult {
-                event_label: label,
-                check_name: "allele_freq".to_string(),
-                expected: format!("{:.2}", event.expected_vaf),
-                observed: format!("low depth ({})", total),
-                pass: true, // not enough data
-            });
+        // Below this the fraction is noise: at 4 reads the only fractions that
+        // exist are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass.
+        const MIN_PILEUP_DEPTH: u32 = 5;
+        if total < MIN_PILEUP_DEPTH {
+            return Ok(event_not_evaluable(
+                &label,
+                "allele_freq",
+                &expected,
+                &format!("low depth ({})", total),
+                "fewer reads than the check needs to measure a fraction",
+            ));
         }
-
-        let alt_idx = match alt_base {
-            b'A' => 0,
-            b'C' => 1,
-            b'G' => 2,
-            b'T' => 3,
-            _ => {
-                return Ok(CheckResult {
-                    event_label: label,
-                    check_name: "allele_freq".to_string(),
-                    expected: format!("{:.2}", event.expected_vaf),
-                    observed: "unknown alt base".to_string(),
-                    pass: true,
-                });
-            }
-        };
 
         let observed_vaf = counts[alt_idx] as f64 / total as f64;
         let tolerance = 0.15;
@@ -748,7 +814,7 @@ fn check_allele_freq(
         Ok(CheckResult {
             event_label: label,
             check_name: "allele_freq".to_string(),
-            expected: format!("{:.2}", event.expected_vaf),
+            expected,
             observed: format!("{:.2}", observed_vaf),
             pass,
         })
@@ -1097,9 +1163,27 @@ fn cigar_shows_insertion_near(
 /// A global check its sample cannot answer: a failed result, never a silent
 /// pass (M10).
 fn not_evaluable(check_name: &str, expected: &str, observed: &str, why: &str) -> CheckResult {
-    log::warn!("{} check is not evaluable: {}", check_name, why);
+    event_not_evaluable(GLOBAL_LABEL, check_name, expected, observed, why)
+}
+
+/// A check on one event that its data cannot answer: a failed result, never a
+/// silent pass.
+///
+/// The rule is the same one [`not_evaluable`] applies to the three global
+/// checks and `check_event` applies to an event type no check covers -- a
+/// verdict nothing was measured for is a failure, not a pass. A result row is
+/// pushed either way, so `check_event`'s "a check applies" gate counts the
+/// event as covered; only `pass` says whether anything was actually measured.
+fn event_not_evaluable(
+    label: &str,
+    check_name: &str,
+    expected: &str,
+    observed: &str,
+    why: &str,
+) -> CheckResult {
+    log::warn!("{} check is not evaluable for {}: {}", check_name, label, why);
     CheckResult {
-        event_label: GLOBAL_LABEL.to_string(),
+        event_label: label.to_string(),
         check_name: check_name.to_string(),
         expected: expected.to_string(),
         observed: observed.to_string(),
@@ -1716,14 +1800,7 @@ fn walk_cigar_pileup(
                     if rp >= region_start && rp < region_end {
                         if let Some(&base) = seq.get(seq_pos + i) {
                             let base = base.to_ascii_uppercase();
-                            let idx = match base {
-                                b'A' => Some(0),
-                                b'C' => Some(1),
-                                b'G' => Some(2),
-                                b'T' => Some(3),
-                                _ => None,
-                            };
-                            if let Some(idx) = idx {
+                            if let Some(idx) = pileup_base_index(base) {
                                 allele_counts.entry(rp).or_insert([0; 4])[idx] += 1;
                                 read_alleles
                                     .entry(name.to_string())
@@ -2583,6 +2660,115 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
 
         assert_eq!(results.len(), 1, "an unchecked event must leave a result");
         assert!(!results[0].pass, "an event no check covers may not pass");
+    }
+
+    /// A one-base small-variant truth event with the given REF/ALT.
+    fn small_variant_event(reference: &[u8], alt: &[u8]) -> TruthEvent {
+        TruthEvent {
+            chrom: "chrA".to_string(),
+            start: 250,
+            end: 250 + reference.len() as u64,
+            sv_type: "SNP".to_string(),
+            expected_vaf: 0.5,
+            gene: "unknown".to_string(),
+            partner: None,
+            ref_allele: Some(reference.to_vec()),
+            alt_allele: Some(alt.to_vec()),
+            ins_len: None,
+        }
+    }
+
+    #[test]
+    fn test_allele_freq_it_cannot_measure_is_not_a_pass() {
+        // Three returns inside check_allele_freq answered `pass: true` on
+        // questions it had not asked: an indel, an MNV and an alt base that
+        // is not one of ACGT. A result row was still pushed, so check_event's
+        // "a check applies" gate counted all three as covered. No BAM is read
+        // on any of these paths, so the paths need not exist.
+        for (reference, alt, what) in [
+            (&b"AC"[..], &b"A"[..], "a deletion"),
+            (&b"A"[..], &b"ACGT"[..], "an insertion"),
+            (&b"TG"[..], &b"AC"[..], "an MNV"),
+            (&b"T"[..], &b"N"[..], "a non-ACGT alt"),
+        ] {
+            let event = small_variant_event(reference, alt);
+            let r = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, 20)
+                .expect("an unmeasurable allele fraction is a result, not an error");
+            assert!(
+                !r.pass,
+                "{} is not an allele fraction this check measured, so it may not PASS \
+                 (observed {:?})",
+                what, r.observed
+            );
+        }
+    }
+
+    #[test]
+    fn test_allele_freq_below_the_depth_floor_is_not_a_pass() {
+        // chrA is covered at depth 1-2 everywhere, below the 5-read floor the
+        // check needs. "not enough data" was reported as a PASS.
+        let (dir, fasta, cram) = two_contig_cram("low_depth_af");
+        let event = small_variant_event(b"A", b"C");
+
+        let r = check_allele_freq(&cram, &fasta, &event, 20).unwrap();
+
+        assert!(
+            !r.pass,
+            "a depth the check calls too low to measure may not PASS (observed {:?})",
+            r.observed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_unrecognised_svtype_is_not_read_as_a_small_variant() {
+        // `<CNV>` has no REF/ALT alleles to compare, but the SVTYPE fallback
+        // routed it into the SNP arm, where ALT `<CNV>` is longer than one
+        // base and took the indel exit -- one silent PASS per unknown type.
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chr20\t39100000\tcnv_1\tN\t<CNV>\t999\tPASS\tSVTYPE=CNV;END=39110000;SIM_VAF=0.500\tGT\t0/1
+";
+        let path =
+            std::env::temp_dir().join(format!("spike_unknown_svtype_{}.vcf", std::process::id()));
+        std::fs::write(&path, vcf).unwrap();
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].sv_type, "CNV",
+            "an unrecognised SVTYPE must keep its own type, not be called a SNP"
+        );
+        assert!(events[0].ref_allele.is_none());
+    }
+
+    #[test]
+    fn test_truth_record_ending_before_it_starts_is_rejected() {
+        // END <= POS makes the event region empty; count_depth_in_region
+        // returns a hard-coded 0.0 for it, so a DEL with SIM_VAF 0.9 PASSed
+        // coverage_ratio (expected 0.10, observed 0.00) from a region no
+        // query ever read.
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000;SIM_VAF=0.900\tGT\t0/1
+";
+        let path =
+            std::env::temp_dir().join(format!("spike_bad_end_{}.vcf", std::process::id()));
+        std::fs::write(&path, vcf).unwrap();
+        let err = load_truth_events(path.to_str().unwrap())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            err.contains("END"),
+            "a truth record ending before it starts must be refused; got {:?}",
+            err
+        );
     }
 
     #[test]

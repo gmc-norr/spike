@@ -65,6 +65,8 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
+| N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
+| N10 | Medium | **Not fixed** (found by the whole-branch review, recorded). No `validate` check measures a small indel's or an MNV's allele fraction. Now that N9 stops calling them a pass, a truth VCF holding one cannot report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT | `validate.rs:753-762` |
 
 ## High severity
 
@@ -786,6 +788,95 @@ branch introduced, not a pre-existing gap.
 - `test_event_no_check_applies_to_is_not_evaluable` was kept and re-pointed: it
   used an INS to stand for "an event no check covers", which INS no longer is,
   so it now uses `SVTYPE=CNV`. M11's invariant is unchanged and still tested.
+
+
+### N9 · `validate`'s coverage gate is asymmetric in the wrong direction
+
+*Found by the whole-branch review of `review-fixes-2`. The three `pass: true`
+returns are older than this branch, but L15 (`af9d9fa`) is the task that
+installed `not_evaluable` in the three **global** checks and left the 300 lines
+above them untouched, so the branch ends up applying its own stated principle
+two opposite ways inside one file: an INS failed loudly (N8) while an indel
+passed silently.*
+
+`check_allele_freq` is a single-position pileup of A/C/G/T. Three of its
+returns reported `pass: true` for a question it had not asked, and because a
+result row *was* pushed, `results.len() != n_before` and L15's "a check
+applies" gate counted every one of them as **covered**:
+
+- any REF or ALT longer than one base -- every small indel **and every MNV**
+  (`validate.rs:601-609` at `39d9773`);
+- a pileup depth below 5 (`validate.rs:630-639`, comment literally
+  `pass: true, // not enough data`);
+- a non-ACGT alt base (`validate.rs:645-655`).
+
+And `load_truth_events`'s `_ =>` fallback (`validate.rs:397`) routed an
+**unrecognised SVTYPE** (`CNV`, `DEL:ME`) into the same SNP arm, where the
+symbolic ALT `<CNV>` is longer than one base and took the first exit above.
+
+Measured at branch HEAD `39d9773` against a real spiked+merged chr20 BAM
+(`del:chr20:38412500-38422500` + `ins:chr20:39000000:300`, aligned and merged
+with the generated scripts), on a hand-written truth VCF of the four cases:
+
+```
+SNP chr20:39000499-39000501  allele_freq  0.50  N/A (indel)      PASS   (AC>A)
+SNP chr20:39000599-39000601  allele_freq  0.50  N/A (indel)      PASS   (TG>AC)
+SNP chr20:39000699-39000700  allele_freq  0.50  unknown alt...   PASS   (T>N)
+SNP chr20:39099999-39100000  allele_freq  0.50  N/A (indel)      PASS   (<CNV>)
+Result: 7/8 PASS
+```
+
+and on a 1%-subsampled BAM, `A>C` at chr20:38410800 where the pileup depth is
+1: `allele_freq 0.50 / low depth (1) / **PASS**`, `Result: 4/4 PASS`.
+
+**Separately, a truth record whose `END` is at or before its `POS` PASSed a
+coverage ratio taken over a region nothing read.** `count_depth_in_region`
+returns a hard-coded `Ok(0.0)` for `start >= end` (`validate.rs:1083-1085`) and
+`load_truth_events` never validated END. Measured at `39d9773`, same BAM,
+`POS=39200000; END=39199000; SIM_VAF=0.900`:
+`DEL chr20:39200000-39199000  coverage_ratio  expected 0.10  observed 0.00
+**PASS**`.
+
+- **Fixed:** the three returns now go through `event_not_evaluable`, the
+  per-event sibling of L15's `not_evaluable`: the row is still pushed (so the
+  event stays covered by the "a check applies" gate) but `pass` is `false` and
+  a `WARN` names the reason. `load_truth_events` keeps an unrecognised
+  SVTYPE's own type instead of calling it a small variant, so it reaches
+  `check_event`'s `event_checked` failure and a `WARN`. A record with
+  `END <= POS` is refused as the truth VCF is read, naming the record, and the
+  run exits non-zero without grading anything.
+- **Measured after,** same BAM and same files: the four-case truth VCF goes
+  from **7/8 PASS to 3/8 PASS** with all four rows FAIL and the `<CNV>` row now
+  reading `CNV chr20:39100000-39110000  event_checked  none for CNV  FAIL`; the
+  depth-1 case goes from `PASS` to `FAIL` (`4/4` to `3/4`); and the `END<POS`
+  record now stops the run with `truth record badend at chr20:39200000 has
+  END=39199000, at or before its own POS: ...`, **exit 1**, before any check.
+- `count_depth_in_region`'s `Ok(0.0)` for a zero-length region is left as it
+  is: it is also the answer for a legitimately empty *flank* (an event at the
+  very start of a contig), which `check_coverage_ratio` already excludes from
+  the flank average by length. With the load-time refusal above, the *event*
+  region can no longer be zero-length.
+
+### N10 · No `validate` check measures a small indel's or an MNV's allele fraction
+
+*Found by the whole-branch review, and recorded rather than fixed: it is a new
+check, not a correction, and it is the same shape as N8 -- which was fixed in
+this pass because `SVTYPE=INS` is what spike writes for its own `ins:` events.*
+
+N9 stops `check_allele_freq` calling an indel or an MNV a pass. What it does
+not do is measure one. So a truth VCF holding a record from
+`--event "snp:chr20:30000000:ACG:A"` (spike writes it with an explicit
+multi-base REF) now carries a permanent `allele_freq FAIL`, exactly the
+position N8 described for INS. Measured: `AC>A` and `TG>AC` both report
+`N/A (indel or MNV) FAIL` against a BAM that has nothing to do with the
+verdict -- the return is taken before the BAM is opened.
+
+The fix is a real check, and the machinery for it now exists: N8's
+`cigar_shows_insertion_near` already walks a CIGAR for inserted sequence at a
+reference position, and the same walk over `I` and `D` operations of the
+allele's own length, divided by the pileup depth there, is an indel allele
+fraction. An MNV needs the per-base pileup at each differing offset. Neither
+was in scope for this pass.
 
 ## Low severity
 

@@ -480,6 +480,37 @@ events it was given. Which check covers which type:
 | SNP (single-base REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
+**A check that cannot measure its answer is a failed check, at event level as
+well as globally.** `allele_freq` is a single-position pileup of A/C/G/T, so it
+measures a single-base substitution and nothing else. Four cases it cannot
+measure used to report `PASS`:
+
+| Truth record | Observed | Before | Now |
+| --- | --- | --- | --- |
+| `AC` > `A` (a small indel) | `N/A (indel or MNV)` | PASS | FAIL |
+| `TG` > `AC` (an MNV) | `N/A (indel or MNV)` | PASS | FAIL |
+| pileup depth below 5 | `low depth (n)` | PASS | FAIL |
+| alt allele not A/C/G/T | `unknown alt base` | PASS | FAIL |
+
+A result row is still pushed in each case, so the event counts as covered and
+the row says out loud that nothing was measured. **spike has no `allele_freq`
+check for a small indel or an MNV yet**, so a truth VCF holding one (from
+`--event "snp:chr20:30000000:ACG:A"`, say) cannot report all-PASS until one
+exists; a truth VCF of substitutions, SVs and insertions can.
+
+An **unrecognised `SVTYPE`** (`CNV`, `DEL:ME`, …) keeps its own type. It used
+to fall through to the small-variant arm, where a symbolic ALT such as `<CNV>`
+is longer than one base and took the indel exit above — one silent PASS per
+unknown type. It is now reported as `event_checked FAIL`, with a `WARN` naming
+the type.
+
+A truth record whose **`END` is at or before its own `POS`** is refused when
+the truth VCF is read, naming the record; the run exits non-zero without
+grading anything. The event region is empty, `count_depth_in_region` answers a
+zero-length region with `0.0`, and a DEL at `SIM_VAF=0.9` therefore PASSed
+`coverage_ratio` (expected 0.10, observed 0.00) over a region no query had
+read.
+
 `ins_reads` counts reads whose alignment **leaves the reference at POS**: an
 insertion has no second breakpoint and no reference span, so neither
 `coverage_ratio` nor `split_reads` can see it, but an aligner still has to put
