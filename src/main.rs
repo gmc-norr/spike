@@ -1624,6 +1624,23 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_allele_fraction_rejects_negative_zero() {
+        // L8 boundary coverage: `-0.0 > 0.0` is false under IEEE-754, so
+        // `-0.0` was already rejected by both the old and new forms of the
+        // check. Added because the fix brief asked for this exact value to
+        // be pinned, not because it was ever broken.
+        assert!(validate_allele_fraction(-0.0).is_err());
+    }
+
+    #[test]
+    fn test_validate_allele_fraction_rejects_just_above_one() {
+        // L8 boundary coverage: `test_validate_allele_fraction_rejects_above_one`'s
+        // 1.5 exercises the same `<= 1.0` branch as any value clearly over
+        // 1; this pins a value just barely over the boundary instead.
+        assert!(validate_allele_fraction(1.0000001).is_err());
+    }
+
+    #[test]
     fn test_extraction_bounds_keeps_distant_region_and_event_apart() {
         // M8: --region chr20:30490000-30510000 with a fusion partner at 35 Mb
         // used to take the min/max, extracting every read in the 4.5 Mb

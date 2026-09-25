@@ -802,6 +802,25 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_af_rejects_negative_zero() {
+        // L8 boundary coverage: `-0.0 > 0.0` is false under IEEE-754, so
+        // `af=-0.0` was already rejected by both the old and new forms of
+        // the check. Added because the fix brief asked for this exact value
+        // to be pinned, not because it was ever broken.
+        let genes = test_genes();
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-0.0", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_af_rejects_just_above_one() {
+        // L8 boundary coverage: `test_parse_af_invalid`'s af=1.5 exercises
+        // the same `<= 1.0` branch as any value clearly over 1; this pins a
+        // value just barely over the boundary instead.
+        let genes = test_genes();
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.0000001", &genes).is_err());
+    }
+
+    #[test]
     fn test_parse_snp_colon_format() {
         let genes = test_genes();
         let (event, af) = parse_event_spec("snp:chr1:100:A:T", &genes).unwrap();
