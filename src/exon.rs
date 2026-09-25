@@ -278,7 +278,9 @@ fn parse_af_value(value: &str) -> Result<AfSpec> {
                     value
                 )
             })?;
-            if v <= 0.0 || v > 1.0 {
+            // Negated so NaN (for which both `> 0.0` and `<= 1.0` are false)
+            // is rejected rather than silently let through (L8).
+            if !(v > 0.0 && v <= 1.0) {
                 bail!("af must be in (0.0, 1.0], got {}", v);
             }
             Ok(AfSpec::Exact(v))
@@ -776,6 +778,27 @@ mod tests {
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=0.0", &genes).is_err());
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=1.5", &genes).is_err());
         assert!(parse_event_spec("del:GENEA:exon4-exon8;af=abc", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_af_rejects_nan_and_infinities() {
+        // L8: `v <= 0.0 || v > 1.0` lets NaN through (both comparisons are
+        // false for NaN), which then suppresses every read at simulate time
+        // while the truth VCF records SIM_VAF=NaN. inf/-inf already fail the
+        // old check, but are pinned here too so a future rewrite of the
+        // bounds can't reintroduce them silently.
+        let genes = test_genes();
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=nan", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=inf", &genes).is_err());
+        assert!(parse_event_spec("del:GENEA:exon4-exon8;af=-inf", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_af_accepts_upper_boundary() {
+        // L8 boundary: 1.0 itself must stay accepted (af is in `(0.0, 1.0]`).
+        let genes = test_genes();
+        let (_, af) = parse_event_spec("del:GENEA:exon4-exon8;af=1.0", &genes).unwrap();
+        assert_eq!(af, Some(AfSpec::Exact(1.0)));
     }
 
     #[test]

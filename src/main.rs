@@ -183,6 +183,16 @@ fn validate_read_length(read_length: usize) -> Result<()> {
     Ok(())
 }
 
+/// Check `--allele-fraction`: must be in (0.0, 1.0].
+fn validate_allele_fraction(af: f64) -> Result<()> {
+    // Negated so NaN (for which both `> 0.0` and `<= 1.0` are false) is
+    // rejected rather than silently let through (L8).
+    if !(af > 0.0 && af <= 1.0) {
+        bail!("allele-fraction must be in (0.0, 1.0]");
+    }
+    Ok(())
+}
+
 /// Check `--flank`: originals are only suppressed inside the extracted
 /// window (event ± flank), but synthetic reads cover event ± HAP_FLANK.
 fn validate_flank(flank: u64) -> Result<()> {
@@ -294,9 +304,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Validate inputs.
-    if args.allele_fraction <= 0.0 || args.allele_fraction > 1.0 {
-        bail!("allele-fraction must be in (0.0, 1.0]");
-    }
+    validate_allele_fraction(args.allele_fraction)?;
     validate_flank(args.flank)?;
 
     // Create output directory.
@@ -1586,6 +1594,33 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("1501"), "message should cite the read length: {msg}");
         assert!(msg.contains("1500"), "message should cite the max: {msg}");
+    }
+
+    #[test]
+    fn test_validate_allele_fraction_rejects_nan_and_infinities() {
+        // L8: `af <= 0.0 || af > 1.0` lets NaN through (both comparisons are
+        // false for NaN), so `--allele-fraction NaN` used to be accepted,
+        // suppressing every read at simulate time while the truth VCF
+        // recorded SIM_VAF=NaN.
+        assert!(validate_allele_fraction(f64::NAN).is_err());
+        assert!(validate_allele_fraction(f64::INFINITY).is_err());
+        assert!(validate_allele_fraction(f64::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_validate_allele_fraction_rejects_zero() {
+        assert!(validate_allele_fraction(0.0).is_err());
+    }
+
+    #[test]
+    fn test_validate_allele_fraction_accepts_upper_boundary() {
+        // L8 boundary: 1.0 itself must stay accepted (af is in `(0.0, 1.0]`).
+        assert!(validate_allele_fraction(1.0).is_ok());
+    }
+
+    #[test]
+    fn test_validate_allele_fraction_rejects_above_one() {
+        assert!(validate_allele_fraction(1.5).is_err());
     }
 
     #[test]
