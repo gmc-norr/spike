@@ -32,6 +32,27 @@ const PREV_Q_BINS: usize = 4;
 /// Minimum observations in a Markov transition bin before we trust it.
 const MIN_MARKOV_OBS: usize = 30;
 
+/// Fewest donor pairs the quality model needs before its fake reads look like
+/// the sample's own. Measured (N7, HG002 35x): below this the transition bins
+/// after a low-quality base stay under `MIN_MARKOV_OBS`, sampling falls back to
+/// levels with no memory of the previous quality, and low-quality runs come
+/// out too short -- further from the held-out reads than real reads from other
+/// chr20 windows are. Per-cycle mean quality is fine well below it.
+const MIN_PROFILE_PAIRS: usize = 1_000;
+
+/// The warning for a quality profile trained on `pairs` donor pairs with the
+/// bin census `census`, or `None` when there are enough pairs.
+fn thin_profile_warning(pairs: usize, census: &str) -> Option<String> {
+    (pairs < MIN_PROFILE_PAIRS).then(|| {
+        format!(
+            "Quality profile learned from {} donor pairs; below {} its low-quality runs \
+             come out shorter than the sample's (measured on HG002 35x). {}. Widen \
+             --flank or --region for a larger pool.",
+            pairs, MIN_PROFILE_PAIRS, census
+        )
+    })
+}
+
 /// Extra template bases fetched past a read's 3' end when indel errors are on,
 /// so a deletion error is covered by real sequence instead of `N` padding (L1).
 const INDEL_SLACK: usize = 10;
@@ -215,17 +236,23 @@ impl QualityProfile {
             .filter(|bin| bin.len() >= MIN_MARKOV_OBS)
             .count();
 
-        log::info!(
-            "Quality profile: {} pairs, {} cycles. R1 mean Q: start={:.1} mid={:.1} end={:.1}, R2: start={:.1} end={:.1}. \
-             Base-conditioned bins: {}/{} usable. Markov bins: base {}/{}, cycle {}/{} usable",
-            pairs.len(),
-            read_length,
-            r1_mean_start, r1_mean_mid, r1_mean_end,
-            r2_mean_start, r2_mean_end,
+        let census = format!(
+            "Base-conditioned bins: {}/{} usable. Markov bins: base {}/{}, cycle {}/{} usable",
             base_bins_ok, base_bins_total,
             mkv_base_ok, mkv_base_total,
             mkv_cycle_ok, mkv_cycle_total,
         );
+        log::info!(
+            "Quality profile: {} pairs, {} cycles. R1 mean Q: start={:.1} mid={:.1} end={:.1}, R2: start={:.1} end={:.1}. {}",
+            pairs.len(),
+            read_length,
+            r1_mean_start, r1_mean_mid, r1_mean_end,
+            r2_mean_start, r2_mean_end,
+            census,
+        );
+        if let Some(warning) = thin_profile_warning(pairs.len(), &census) {
+            log::warn!("{}", warning);
+        }
 
         Self {
             r1_base_quals: r1_base,
@@ -1969,6 +1996,20 @@ mod tests {
             (frac(&sa) - frac(&sb)).abs(),
             (persist(&sa) - persist(&sb)).abs(),
         ]
+    }
+
+    #[test]
+    fn test_quality_profile_warns_below_the_measured_pool_size() {
+        // Below 1,000 donor pairs the fake reads' low-quality runs come out
+        // too short (N7): the run goes on, but it has to say so, with the
+        // pool size, the size it needs, and the census that shows why.
+        let census = "Markov bins: base 0/4832, cycle 146/1208 usable";
+        let warning = thin_profile_warning(32, census).expect("32 pairs is under the measured size");
+        for part in ["32", "1000", census] {
+            assert!(warning.contains(part), "the warning must name {:?}: {}", part, warning);
+        }
+        assert!(thin_profile_warning(999, census).is_some(), "999 pairs is still under it");
+        assert_eq!(thin_profile_warning(1_000, census), None, "1,000 pairs is enough");
     }
 
     #[test]

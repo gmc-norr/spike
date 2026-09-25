@@ -68,7 +68,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `count_alleles_cram`, `collect_snp_alleles_cram` (`loh.rs`); `count_depth_in_region`, `split_reads_to_partner`, `pileup_region` (`validate.rs`) -- function names, because the line numbers this row first carried have drifted twice |
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured, at every breakpoint side rather than the first only (N12) | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-210, 379-495, 519-521, 573-587` (now) |
 | N6 | Medium | **Fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
-| N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
+| N7 | Medium | **Fixed** (found during the fix run; measured first, see the N7 result). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
 | N10 | Medium | **Fixed, narrowed to complex alleles** (found by the whole-branch review; narrowed by the verification review, which measured that spike *will* plant `TG`>`GTT` and `A`>`CG` on request, so the symptom survives for those). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
@@ -910,6 +910,18 @@ above the other nine. With the second-largest value as T instead (0.263 /
 
 N* is the smallest *tested* size inside the tolerance. The true crossover lies
 somewhere in 501-1,000.
+
+**Fixed (after the result).** `QualityProfile::from_read_pairs` now warns
+when it learned from fewer than `MIN_PROFILE_PAIRS` = 1,000 pairs, naming the
+pool size and the bin census, and the run goes on.
+- `test_quality_profile_warns_below_the_measured_pool_size` failed first
+  against a stub that never warned. It pins 32 and 999 pairs as warning and
+  1,000 as not.
+- The unit test cannot see whether the warning reaches the log, so that was
+  checked end to end on HG002 35x with `snp:chr20:38600002:G:A --seed 1`:
+  `--flank 2000` builds a 625-pair pool and prints the warning (census
+  `Markov bins: base 1200/4832, cycle 445/1208 usable`); the default flank
+  builds 3,032 pairs and prints none.
 
 ### N8 · Any truth VCF holding an INS loses one check to "not evaluable"
 

@@ -1062,6 +1062,25 @@ Every `N` a synthetic read emits is reported at **Q2**, whatever put it there �
 
 The profile is still sampled for an `N` and the result discarded, so the *quality* draw stays one per template base — but an `N` skips the `P(error)` draw a called base makes, so it consumes strictly fewer random numbers than a called base. The stream is not unchanged: two runs that differ only in whether one template base is `N` diverge from that base onwards. (Level 4 above has one further last resort, a fixed Q20 for a cycle past the end of the profile, which makes no draw at all.)
 
+**A pool under 1,000 read pairs gets a warning** (the run still goes on). The
+Markov levels need 30 observations *after a low-quality base* at each cycle,
+and a small pool rarely has that many. Sampling then falls back to the levels
+with no memory of the previous quality, so low-quality bases come out
+scattered instead of in runs. On HG002 35x this was measured against held-out
+reads from the same window, with a tolerance set by how much real reads from
+ten other chr20 windows differ from them. Pools of 30-500 pairs missed
+low-quality persistence by 0.15 against a tolerance of 0.10; at 1,000 pairs
+it was 0.04. Per-cycle mean quality and the share of bases under Q20 were
+already within tolerance from 60 pairs. The warning names the pool size and
+the bin census, for example:
+
+```
+WARN spike::synth] Quality profile learned from 625 donor pairs; below 1000 its low-quality runs come out shorter than the sample's (measured on HG002 35x). Base-conditioned bins: 1208/1208 usable. Markov bins: base 1200/4832, cycle 445/1208 usable. Widen --flank or --region for a larger pool.
+```
+
+That is `snp:chr20:38600002:G:A --flank 2000` on the HG002 35x BAM; the
+default 10 kb flank gives 3,032 pairs and no warning.
+
 Carrying Q2 forward costs the bases *after* an `N` nothing in practice. Measured over 40 seeds at a 1 bp reference gap on chr2 (an `N`-containing read there is 98.3% real sequence), the non-`N` bases of `N`-containing reads average **Q35.621** when the chain carries Q2 and **Q35.615** when it does not — a difference of +0.006 Q against a 0.022 standard error. The reason is that real Illumina Q2 is rare enough (6 of 389,429 donor bases in that window) that the after-Q2 transition bin never reaches the 30-observation threshold, so sampling falls straight through to the non-Markov levels.
 
 ### Too few donor reads
