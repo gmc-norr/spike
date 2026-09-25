@@ -3413,7 +3413,7 @@ the exit status.
 
 | ID | What | Status |
 | --- | --- | --- |
-| T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Plan locked |
+| T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Not started |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Not started |
 | T4 | CR4 on a real hard locus (measurement only) | Not started |
@@ -3513,3 +3513,72 @@ its blind spots -- `SIM_DEPTH_FOLD`'s donor pool holds only reads at `--min-mapq
 (CR2's known limit). A truth VCF hand-edited between the run and the validation is believed.
 That is what "reports the census spike recorded" means, and it is why C6 can be measured by
 editing the field at all.
+
+#### Result: T1 -- supported
+
+Code `d9cf476`. Binaries, each built in its own target dir and md5'd (NF4): base `985e50f`
+md5 `2dd58097…`, T1 `d9cf476` md5 `183dbc65…`. Probes:
+`scripts/t1_probes.py` (C1-C4) and `scripts/slice_loop.sh` (C5, C6).
+
+- **C1 pass.** `lowmap`, `del:chrT:10000-14000;af=1`, truth `SIM_RESIST=0.500`:
+
+  ```
+  DEL chrT:10000-14000 (unknown)      resistant          <=0.100                   0.500           FAIL (advisory)
+  ```
+
+  and `--json`:
+  `"check": "resistant", "expected": "<=0.100", "observed": "0.500", "pass": false, "advisory": true`.
+- **C2 pass.** `variable`, `dup:chrT:10000-28000;af=0.5`, truth `SIM_DEPTH_FOLD=3.88` -- the
+  same 3.88 CR2's C1 measured:
+
+  ```
+  DUP chrT:10000-28000 (unknown)      depth_fold         <=1.50                    3.88            FAIL (advisory)
+  ```
+
+  and `--json`: `"check": "depth_fold", … "observed": "3.88", "pass": false, "advisory": true`.
+- **C3 pass.** `uniform` with each event: `resistant 0.000 PASS (advisory)` and
+  `depth_fold 1.00 PASS (advisory)` in both. A non-advisory row for comparison carries
+  `"advisory": false`.
+- **C4 pass.** The `lowmap` DEL truth VCF with both INFO fields and both header lines stripped:
+  5 rows, neither census row present, no `Advisory:` line, and the whole stdout **byte-identical**
+  between master's binary and T1's (`diff` empty), both exiting 1. The failure message is
+  `4/5 validation checks failed` under **both** binaries on the *unstripped* census VCF too,
+  where T1 prints 7 rows -- the default message counts non-advisory rows only, as locked.
+- **C5 pass.** `del:chr20:1136743-1146743` through `scripts/slice_loop.sh` on the 35x HG002 BAM
+  (a ±100 kb slice). spike exit 0; `spike validate` exit **0** under both binaries. Master's
+  binary on T1's own merged BAM prints `Result: 5/5 PASS`; T1's prints `Result: 7/7 PASS` plus
+  `Advisory: 2 checks, 2 PASS, 0 FAIL (not in the exit status; --strict includes them)`, and with
+  the advisory rows and that line removed the two tables are **identical** (`diff` empty). What
+  spike emits did not move: `R1.fq.gz` (`f534adba…`), `R2.fq.gz` (`cc4e545f…`),
+  `replaced_reads.txt` (`42913b8b…`) and `align.sh` (`4d9b1c63…`) have the same md5 under both
+  binaries, and `truth.vcf` is identical line for line. `merge.sh` differs in one line, its
+  `ORIGINAL=${1:-…}` default naming each run's own slice path -- an input path, not behaviour.
+- **C6 pass.** The same control's truth VCF copied into the scratch dir and its `SIM_RESIST`
+  edited from `0.010` to `0.500` (the only changed line; the original copy is kept beside it):
+
+  | truth | `--strict` | exit | failing row |
+  | --- | --- | --- | --- |
+  | unedited | no | 0 | none (`7/7 PASS`) |
+  | unedited | yes | 0 | none (`7/7 PASS`) |
+  | `SIM_RESIST=0.500` | no | **0** | the advisory `resistant` row prints `FAIL (advisory)`, `6/7 PASS` |
+  | `SIM_RESIST=0.500` | yes | **1** | `1/7 validation checks failed` -- the advisory `resistant` row, and only it |
+
+  The summary line's tail switches to `(in the exit status: --strict)` under `--strict`.
+- **C7 pass.** Every flag line of `BASE-FLAGS.txt` is still printed. `spike --help` is
+  **byte-identical** to master's. `spike validate --help 2>&1` differs by exactly one added
+  line: `  --strict         Count the advisory checks in the exit status`.
+- **C8 pass.** `cargo test`: `491 passed; 0 failed; 1 ignored` (base 476; 15 tests added, none
+  removed). `cargo clippy --all-targets`: `generated 13 warnings` (bin) and
+  `generated 14 warnings` (test), both unchanged, with no `#[allow]` added.
+
+What T1 does **not** establish. Both numbers are read back from the truth VCF, never recomputed
+from the BAM, so the rows report what spike measured at simulation time and inherit its blind
+spots -- `SIM_DEPTH_FOLD`'s donor pool holds only reads at `--min-mapq` or above (CR2's known
+limit), and a truth VCF edited between the run and the validation is believed. C6 is measurable
+at all only because of that. A hard *real* locus where the `resistant` row should fire is T4's
+question, not T1's: every firing above is synthetic or hand-edited.
+
+`.` is treated as **absent**, not malformed: `truth.rs` writes `SIM_RESIST=.` whenever spike has
+no number for an event (`src/truth.rs:807`'s test pins it), so failing on `.` would make spike
+advisory-FAIL its own output. Anything else unparseable is an advisory FAIL quoting what it
+found.
