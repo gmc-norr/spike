@@ -588,19 +588,39 @@ the counting rule that fits its shape, and fails outright when none does:
 | Truth record | Counted as | Observed |
 | --- | --- | --- |
 | `A` > `T` (a substitution) | the alt base against the pileup depth at POS | a fraction |
-| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
-| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length at the junction just past the anchor base (POS+1), within 10 bp, against the reads spanning that junction without one | a fraction |
+| `ACG` > `A` (a small deletion) | reads whose bases over the site are nearer the reference with the deletion made, against reads whose bases are nearer the reference | a fraction |
+| `A` > `ACCGG` (a small insertion) | reads whose bases over the site are nearer the reference with the insertion made, against reads whose bases are nearer the reference | a fraction |
 | `AT` > `GC` (an MNV) | reads whose bases are the *whole* alt run, against reads whose bases are the whole ref run | a fraction |
 | `AC` > `GTT` (a complex allele) | nothing -- no single operation or allele run to count | `N/A (complex allele)` FAIL |
 | depth below 5 | nothing | `low depth (n)` FAIL |
 | an allele that is not A/C/G/T | nothing | `unknown alt base` / `unknown allele base` FAIL |
 
-An indel is read off the CIGAR rather than the pileup, because an indel is not
-a column in one: the reads that carry it are the ones whose alignment leaves
-the reference at the junction just past the anchor base, with an operation of
-the allele's own length and within 10 bp of POS -- an aligner left-aligns an
-indel to the start of the repeat it sits in, so it may place the operation a
-few bases away. An MNV's bases are read **jointly**, one read at a time: a
+An indel is read from each read's own bases rather than the pileup, because
+an indel is not a column in one. `validate` writes out short sequences over the
+site, from 10 bp before the indel's repeat region to 10 bp past it (below): the
+reference with the truth record's edit made, and without it. It takes the bases
+a read shows between those two ends, inserted bases included, and counts the
+single-base edits that turn them into each sequence (the Levenshtein distance).
+A read nearer a sequence with the edit carries the allele, a read nearer one
+without it spans it, and a read equally near both kinds does not vote. So it
+does not matter where the aligner put the gap: along a repeat it may write one
+deletion anywhere, and the read's bases are the same wherever it goes. A gap of
+the same size somewhere else is not taken for the truth's either: outside a
+repeat it removes other bases, and three or more bases off it is nearer the
+reference.
+
+**Other truth records near the indel go into those sequences too.** A truth
+set often writes one local change as several records a few bases apart, and
+the reads carry the whole change: `ACG` > `A` next to `T` > `TCG` is `CGT`
+become `TCG`, which an aligner writes as three mismatches. Against the
+reference plus one of the two records, such a read is two edits from each, so
+it could not vote. So every other record in the truth VCF whose REF lies
+inside the stretch is a candidate. The sequences are the reference with every
+combination of the site and the candidates applied (never two that overlap),
+and the read's own bases pick the nearest. No genotype is needed, so an
+unphased truth set works. With more than 10 candidates the site is compared
+with its own record alone. A record is only seen if it is in the truth VCF
+`validate` is given. An MNV's bases are read **jointly**, one read at a time: a
 fraction per base would answer a different question at each offset, and a read
 carrying only one of the two substitutions is not this variant.
 
@@ -611,14 +631,11 @@ pairs. On HG002 at 35x (fragments 418 ± 178 bp, 151 bp reads) mates overlap
 often enough that counting them twice changed the fraction at 75% of 1,959
 real het sites.
 
-That 10 bp window is what decides an indel read's vote on its own: an operation
-of the allele's kind and length inside it *is* the junction, so the read
-carries the allele however far its own deletion has drifted from POS. The two
-reference bases either side of the REF allele are only asked about for the
-other verdict -- they separate "spans this junction without the indel" from
-"never reached it". A read that carries neither allele whole -- clipped across
-the junction, or carrying a *different* indel there -- is evidence for neither
-and enters neither count.
+Unless the truth VCF lists it, the rule cannot tell a *different* insertion
+of the same size at the same place from the truth's: it is as many edits from
+the edited sequence as from the reference, or fewer, so it counts as carrying
+or not at all, never as spanning. When the other allele is a truth record of
+its own, its reads are nearest it and count as spanning.
 
 **Only reads that reach well past an indel vote on it, either way.** Near
 its end a read's indel is written as mismatches or a clip rather than a gap,
@@ -626,9 +643,10 @@ and a read that stops inside the repeat the indel sits in cannot show an
 extra or missing unit at all. Either way it aligns as the reference, whatever
 it carries. So `validate` first finds the indel's repeat region: the deleted
 or inserted unit, extended along the reference for as long as it repeats. A
-read then votes only if its alignment, clips excluded, covers the base on each
-side of that region and 10 more beyond it. The test is the same for a carrier
-and for a reference read.
+read then votes only if it has a base aligned to the reference at each end of
+the stretch above -- the base on each side of that region, and 10 more beyond
+it. A read that stops short, or has a gap or a clip there, enters neither
+count. The test is the same for a carrier and for a reference read.
 
 Measured on HG002 35x, graded against GIAB het indels at 0.5:
 
@@ -638,6 +656,17 @@ Measured on HG002 35x, graded against GIAB het indels at 0.5:
 | chr20: mean fraction | 0.41 | 0.48 |
 | chr21 + chr22 (8,008 indels, not used to choose 10): out of range | 9.3% | 4.1% |
 | fragments kept | | 81% |
+
+Comparing each read with every combination of the truth records near an
+indel (above) was then measured the same way, on chromosomes not used to
+design it (chr17-chr19, 25,903 het indels, with GIAB's other records within
+500 bp in the truth file):
+
+| out of range | before | after |
+| --- | --- | --- |
+| indels with another GIAB record within 25 bp (4,482) | 17.6% | 8.7% |
+| isolated indels (21,421) | 1.4% | 1.4% |
+| all | 4.2% | 2.6% |
 
 SNVs fail at about 0.6-0.8% on the same BAM.
 
