@@ -1500,6 +1500,15 @@ untouched BAM.
 Reported but not criteria: how the fractions shift, verdict flips, and the
 unit tests that failed first.
 
+**Amendment (before any result and before the rule's code; only the debug-log
+commit came first).** The counts above came from a
+genotype filter that knew `0/1` but not `1/0`. The plan's own definition,
+"het", includes both. Building the site list with `bcftools view -f PASS -g
+het -m2 -M2 -v indels` gives **6,663** sites (6,641 `0/1`, 22 `1/0`). Over
+those sites, the same subset rules give **36 neighbour** and **5,571
+isolated** sites. The rules and criteria are unchanged; only these counts
+move.
+
 ### N16 · One depth floor, three different denominators
 
 *Found by the verification review. **Not fixed**.*
