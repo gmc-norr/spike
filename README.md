@@ -675,6 +675,8 @@ A segment whose flank runs off the end of a contig is truncated to what the refe
 
 spike generates fixed-length paired-end reads and needs a fragment at least as long as one read; it caps the fragment lengths it draws at 1500bp, so it does not support long-read (PacBio/ONT) libraries. If the input BAM/CRAM's mean read length exceeds 1500bp, spike exits with an error before doing any work rather than generating reads that don't match the library.
 
+For the same reason spike needs a **paired-end** library: every donor read comes from an extracted pair, and the quality profile is trained on R1 and R2 separately. A single-end BAM/CRAM yields no donor material, so spike exits with an error naming the file rather than emitting a handful of synthetic pairs built on an empty quality profile. Single-end is detected from SAM flag `0x1`, which a paired library sets on every read whether or not the pair aligned properly — a paired BAM with no proper pairs in it is still accepted, and falls back to a 350 ± 50 bp insert size. The statistics scan that decides this stops after the first 50,000 primary records once it has established the library is single-end, instead of reading the file to the end.
+
 ### Deletion (DEL)
 
 **Haplotype structure** (2 segments):
