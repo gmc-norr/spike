@@ -1292,6 +1292,36 @@ mod tests {
         encoder.finish().unwrap();
     }
 
+    /// Fail, by name, when the test's external dependency is missing.
+    ///
+    /// "Resolvable" here means what it means to the production path: that
+    /// `Command::new("bcftools")` can spawn. `load_snps_from_gvcf` hands the
+    /// bare name to the OS, which searches PATH itself, so spawning it is the
+    /// only probe that cannot disagree with the real call -- a hand-rolled
+    /// PATH walk can (a non-executable file of that name, a directory, a
+    /// dangling symlink). The exit status says nothing about presence and is
+    /// ignored; production likewise treats a spawn that succeeded as "present"
+    /// and reports a bad status as its own, separate error.
+    ///
+    /// This diagnoses, it does not tolerate: a missing test dependency is a
+    /// broken environment, so the test still fails. Only the message changes,
+    /// so the reader installs bcftools instead of hunting a logic bug.
+    fn require_bcftools() {
+        let spawned = std::process::Command::new("bcftools")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok();
+        assert!(
+            spawned,
+            "this test requires bcftools on PATH: it reads a .vcf.gz, which \
+             load_snps_from_gvcf queries with `bcftools view`. Without bcftools \
+             the read fails at the spawn and never reaches the behaviour under \
+             test. Install bcftools and re-run."
+        );
+    }
+
     #[test]
     fn test_a_gvcf_naming_the_chromosome_warns_about_nothing() {
         // A region with no SNPs in it is normal: only the names decide.
@@ -1425,6 +1455,9 @@ mod tests {
 
     #[test]
     fn test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup() {
+        // Without bcftools the read fails at the spawn, before the warning
+        // this test is about: say so rather than report an empty vector.
+        require_bcftools();
         capture::install();
         let dir = test_dir("loh_read_error_renamed");
         let path = dir.join("renamed_unindexed.vcf.gz");

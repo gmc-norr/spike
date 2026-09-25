@@ -2715,7 +2715,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
-| CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, not fixed |
+| CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, fixed |
 
 Statuses are updated as each fix lands.
 
@@ -2935,3 +2935,46 @@ failure is
 `loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup`
 (`src/loh.rs:1435`), and its message is `assertion left == right failed: []` -- it never
 mentions `bcftools`.
+
+**Fixed.** The test now asks first whether `bcftools` is resolvable, and says so when it is
+not. "Resolvable" is decided the way `load_snps_from_gvcf` decides it: the bare name is handed
+to `Command::new`, and the OS searches PATH -- so the probe spawns `bcftools --version` and
+asks only whether the *spawn* succeeded. A hand-rolled PATH walk could disagree with the real
+call (a non-executable file of that name, a directory, a dangling symlink); the exit status
+says nothing about presence and is ignored. The check is on the tool, not on the assertion:
+keying it on "the warnings vector was empty" would have fired for a genuine regression too and
+hidden a real bug behind an environment message.
+
+This diagnoses; it does not tolerate. The test is **not** skipped and **not** `#[ignore]`d, no
+assertion is weakened, and all three of the original assertions still run unchanged when
+`bcftools` is present. With `bcftools` off PATH the suite is still `447 passed; 1 failed;
+1 ignored` -- the same one test, with a message that names the tool:
+
+```
+thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1316:9:
+this test requires bcftools on PATH: it reads a .vcf.gz, which load_snps_from_gvcf queries with `bcftools view`. Without bcftools the read fails at the spawn and never reaches the behaviour under test. Install bcftools and re-run.
+```
+
+With `bcftools` present the suite is unchanged, `448 passed; 0 failed; 1 ignored`, before and
+after.
+
+**Two mutations, both measured.** Making the probe always report `bcftools` present (spawning
+`true` instead) reverts the failure to the old `assertion left == right failed: []` -- the
+diagnostic is what produces the new message. Conversely, with `bcftools` present, making the
+test's gVCF name the chromosome `chr20` so no rename warning is emitted -- a stand-in for a
+genuine regression -- still fails with `assertion left == right failed: []`, not with the
+bcftools message: the environment check does not mask real bugs.
+
+**The other tests.** `bcftools` is the only external binary the suite needs. Measured with
+`samtools`, `bcftools`, `bwa-mem2`, `bgzip` and `tabix` all off PATH: `447 passed; 1 failed;
+1 ignored`, the one failure being this test. The generated-script tests in `main.rs` run
+`bash`, but write their own stub `samtools` and stub aligner onto the script's PATH.
+`README.md` now states the test-time tools under `### Test-time prerequisites`.
+
+One test does depend on `bcftools` without failing when it is absent, and is left alone
+deliberately: `loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped` (`src/loh.rs:1444`)
+reads the same kind of `.vcf.gz` and asserts the error says `LOH is skipped for this region`
+and not `Falling back to pileup`. Without `bcftools` the spawn failure's own context string
+satisfies both assertions, so the test passes over the wrong code path -- the intended one is
+`bcftools exited with status ...`. Giving it the same diagnostic would make it fail too and
+take the suite to `446 passed; 2 failed`, so it is recorded here rather than changed.
