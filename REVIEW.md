@@ -19,11 +19,11 @@ and is never edited. The two right columns were added later (bookkeeping fix,
 commits — measure both at the row's own command, not by scaling the "At
 review" figure.
 
-| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `a368a98`) |
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` @ `a8c7053`, the whole-branch fix pass) |
 | --- | --- | --- | --- |
-| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | not re-measured |
-| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **383** passed, 0 failed |
-| `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run held the line here |
+| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | OK, **1** warning (unused `is_within_single_segment` in `haplotype.rs`) |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **392** passed, 0 failed |
+| `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run and in the whole-branch pass held the line here |
 | `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
 The tests pass, but most would still pass with the high-severity bugs below. See [Test gaps](#test-gaps).
@@ -33,7 +33,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | ID | Severity | Problem | Where |
 | --- | --- | --- | --- |
 | H1 | High | **Fixed.** Nearby events undo each other's read suppression | `main.rs:431-437`, `main.rs:517-530` |
-| H2 | High | **Fixed.** Exon numbers ignore strand | `exon.rs:99-103` |
+| H2 | High | **Fixed.** Exon numbers ignore strand | `exon.rs:93-103` at `master@f5428ce`; the numbering is now `number_exons`, `exon.rs:144-192` |
 | H3 | High | **Fixed.** BND orientation misread from VCF input | `vcf_input.rs:325-327` |
 | H4 | High | **Fixed.** Inverted fusion simulated ~flank bp from truth position | `haplotype.rs:337-341`, `truth.rs:127-131` |
 | H5 | High | **Fixed.** Fusion / junction-DUP get 2× junction reads | `simulate.rs:337-341` |
@@ -60,7 +60,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | L1–L19 | Low | Parsing edge cases, robustness, minor I/O | see [Low](#low-severity) for which are fixed |
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
-| N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
+| N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `count_alleles_cram`, `collect_snp_alleles_cram` (`loh.rs`); `count_depth_in_region`, `split_reads_to_partner`, `pileup_region` (`validate.rs`) -- function names, because the line numbers this row first carried have drifted twice |
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-220, 418-420, 461-486` (now) |
 | N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
@@ -83,7 +83,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 
 ### H2 · Exon numbers ignore strand
 
-`exon.rs:99-103` numbers exons 1..n by genomic start. The BED has no strand column, and the exon number in the name (`TP53_exon1`) is ignored. Duplicate transcript lines also shift the numbering. Fusion breakpoints (`exon.rs:392-397`) always take gene A's genomic-left side.
+`exon.rs:99-103` numbers exons 1..n by genomic start. (That range is `master@f5428ce`'s. **Do not follow it into the current tree:** `exon.rs:99-103` there is L14's gene-symbol fix, an unrelated change this document cites separately under L14. The numbering now lives in `number_exons`, `exon.rs:144-192`.) The BED has no strand column, and the exon number in the name (`TP53_exon1`) is ignored. Duplicate transcript lines also shift the numbering. Fusion breakpoints (`exon.rs:392-397`) always take gene A's genomic-left side.
 
 - With a TP53 BED (minus strand), `del:TP53:exon1-exon1` resolves to `TP53_exon11` (7669608-7669690).
 - README examples on minus-strand genes all hit the wrong exons: `dup:BRCA1:exon2-exon5`, `inv:TP53:exon3-exon6`, EML4-ALK (ALK).
@@ -444,11 +444,16 @@ defect in the `spike validate` subcommand.
 ### N4 · The same five CRAM query sites read another contig's records
 
 *Found while fixing L2, which names `extract.rs` only; those two loops are
-fixed. `loh.rs:656` (`count_alleles_cram`), `loh.rs:1056`
-(`collect_snp_alleles_cram`), `validate.rs:712` (`count_depth_in_region`),
-`validate.rs:823` (`split_reads_to_partner`) and `validate.rs:948`
-(`pileup_region`) iterate a CRAM `Query` the same way and had the same hole.
-They are the same five sites N3 covers.*
+fixed. `count_alleles_cram` and `collect_snp_alleles_cram` in `loh.rs`, and
+`count_depth_in_region`, `split_reads_to_partner` and `pileup_region` in
+`validate.rs`, iterate a CRAM `Query` the same way and had the same hole.
+They are the same five sites N3 covers. (The line numbers this row first
+carried -- `loh.rs:656, 1056`; `validate.rs:712, 823, 948` -- were right when
+it was written and are not any more: at `39d9773` `validate.rs:712` is
+`&mut self,`. **Follow the function names, not the numbers.** At this commit
+the five are `loh.rs:673, 1087` and `validate.rs:1318, 1439, 1682`; L15 added
+a sixth guarded site, `sample_region` at `validate.rs:1045`, and N8 a seventh,
+`reads_with_inserted_sequence` at `validate.rs:1532`.)*
 
 This is worse than L2 rather than a milder copy of it. L2 diluted the donor
 pool; these decide the **truth set**. `loh.rs`'s two passes call the
@@ -928,7 +933,7 @@ string.
 | L2 | **Fixed.** CRAM containers with several contigs leak other contigs' reads (synthetic 2-contig CRAM: 5 chrB pairs labelled chrA) | `extract.rs:245-279, 319-362` | Skip records whose ref id or mate ref id differs (the same hole at `loh.rs`/`validate.rs` is tracked as N4) |
 | L3 | **Fixed.** bgzipped FASTA read as raw bytes; fails later with misleading "beyond chromosome length" (reproduced: real 791 MB bgzipped GRCh38 loaded as a 0-byte chromosome, then `DEL event start on chr20 is at or beyond chromosome length (38412500 >= 0)`) | `reference.rs:33-35` | Used `fasta::io::indexed_reader::Builder`, which picks a bgzf- or plain-file reader by extension; a missing `.gzi` now fails at open with a message naming the `.gzi` index instead of surfacing downstream as chromosome length. **Fixed** that way: same command against the same file now loads chr20 at 61 MB; the truth VCF matches the run against the uncompressed FASTA apart from the `##reference=` path line (`truth.rs:75`), and the FASTQ pair's decompressed content (`zcat \| md5sum`, the correct comparison for a `.gz` pair) matches exactly. See Fix pass 1 below: the detection was extension-only and so still missed a bgzip file under a non-`.gz`/`.bgz` name. |
 | L4 | **Fixed.** Final FASTQ flush error ignored (write to `/dev/full` returned `Ok`). Reproduces when the whole gzip output is small enough to sit unflushed inside the `BufWriter`'s own buffer after `finish()` — under 8 KiB by default (measured: a single-pair `write_paired_fastq` call with `R1.fq.gz` symlinked to `/dev/full` returned `Ok(...)`). A large event-scale run (3862-pair `del:chr20:38412500-38422500`, HG002 chr20 slice, `--seed 1`) already failed correctly before this fix, because the loop's own writes overflow that buffer first and hit `/dev/full` mid-stream — but plenty of real spike runs are small enough to stay under that buffer: a single small SNP or short DEL with low local coverage, a tight `--region`, or a demo-scale run. This fix's window tracks the buffer size, not run size in general, so it still covers those. See Fix pass 1 below | `fastq.rs:97-124` | `.finish()?.flush()` on both streams, computed unconditionally so R1 failing first can't leave `r2_gz` to be dropped unfinished and discard its own error the same way — now returns `Err("No space left on device (os error 28)")` for the single-pair case above, and names both streams when both fail |
-| L5 | **Fixed.** Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103` (now ~110 after the task 10 rewrite); callers `simulate.rs:413` (now 500), `synth.rs:534` (now 594) | Guard min ≤ max |
+| L5 | **Fixed.** Panic when mean read length > 1500 (`clamp` with min > max) | `stats.rs:103` (now ~110 after the task 10 rewrite); callers `tile_haplotype_reads` (`simulate.rs:557` at this commit, `413` when the row was written) and `generate_depth_pair` (`synth.rs:616` at this commit, `534` then) | Guard min ≤ max |
 | L6 | **Fixed.** BND POS is one base past the kept base, vs spec; parser mirrors it so round trips agree | `truth.rs:121`, `vcf_input.rs:103` | Write POS = last kept base |
 | L7 | **Fixed.** DEL/DUP/INV with no END and no SVLEN silently becomes a 1 bp event | `vcf_input.rs:130-132, 148-150, 165-167` (shared via `resolve_sv_end_or_warn`) | Derive the span from the alleles only where they give one unambiguously: a multi-base `REF` whose `ALT` is symbolic or the anchor base alone (`REF=ACGT ALT=A`), or — for DUP — a single-base `REF` anchor whose `ALT` is anchor + duplicated copy (the sequence-resolved INS form). Anything else is rejected with a `log::warn!` (stderr) naming type and `chrom:pos`, instead of guessing 1 bp. Measured on real data (HG002 chr20 slice, `--seed 1`), with the ba50bf8 binary vs. the fix: (a) `POS=38412500 REF=GTTAAAGTTTATCAGAAAATT ALT=GTTAAAG SVTYPE=DEL` (a 14 bp deletion at 38412507-38412520) wrote truth `END=38412520;SVLEN=-20` at `POS=38412500` — 20 bp starting 6 bases too early, exit 0 — and is now skipped with a warning (exit 1, no truth record); (b) `REF`=that 21 bp span, `ALT`=its reverse complement, `SVTYPE=INV` wrote `END=38412520;SVLEN=20` (20 bp at 38412501-38412520, one base short and one right of the true 21 bp span) and is now skipped the same way; (c) the well-formed `POS=38412499 REF=T ALT=T+21 bp SVTYPE=DUP` went from skipped ("single-base REF (no length information)" — false: the length is in ALT) to `POS=38412499;END=38412520;SVLEN=21`, the 21 duplicated bases 38412500-38412520 matching ALT exactly and round-tripping unchanged when the truth VCF is fed back in. The REF-only path for `REF=21 bp ALT=G` is unchanged (`END=38412520;SVLEN=-20`). Stripping a shared REF/ALT prefix, which would let (a) be decoded rather than skipped, was left to L10 and is now done there: (a) and the equal-length INV decode, and the only L7 shape L10 narrowed is a DUP whose single-base REF is not ALT's first base (`REF=T ALT=GGGT`), which no longer takes `ALT[1..]` as the copy but is rejected with the same warning |
 | L8 | **Fixed.** `af=nan` / `--allele-fraction NaN` was accepted — `v <= 0.0 \|\| v > 1.0` is false on both sides for NaN — reaching simulate as `vaf=NaN` and landing in the truth VCF as `SIM_VAF=NaN`. Both entry points now use the negated form, which also correctly keeps rejecting `inf`/`-inf` (already did) and `0.0`, and keeps accepting `1.0`. The VCF-input path (`vcf_input.rs::extract_af`) already used the negated form (`v > 0.0 && v <= 1.0`) and needed no change — feeding it `SIM_VAF=nan` falls through to the next INFO key, then to the CLI default, never to NaN; verified below. **Fix pass 2, correcting fix pass 1's note:** "only reads inside the event window were suppressed... not the whole read pool" was right that the pool is bounded but wrong about the mechanism inside it. `copy_rate()` (`synth.rs:794-799`) is `Some(true) -> (2·vaf).min(1.0)`, `Some(false) -> (2·vaf-1.0).max(0.0)`, `None -> vaf`; Rust's NaN-propagating `min`/`max` resolve those first two to a fixed `1.0` and `0.0` for any NaN vaf, and `x < NaN` is always `false`. So within the replaceable pool (pairs entirely inside the haplotype footprint; pairs outside it are untouched at *any* af, valid or not), NaN suppresses event-copy pairs at a hardcoded 100%, and *never* suppresses other-copy or unphased pairs — instead of the ~vaf rate a valid af gives them. Measured, pre-fix binary (built from `1a10346`), `del:chr20:38412500-38422500`, seed 1, chr20 slice BAM: of the 1,971 replaceable pairs (276 event-copy + 265 other-copy + 1,430 unphased) inside the 4,559-pair pool, af=NaN suppressed 276/276 event-copy (100%), 0/265 other-copy (0%), 0/1,430 unphased (0%) = 276 total — matching the earlier note's count, but for the wrong reason (a deterministic per-copy split, not a proportional window rate). A real af=0.7 on the identical pool/seed suppressed 276/276 event-copy (100% — this branch isn't actually wrong at af ≥ 0.5), 113/265 other-copy (42.6%, vs. NaN's 0%), 1,003/1,430 unphased (70.1%, vs. NaN's 0%) = 1,392 total. (af=0.5 alone can't show the other-copy gap: `max(0, 2·0.5−1) = 0` too, a boundary coincidence that also reproduces 276 total for an unrelated reason — af=0.7 was added to break it.) So the unphased majority — 1,430 of 1,971 replaceable pairs, 72.6% — was the largest group silently getting zero suppression instead of a valid af's rate, not a smaller but still-proportional slice of the window. | `exon.rs:281` (`parse_af_value`), `main.rs:297` (extracted into `validate_allele_fraction`, matching the `validate_flank`/`validate_read_length` pattern already in `main.rs`) | `if !(v > 0.0 && v <= 1.0)` |
@@ -1257,8 +1262,11 @@ max`, every one of the 1000 attempts fails by construction, and the fallback's
 `.clamp()` panics with Rust's own "min > max" assertion. The line numbers in
 the REVIEW.md row above are stale: `synth.rs` was rewritten by task 10
 (commits `e69af5d` + `3a782cb`) after this row was written; the defect and its
-fix are unchanged, only the surrounding code moved (`sample_in_range` is now
-called from `synth.rs:594`, inside `generate_depth_pair`, not `synth.rs:534`).
+fix are unchanged, only the surrounding code moved. The correction was itself
+stale by the end of the run: `synth.rs:594` is `ref_end:` inside
+`generate_pair_from_sequence`, and the `sample_in_range` call is
+`synth.rs:616`, still inside `generate_depth_pair`. **Follow the function
+name.**
 
 **Decision**: fail loudly, don't silently clamp. A long-read library can't
 produce the fixed-length paired-end reads this tool generates at all — there
