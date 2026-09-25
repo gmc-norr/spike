@@ -477,26 +477,38 @@ events it was given. Which check covers which type:
 | DEL, DUP | `coverage_ratio`, `split_reads` |
 | INV, BND | `split_reads` |
 | INS | `ins_reads` |
-| SNP (single-base REF and ALT) | `allele_freq` |
+| SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
 **A check that cannot measure its answer is a failed check, at event level as
-well as globally.** `allele_freq` is a single-position pileup of A/C/G/T, so it
-measures a single-base substitution and nothing else. Four cases it cannot
-measure used to report `PASS`:
+well as globally.** `allele_freq` reads a truth record's REF/ALT pair, picks
+the counting rule that fits its shape, and fails outright when none does:
 
-| Truth record | Observed | Before | Now |
-| --- | --- | --- | --- |
-| `AC` > `A` (a small indel) | `N/A (indel or MNV)` | PASS | FAIL |
-| `TG` > `AC` (an MNV) | `N/A (indel or MNV)` | PASS | FAIL |
-| pileup depth below 5 | `low depth (n)` | PASS | FAIL |
-| alt allele not A/C/G/T | `unknown alt base` | PASS | FAIL |
+| Truth record | Counted as | Observed |
+| --- | --- | --- |
+| `A` > `T` (a substitution) | the alt base against the pileup depth at POS | a fraction |
+| `ACG` > `A` (a small deletion) | reads with a `D` operation of the deleted length at POS, against the reads spanning that junction without one | a fraction |
+| `A` > `ACCGG` (a small insertion) | reads with an `I` operation of the inserted length at POS, against the reads spanning that junction without one | a fraction |
+| `AT` > `GC` (an MNV) | reads whose bases are the *whole* alt run, against reads whose bases are the whole ref run | a fraction |
+| `AC` > `GTT` (a complex allele) | nothing -- no single operation or allele run to count | `N/A (complex allele)` FAIL |
+| depth below 5 | nothing | `low depth (n)` FAIL |
+| an allele that is not A/C/G/T | nothing | `unknown alt base` / `unknown allele base` FAIL |
 
-A result row is still pushed in each case, so the event counts as covered and
-the row says out loud that nothing was measured. **spike has no `allele_freq`
-check for a small indel or an MNV yet**, so a truth VCF holding one (from
-`--event "snp:chr20:30000000:ACG:A"`, say) cannot report all-PASS until one
-exists; a truth VCF of substitutions, SVs and insertions can.
+An indel is read off the CIGAR rather than the pileup, because an indel is not
+a column in one: the reads that carry it are the ones whose alignment leaves
+the reference at the junction just past the anchor base, with an operation of
+the allele's own length and within 10 bp of POS -- an aligner left-aligns an
+indel to the start of the repeat it sits in, so it may place the operation a
+few bases away. An MNV's bases are read **jointly**, one read at a time: a
+fraction per base would answer a different question at each offset, and a read
+carrying only one of the two substitutions is not this variant. A read that
+carries neither allele whole -- clipped across the junction, or carrying a
+different indel there -- is evidence for neither and enters neither count.
+
+The three rows that measure nothing still push a result row, so the event
+counts as covered, and the row says out loud that nothing was measured. Only a
+**complex** allele -- one that changes length *and* rewrites the anchor base,
+such as `AC` > `GTT` or `A` > `CG` -- is left unmeasured.
 
 An **unrecognised `SVTYPE`** (`CNV`, `DEL:ME`, …) keeps its own type. It used
 to fall through to the small-variant arm, where a symbolic ALT such as `<CNV>`
@@ -522,6 +534,16 @@ two such reads (the same threshold `split_reads` uses: one clipped read is
 background anywhere, two at the same point are not). An INS record with no
 usable `SVLEN` has no length to look for and is a failed check.
 
+A **soft clip only counts once the insertion is 50 bp or longer** -- the same
+cap `min(SVLEN, 50)` applies. A read that anchors both sides of a short
+insertion writes an `I` operation, so below the cap a clip is background.
+Measured on the merged HG002 chr20 slice, a truth record of
+`SVTYPE=INS;SVLEN=3` at five positions where nothing was planted found **1, 3,
+0, 0 and 1** clipped reads, and 3 is over the two-read pass mark -- one of the
+five PASSed on an insertion that was never there. Counting only `I` operations
+below the cap, the same five positions give **0, 0, 0, 0, 0**, while genuinely
+planted 3 bp and 12 bp insertions still find 12 reads each and PASS.
+
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
 and merged with `merge.sh`: **21** reads carry the planted 300 bp insertion at
 chr20:39000000, against **0, 0, 0, 0 and 1** at five control positions in the
@@ -529,6 +551,19 @@ same BAM where nothing was planted. Before this check existed, spike's own
 round trip could not succeed for insertions -- the same run scored `5/6 PASS`
 and exited **1** on the `event_checked` row, and now scores `6/6 PASS` and
 exits 0.
+
+The same round trip works for small indels and MNVs. A run of
+`snp:chr20:39000000:TGG:T` (a 2 bp deletion), `snp:chr20:39100000:T:TCCGG` (a
+4 bp insertion) and `snp:chr20:39200000:AT:GC` (an MNV) on the same slice,
+aligned and merged the same way, scored **3/6 PASS and exited 1** with all
+three rows reading `N/A (indel or MNV)` -- a verdict reached before the BAM was
+opened -- and now scores **6/6 PASS, exit 0** at 0.40, 0.41 and 0.46 against a
+`SIM_VAF` of 0.50. The reads behind those fractions are **17, 19 and 13**
+carrying the variant at the three planted sites, against **0, 0, 0, 0 and 0**
+for each of them at five positions where nothing was planted (38600000,
+38900000, 39500000, 39750000, 40100000), where all fifteen checks read 0.00 and
+FAIL. The same three truth records against the **unspiked** BAM read 0.00, 0.00
+and 0.00 and all FAIL.
 
 ### Controlling the read extraction region
 
@@ -1049,6 +1084,18 @@ invented pairs and a truth VCF beside them and exit **0**.
 
 A breakpoint with no donor coverage is now refused the same way a starved pool
 is: the run exits non-zero and writes nothing.
+
+**The refusal measures the first breakpoint only, and that is a known gap**
+(REVIEW.md N12). A junction has two sides and a haplotype can have several;
+only the side the *first* breakpoint maps back to is ever looked at. The same
+fusion is therefore refused or accepted depending on which partner is named
+first: with `GENEA` covered and `GENEB` in an uncovered region,
+`fusion:GENEB:exon1:GENEA:exon2` exits 1 while `fusion:GENEA:exon1:GENEB:exon2`
+plants 15 synthetic reads across the uncovered junction and exits 0. A DEL
+whose distal breakpoint falls outside the covered window
+(`del:chr20:41490000-41600000` on a BAM whose reads stop at 41,500,000) is
+accepted the same way. Check that **every** side of every breakpoint lies in a
+covered region; spike does not yet do it for you.
 
 ```
 Error: event chr20:30000000-30010000 has no donor coverage at its first breakpoint

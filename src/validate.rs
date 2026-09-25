@@ -291,8 +291,12 @@ fn print_usage() {
     eprintln!("  DEL, DUP         coverage_ratio, split_reads");
     eprintln!("  INV, BND         split_reads");
     eprintln!("  INS              ins_reads (reads whose alignment leaves the");
-    eprintln!("                   reference at POS -- an I operation or a soft clip)");
-    eprintln!("  SNP (1 bp)       allele_freq");
+    eprintln!("                   reference at POS -- an I operation, or a soft clip");
+    eprintln!("                   once the insertion is 50 bp or longer)");
+    eprintln!("  SNP, small indel allele_freq (a substitution from the pileup; a small");
+    eprintln!("  and MNV          indel from an I/D operation of its own length at POS");
+    eprintln!("                   against the reads spanning it without one; an MNV");
+    eprintln!("                   from the whole alt run, read by read)");
     eprintln!("  every event      insert_size, dup_rate, mean_mapq, over the whole sample");
     eprintln!();
     eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
@@ -671,6 +675,13 @@ fn check_split_reads(
     })
 }
 
+/// Longest clip an insertion of any size is required to produce. A read is at
+/// most a few hundred bases, so a 1 kb insertion still only clips part of one;
+/// past this the threshold would reject the event's own reads. It is also the
+/// length at which a soft clip starts counting as evidence at all: see
+/// [`cigar_shows_insertion_near`].
+const INS_MAX_EVIDENCE_LEN: u64 = 50;
+
 /// Check that reads at an INS breakpoint carry the inserted sequence.
 ///
 /// An insertion has no second reference breakpoint and no reference span, so
@@ -692,18 +703,13 @@ fn check_ins_reads(
     // places the boundary within a few bases of the insertion point; 100 bp
     // covers that without reaching the next feature.
     const PAD: u64 = 100;
-    // Longest clip an insertion of any size is required to produce. A read is
-    // at most a few hundred bases, so a 1 kb insertion still only clips part
-    // of one; past this the threshold would reject the event's own reads.
-    const MAX_EVIDENCE_LEN: u64 = 50;
-
     let label = format_event_label(event);
     let Some(ins_len) = event.ins_len.filter(|&n| n > 0) else {
         bail!("{}: no SVLEN, so there is no insertion length to look for", label);
     };
     // A short insertion fits inside a read as an `I` operation of its own
     // length; a long one is clipped, and only part of it is in any one read.
-    let min_len = ins_len.min(MAX_EVIDENCE_LEN);
+    let min_len = ins_len.min(INS_MAX_EVIDENCE_LEN);
 
     let names = reads_with_inserted_sequence(
         bam_path, ref_path, &event.chrom, event.start, PAD, min_len, min_mapq,
@@ -736,6 +742,89 @@ fn pileup_base_index(base: u8) -> Option<usize> {
     }
 }
 
+/// Below this the fraction is noise: at 4 reads the only fractions that exist
+/// are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass.
+const MIN_PILEUP_DEPTH: u32 = 5;
+
+/// How far an observed allele fraction may sit from the truth record's own
+/// `SIM_VAF` and still pass.
+const ALLELE_FREQ_TOLERANCE: f64 = 0.15;
+
+/// How far from the junction an aligner may place a small indel's operation.
+/// An aligner left-aligns an indel to the start of the repeat it sits in, so a
+/// 2 bp deletion inside a short tandem repeat is written a few bases from the
+/// truth record's own POS. 10 bp covers that without reaching a neighbour.
+const INDEL_POS_PAD: u64 = 10;
+
+/// What a truth record's REF/ALT pair describes, and with it how the reads
+/// carrying it have to be counted.
+enum SmallVariantShape {
+    /// One base swapped for another: a single-position pileup of A/C/G/T.
+    Substitution,
+    /// Equal-length runs longer than one base (`AC` > `GT`): the whole alt run
+    /// against the whole ref run, read by read.
+    Mnv,
+    /// `ACG` > `A`: this many reference bases after the anchor base are gone.
+    Deletion(u64),
+    /// `A` > `ACG`: this many bases are inserted after the anchor base.
+    Insertion(u64),
+}
+
+/// The shape of a small variant, or `None` for a complex allele -- one that
+/// changes length *and* rewrites the anchor base (`AC` > `GTT`, `A` > `CG`).
+/// A complex allele leaves neither one CIGAR operation nor one allele run to
+/// count, so it is not measured here.
+fn small_variant_shape(reference: &[u8], alt: &[u8]) -> Option<SmallVariantShape> {
+    let shares_anchor = matches!(
+        (reference.first(), alt.first()),
+        (Some(r), Some(a)) if r.eq_ignore_ascii_case(a)
+    );
+    match (reference.len(), alt.len()) {
+        (0, _) | (_, 0) => None,
+        (1, 1) => Some(SmallVariantShape::Substitution),
+        (r, a) if r == a => Some(SmallVariantShape::Mnv),
+        (r, 1) if shares_anchor => Some(SmallVariantShape::Deletion(r as u64 - 1)),
+        (1, a) if shares_anchor => Some(SmallVariantShape::Insertion(a as u64 - 1)),
+        _ => None,
+    }
+}
+
+/// One allele-fraction verdict from an alt count and a total. The depth floor
+/// and the tolerance are the same whichever counting rule produced the two
+/// numbers, so every shape of small variant is graded here.
+fn allele_freq_result(event: &TruthEvent, alt: u32, total: u32) -> CheckResult {
+    let label = format_event_label(event);
+    let expected = format!("{:.2}", event.expected_vaf);
+
+    if total == 0 {
+        return CheckResult {
+            event_label: label,
+            check_name: "allele_freq".to_string(),
+            expected,
+            observed: "no coverage".to_string(),
+            pass: false,
+        };
+    }
+    if total < MIN_PILEUP_DEPTH {
+        return event_not_evaluable(
+            &label,
+            "allele_freq",
+            &expected,
+            &format!("low depth ({})", total),
+            "fewer reads than the check needs to measure a fraction",
+        );
+    }
+
+    let observed_vaf = alt as f64 / total as f64;
+    CheckResult {
+        event_label: label,
+        check_name: "allele_freq".to_string(),
+        expected,
+        observed: format!("{:.2}", observed_vaf),
+        pass: (observed_vaf - event.expected_vaf).abs() < ALLELE_FREQ_TOLERANCE,
+    }
+}
+
 /// Check allele frequency for small variants via pileup.
 fn check_allele_freq(
     bam_path: &str,
@@ -749,19 +838,30 @@ fn check_allele_freq(
     let ref_allele = event.ref_allele.as_ref().unwrap();
     let alt_allele = event.alt_allele.as_ref().unwrap();
 
-    // This check is a single-position pileup of A/C/G/T, so it can only
-    // measure a single-base substitution. An indel or an MNV is not measured
-    // here, and an unmeasured allele fraction is a failed check, not a pass:
-    // a result row is still pushed, so the event counts as covered and the
-    // row says out loud that nothing was measured.
-    if ref_allele.len() != 1 || alt_allele.len() != 1 {
+    // Each shape of small variant leaves its own mark in an alignment, so each
+    // is counted its own way. A shape none of them fits is not measured, and
+    // an unmeasured allele fraction is a failed check, not a pass (N9): a
+    // result row is still pushed, so the event counts as covered and the row
+    // says out loud that nothing was measured.
+    let Some(shape) = small_variant_shape(ref_allele, alt_allele) else {
         return Ok(event_not_evaluable(
             &label,
             "allele_freq",
             &expected,
-            "N/A (indel or MNV)",
-            "the pileup counts single bases, so no allele fraction was measured",
+            "N/A (complex allele)",
+            "REF and ALT are neither a substitution, an MNV, nor a small indel \
+             sharing an anchor base",
         ));
+    };
+    match shape {
+        SmallVariantShape::Deletion(len) => {
+            return indel_allele_freq(bam_path, ref_path, event, min_mapq, Kind::Deletion, len)
+        }
+        SmallVariantShape::Insertion(len) => {
+            return indel_allele_freq(bam_path, ref_path, event, min_mapq, Kind::Insertion, len)
+        }
+        SmallVariantShape::Mnv => return mnv_allele_freq(bam_path, ref_path, event, min_mapq),
+        SmallVariantShape::Substitution => {}
     }
 
     // A non-ACGT alt has no column in the pileup. Checked before the BAM is
@@ -792,41 +892,204 @@ fn check_allele_freq(
         &mut dummy_read_alleles,
     )?;
 
-    if let Some(counts) = allele_counts.get(&event.start) {
-        let total: u32 = counts.iter().sum();
-        // Below this the fraction is noise: at 4 reads the only fractions that
-        // exist are 0, 0.25, 0.5, 0.75 and 1. Not enough data is not a pass.
-        const MIN_PILEUP_DEPTH: u32 = 5;
-        if total < MIN_PILEUP_DEPTH {
-            return Ok(event_not_evaluable(
-                &label,
-                "allele_freq",
-                &expected,
-                &format!("low depth ({})", total),
-                "fewer reads than the check needs to measure a fraction",
-            ));
+    let counts = allele_counts.get(&event.start).copied().unwrap_or([0; 4]);
+    Ok(allele_freq_result(
+        event,
+        counts[alt_idx],
+        counts.iter().sum(),
+    ))
+}
+
+/// Allele fraction of a small indel, counted off the alignments' CIGARs.
+///
+/// An indel is not a column in a pileup. The reads that carry it are the ones
+/// whose alignment leaves the reference at the junction just past the anchor
+/// base -- a `D` operation of the deleted length, an `I` operation of the
+/// inserted length -- and the reads that speak against it are the ones that
+/// span the same junction without one. This is N8's `ins_reads` rule narrowed
+/// to the allele's exact length and turned into a fraction.
+fn indel_allele_freq(
+    bam_path: &str,
+    ref_path: &str,
+    event: &TruthEvent,
+    min_mapq: u8,
+    kind: Kind,
+    indel_len: u64,
+) -> Result<CheckResult> {
+    let (carries, spans) = count_indel_reads(bam_path, ref_path, event, kind, indel_len, min_mapq)?;
+    Ok(allele_freq_result(event, carries, carries + spans))
+}
+
+/// Reads whose alignment carries the small indel at the event's position, and
+/// reads that span the same junction without it.
+fn count_indel_reads(
+    bam_path: &str,
+    ref_path: &str,
+    event: &TruthEvent,
+    kind: Kind,
+    indel_len: u64,
+    min_mapq: u8,
+) -> Result<(u32, u32)> {
+    let ref_len = event.ref_allele.as_ref().map_or(1, |r| r.len() as u64);
+    let (mut carries, mut spans) = (0u32, 0u32);
+
+    // Every read that votes either way covers the anchor base and the base
+    // just past the REF allele, so that span is also the query window.
+    for_each_alignment(
+        bam_path,
+        ref_path,
+        &event.chrom,
+        event.start,
+        event.start + ref_len + 1,
+        min_mapq,
+        &mut |align_start, ops| {
+            match cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len) {
+                Some(IndelVote::Carries) => carries += 1,
+                Some(IndelVote::Spans) => spans += 1,
+                None => {}
+            }
+        },
+    )?;
+
+    Ok((carries, spans))
+}
+
+/// How one read votes on a small indel at a position.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IndelVote {
+    /// Its alignment carries the indel: an operation of the truth record's own
+    /// kind and length, at the junction just past the anchor base.
+    Carries,
+    /// It spans the same junction without one.
+    Spans,
+}
+
+/// Read one alignment's vote off its CIGAR, or `None` if it does not span the
+/// junction at all -- clipped across it, or carrying a *different* indel that
+/// swallows one of the two reference bases the vote is anchored on. Such a
+/// read is evidence for neither allele and enters neither count.
+fn cigar_indel_vote(
+    ops: &[noodles::sam::alignment::record::cigar::Op],
+    align_start: u64,
+    pos: u64,
+    ref_len: u64,
+    kind: Kind,
+    indel_len: u64,
+) -> Option<IndelVote> {
+    // The two reference bases a vote is anchored on: the anchor base the REF
+    // allele starts at, and the first base past the REF allele.
+    let far_side = pos + ref_len;
+    let mut ref_pos = align_start;
+    let (mut carries, mut covers_anchor, mut covers_far_side) = (false, false, false);
+
+    for op in ops {
+        let len = op.len() as u64;
+        match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                covers_anchor |= (ref_pos..ref_pos + len).contains(&pos);
+                covers_far_side |= (ref_pos..ref_pos + len).contains(&far_side);
+                ref_pos += len;
+            }
+            k if k == kind => {
+                if len == indel_len && ref_pos.abs_diff(pos + 1) <= INDEL_POS_PAD {
+                    carries = true;
+                }
+                if k == Kind::Deletion {
+                    ref_pos += len;
+                }
+            }
+            Kind::Deletion | Kind::Skip => ref_pos += len,
+            // Insertion, SoftClip, HardClip and Pad consume no reference.
+            _ => {}
         }
-
-        let observed_vaf = counts[alt_idx] as f64 / total as f64;
-        let tolerance = 0.15;
-        let pass = (observed_vaf - event.expected_vaf).abs() < tolerance;
-
-        Ok(CheckResult {
-            event_label: label,
-            check_name: "allele_freq".to_string(),
-            expected,
-            observed: format!("{:.2}", observed_vaf),
-            pass,
-        })
-    } else {
-        Ok(CheckResult {
-            event_label: label,
-            check_name: "allele_freq".to_string(),
-            expected: format!("{:.2}", event.expected_vaf),
-            observed: "no coverage".to_string(),
-            pass: false,
-        })
     }
+
+    if !(covers_anchor && covers_far_side) {
+        return None;
+    }
+    Some(if carries {
+        IndelVote::Carries
+    } else {
+        IndelVote::Spans
+    })
+}
+
+/// Allele fraction of an MNV: reads whose bases are the whole alt run against
+/// reads whose bases are the whole ref run.
+///
+/// The two runs are the same length, so this is a pileup like a substitution's
+/// -- but a fraction per base answers a different question at every offset, and
+/// a read that carries only one of the two substitutions is not this variant.
+/// The alleles are therefore read jointly, one read at a time, which is what
+/// `pileup_region`'s per-read map is for. A read matching neither run whole is
+/// evidence for neither and enters neither count.
+fn mnv_allele_freq(
+    bam_path: &str,
+    ref_path: &str,
+    event: &TruthEvent,
+    min_mapq: u8,
+) -> Result<CheckResult> {
+    let ref_allele = event.ref_allele.as_ref().unwrap();
+    let alt_allele = event.alt_allele.as_ref().unwrap();
+
+    // A run holding a base outside A/C/G/T has no column in the pileup, so it
+    // could never be matched. Checked before the BAM is read: it is a property
+    // of the truth record, not of the data.
+    if ref_allele
+        .iter()
+        .chain(alt_allele.iter())
+        .any(|b| pileup_base_index(*b).is_none())
+    {
+        return Ok(event_not_evaluable(
+            &format_event_label(event),
+            "allele_freq",
+            &format!("{:.2}", event.expected_vaf),
+            "unknown allele base",
+            "an allele holds a base that is not one of A, C, G, T",
+        ));
+    }
+
+    let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
+    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
+
+    pileup_region(
+        bam_path,
+        ref_path,
+        &event.chrom,
+        event.start,
+        event.start + ref_allele.len() as u64,
+        min_mapq,
+        &mut allele_counts,
+        &mut read_alleles,
+    )?;
+
+    let (mut alt_reads, mut ref_reads) = (0u32, 0u32);
+    for bases in read_alleles.values() {
+        // Both mates of a pair arrive under one name; where they overlap and
+        // disagree, the offset is left unreadable so the read matches neither
+        // run.
+        let mut seen: HashMap<u64, u8> = HashMap::new();
+        for &(rp, base) in bases {
+            seen.entry(rp)
+                .and_modify(|b| {
+                    if *b != base {
+                        *b = b'.';
+                    }
+                })
+                .or_insert(base);
+        }
+        let run: Option<Vec<u8>> = (0..ref_allele.len() as u64)
+            .map(|i| seen.get(&(event.start + i)).copied())
+            .collect();
+        let Some(run) = run else { continue };
+        if run.eq_ignore_ascii_case(alt_allele) {
+            alt_reads += 1;
+        } else if run.eq_ignore_ascii_case(ref_allele) {
+            ref_reads += 1;
+        }
+    }
+
+    Ok(allele_freq_result(event, alt_reads, alt_reads + ref_reads))
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,7 +1393,10 @@ fn names_a_duplicate_marker(token: &str) -> bool {
 /// that still anchors on both sides, and a soft clip at the insertion point
 /// when it is not. Both are counted, at the reference position where the
 /// alignment leaves the reference -- for a leading clip that is the alignment
-/// start, for a trailing clip the alignment end.
+/// start, for a trailing clip the alignment end. A soft clip counts only once
+/// `min_len` reaches [`INS_MAX_EVIDENCE_LEN`], which is exactly the point at
+/// which a read can no longer anchor both sides of the insertion: below it the
+/// aligner writes an `I` operation, and a short clip is background anywhere.
 fn cigar_shows_insertion_near(
     ops: impl Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>>,
     align_start: u64,
@@ -1141,8 +1407,24 @@ fn cigar_shows_insertion_near(
     let mut ref_pos = align_start;
     for op in ops.flatten() {
         match op.kind() {
-            Kind::Insertion | Kind::SoftClip => {
+            Kind::Insertion => {
                 if op.len() as u64 >= min_len && ref_pos.abs_diff(pos) <= pad {
+                    return true;
+                }
+            }
+            Kind::SoftClip => {
+                // A clip only counts once the insertion is long enough that a
+                // read cannot anchor both sides of it -- which is exactly the
+                // `INS_MAX_EVIDENCE_LEN` cap, since `min_len` reaches it only
+                // for an insertion at least that long. Below it the aligner
+                // writes an `I` operation, and a short clip is background: at
+                // a 3 bp threshold five positions on the HG002 chr20 slice
+                // where nothing was planted give 1, 3, 0, 0 and 1 clipped
+                // reads, and 2 is a pass.
+                if min_len >= INS_MAX_EVIDENCE_LEN
+                    && op.len() as u64 >= min_len
+                    && ref_pos.abs_diff(pos) <= pad
+                {
                     return true;
                 }
             }
@@ -1586,6 +1868,82 @@ fn reads_with_inserted_sequence(
     }
 
     Ok(names)
+}
+
+/// Walk every usable alignment overlapping 0-based `[start, end)`, handing the
+/// visitor each record's 0-based alignment start and its CIGAR operations.
+///
+/// The BAM and the CRAM reader hand out different record types, so the scans
+/// above each carry their own copy of this query; a check that needs nothing
+/// from a record but its CIGAR can share one.
+fn for_each_alignment(
+    bam_path: &str,
+    ref_path: &str,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    min_mapq: u8,
+    visit: &mut dyn FnMut(u64, &[noodles::sam::alignment::record::cigar::Op]),
+) -> Result<()> {
+    let start_pos = crate::extract::safe_noodles_position(start + 1);
+    let end_pos = crate::extract::safe_noodles_position(end);
+    let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for the indel check")?;
+        let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
+
+        for rec_result in query {
+            let cram_record = rec_result?;
+            let buf = cram_record.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole and `Query`
+            // filters on coordinates alone (L2, N4).
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
+            if !usable_alignment(buf.flags(), buf.mapping_quality().map(u8::from), min_mapq) {
+                continue;
+            }
+            let Some(align_start) = buf.alignment_start() else {
+                continue;
+            };
+            let cigar = buf.cigar();
+            let ops: Vec<_> = CigarTrait::iter(&cigar).collect::<std::io::Result<_>>()?;
+            visit(usize::from(align_start).saturating_sub(1) as u64, &ops);
+        }
+    } else {
+        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+            .build_from_path(bam_path)
+            .context("failed to open BAM for the indel check")?;
+        let header = reader.read_header()?;
+        let query = reader.query(&header, &region)?;
+
+        for rec_result in query {
+            let record = rec_result?;
+            if !usable_alignment(
+                record.flags(),
+                record.mapping_quality().map(u8::from),
+                min_mapq,
+            ) {
+                continue;
+            }
+            let align_start = match record.alignment_start() {
+                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
+                _ => continue,
+            };
+            let cigar = record.cigar();
+            let ops: Vec<_> = cigar.iter().collect::<std::io::Result<_>>()?;
+            visit(align_start, &ops);
+        }
+    }
+
+    Ok(())
 }
 
 /// The record filter every scan here shares: a primary, mapped, non-duplicate
@@ -2683,13 +3041,17 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         // Three returns inside check_allele_freq answered `pass: true` on
         // questions it had not asked: an indel, an MNV and an alt base that
         // is not one of ACGT. A result row was still pushed, so check_event's
-        // "a check applies" gate counted all three as covered. No BAM is read
-        // on any of these paths, so the paths need not exist.
+        // "a check applies" gate counted all three as covered. N10 gave the
+        // indel and the MNV a counting rule of their own, so what is left here
+        // is every shape no rule fits -- the invariant is unchanged and the
+        // cases it is asserted over moved. No BAM is read on any of these
+        // paths, so the paths need not exist.
         for (reference, alt, what) in [
-            (&b"AC"[..], &b"A"[..], "a deletion"),
-            (&b"A"[..], &b"ACGT"[..], "an insertion"),
-            (&b"TG"[..], &b"AC"[..], "an MNV"),
+            (&b"AC"[..], &b"GTT"[..], "a complex allele"),
+            (&b"A"[..], &b"CG"[..], "an insertion that rewrites its anchor"),
+            (&b"AC"[..], &b"AGT"[..], "a deletion and an insertion at once"),
             (&b"T"[..], &b"N"[..], "a non-ACGT alt"),
+            (&b"TG"[..], &b"AN"[..], "an MNV with a non-ACGT base"),
         ] {
             let event = small_variant_event(reference, alt);
             let r = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, 20)
@@ -2699,6 +3061,27 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
                 "{} is not an allele fraction this check measured, so it may not PASS \
                  (observed {:?})",
                 what, r.observed
+            );
+        }
+    }
+
+    #[test]
+    fn test_indel_and_mnv_allele_fractions_are_read_from_the_bam() {
+        // The three shapes N10 gave a counting rule reached their verdict
+        // before the BAM was opened, which is what made it a verdict about
+        // nothing. An unreadable BAM must now be an error -- check_outcome
+        // turns that into a failed row -- not a result reached without one.
+        for (reference, alt, what) in [
+            (&b"AC"[..], &b"A"[..], "a deletion"),
+            (&b"A"[..], &b"ACGT"[..], "an insertion"),
+            (&b"TG"[..], &b"AC"[..], "an MNV"),
+        ] {
+            let event = small_variant_event(reference, alt);
+            let outcome = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, 20);
+            assert!(
+                outcome.is_err(),
+                "{} must be measured from the BAM, not decided without opening one",
+                what
             );
         }
     }
@@ -2867,6 +3250,41 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
     }
 
     #[test]
+    fn test_a_short_insertions_evidence_must_be_an_insertion_not_a_clip() {
+        // `ins_reads` takes min(SVLEN, 50) bases of inserted *or clipped*
+        // sequence within 100 bp of POS as evidence, which is background once
+        // SVLEN is small: on the merged HG002 chr20 slice a 3 bp threshold
+        // finds 1, 3, 0, 0 and 1 reads at five positions where nothing was
+        // planted, and 3 is over the 2-read pass mark -- an INS with SVLEN 3
+        // PASSed on a position holding no insertion. A read that anchors both
+        // sides of a short insertion writes an `I` operation; a 3 bp soft clip
+        // is not evidence of one. The same five positions give 0, 0, 0, 0, 0
+        // `I` operations.
+        fn ops(spec: &[(Kind, usize)]) -> Vec<std::io::Result<Op>> {
+            spec.iter().map(|&(k, n)| Ok(Op::new(k, n))).collect()
+        }
+
+        let clipped = [(Kind::Match, 100), (Kind::SoftClip, 3)];
+        assert!(
+            !cigar_shows_insertion_near(ops(&clipped).into_iter(), 1000, 1100, 100, 3),
+            "a 3 bp soft clip is not evidence of a 3 bp insertion"
+        );
+        let inserted = [(Kind::Match, 100), (Kind::Insertion, 3), (Kind::Match, 48)];
+        assert!(
+            cigar_shows_insertion_near(ops(&inserted).into_iter(), 1000, 1100, 100, 3),
+            "an I operation of the insertion's own length is"
+        );
+        // A clip is the only mark an insertion longer than a read can leave,
+        // so at the 50 bp cap it still counts -- N8's 300 bp INS is read from
+        // clipped reads and must keep passing.
+        let long_clip = [(Kind::Match, 100), (Kind::SoftClip, 300)];
+        assert!(
+            cigar_shows_insertion_near(ops(&long_clip).into_iter(), 1000, 1100, 100, 50),
+            "an insertion at or over the evidence cap is clipped, not inserted"
+        );
+    }
+
+    #[test]
     fn test_header_marks_duplicates_from_the_pg_command_line() {
         use noodles::sam::header::record::value::{
             map::{program::tag, Program},
@@ -2961,4 +3379,255 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         assert_eq!(result.observed, "too few reads");
         assert!(!result.pass, "an unevaluable duplicate rate may not pass");
     }
+
+    // --- N10: a small indel's and an MNV's allele fraction ---
+
+    /// A one-contig CRAM holding a small deletion, a small insertion and an
+    /// MNV, plus a site where nothing was planted.
+    ///
+    /// chrA's bases cycle `ACGT`, so the reference reads `ACG` at 5001-5003,
+    /// `A` at 8001 and `AC` at 11001-11002 (1-based): the truth records are
+    /// `ACG>A`, `A>ATTTT` and `AC>GT`. Six read1 records carry each variant in
+    /// their CIGAR (`50M2D50M`, `50M4I46M`, and 100M with two substituted
+    /// bases) and six span the same junction the way the reference does, so
+    /// every site sits at an allele fraction of exactly 0.50. chrA:14001 has
+    /// twelve reference reads and nothing planted. Each read1 has a plain
+    /// read2 200 bp downstream, clear of the site it belongs to. Returns
+    /// `(dir, fasta_path, cram_path)`; the caller removes `dir`.
+    fn small_variant_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        use noodles::sam::alignment::record::cigar::Op;
+        use noodles::sam::alignment::record_buf::{Cigar, QualityScores, Sequence};
+        use std::num::NonZeroUsize;
+
+        const CONTIG_LEN: usize = 20_000;
+        const READ_LEN: usize = 100;
+
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_validate_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let seq: Vec<u8> = (0..CONTIG_LEN).map(|i| b"ACGT"[i % 4]).collect();
+        let mut fasta = String::from(">chrA\n");
+        let offset = fasta.len();
+        for chunk in seq.chunks(60) {
+            fasta.push_str(std::str::from_utf8(chunk).unwrap());
+            fasta.push('\n');
+        }
+        let fasta_path = dir.join("small_variant.fa");
+        std::fs::write(&fasta_path, &fasta).unwrap();
+        std::fs::write(
+            dir.join("small_variant.fa.fai"),
+            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
+        )
+        .unwrap();
+
+        let header = noodles::sam::Header::builder()
+            .add_reference_sequence(
+                "chrA",
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
+            )
+            .build();
+
+        // The CIGAR and the read bases are given explicitly: a small indel's
+        // allele fraction is read off the CIGAR, so the fixture has to carry
+        // real `I` and `D` operations rather than a full-length match.
+        let record = |name: &str,
+                      start0: usize,
+                      ops: &[(Kind, usize)],
+                      bases: Vec<u8>,
+                      first: bool| {
+            let flags = noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY;
+            let cigar: Cigar = ops.iter().map(|&(k, n)| Op::new(k, n)).collect();
+            let sequence = Sequence::from(bases);
+            let quality_scores = QualityScores::from(vec![40u8; READ_LEN]);
+            let features = noodles::cram::record::Features::from_cigar(
+                flags,
+                &cigar,
+                &sequence,
+                &quality_scores,
+            );
+            let mate_start = if first { start0 + 201 } else { start0 - 199 };
+            noodles::cram::Record::builder()
+                .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
+                    0x63u16
+                } else {
+                    0x93u16
+                }))
+                .set_flags(flags)
+                .set_reference_sequence_id(0)
+                .set_read_length(READ_LEN)
+                .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+                .set_name(name)
+                .set_next_fragment_reference_sequence_id(0)
+                .set_next_mate_alignment_start(noodles::core::Position::new(mate_start).unwrap())
+                .set_template_size(if first { 300 } else { -300 })
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
+                )
+                .set_bases(sequence)
+                .set_quality_scores(quality_scores)
+                .set_features(features)
+                .build()
+        };
+
+        // A full-length match over the reference's own bases.
+        let plain = |start0: usize| -> (Vec<(Kind, usize)>, Vec<u8>) {
+            (
+                vec![(Kind::Match, READ_LEN)],
+                seq[start0..start0 + READ_LEN].to_vec(),
+            )
+        };
+
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        let mut push_pair = |name: String, start0: usize, ops: Vec<(Kind, usize)>, bases: Vec<u8>| {
+            records.push(record(&name, start0, &ops, bases, true));
+            let (mate_ops, mate_bases) = plain(start0 + 200);
+            records.push(record(&name, start0 + 200, &mate_ops, mate_bases, false));
+        };
+
+        for i in 0..6usize {
+            // `ACG` > `A` at chrA:5001: the two reference bases after the
+            // anchor are gone, so the `D` operation starts at 0-based 5001.
+            let s = 4951 + i;
+            let (first_m, second_m) = (50 - i, 50 + i);
+            let mut bases = seq[s..s + first_m].to_vec();
+            bases.extend_from_slice(&seq[5003..5003 + second_m]);
+            push_pair(
+                format!("del_alt{}", i),
+                s,
+                vec![
+                    (Kind::Match, first_m),
+                    (Kind::Deletion, 2),
+                    (Kind::Match, second_m),
+                ],
+                bases,
+            );
+            let s = 4941 + 3 * i;
+            let (ops, bases) = plain(s);
+            push_pair(format!("del_ref{}", i), s, ops, bases);
+
+            // `A` > `ATTTT` at chrA:8001: four bases inserted after the anchor.
+            let s = 7951 + i;
+            let (first_m, second_m) = (50 - i, 46 + i);
+            let mut bases = seq[s..s + first_m].to_vec();
+            bases.extend_from_slice(b"TTTT");
+            bases.extend_from_slice(&seq[8001..8001 + second_m]);
+            push_pair(
+                format!("ins_alt{}", i),
+                s,
+                vec![
+                    (Kind::Match, first_m),
+                    (Kind::Insertion, 4),
+                    (Kind::Match, second_m),
+                ],
+                bases,
+            );
+            let s = 7941 + 3 * i;
+            let (ops, bases) = plain(s);
+            push_pair(format!("ins_ref{}", i), s, ops, bases);
+
+            // `AC` > `GT` at chrA:11001: both bases swapped, no length change.
+            let s = 10941 + 3 * i;
+            let (ops, mut bases) = plain(s);
+            bases[11_000 - s] = b'G';
+            bases[11_001 - s] = b'T';
+            push_pair(format!("mnv_alt{}", i), s, ops, bases);
+            let s = 10945 + 3 * i;
+            let (ops, bases) = plain(s);
+            push_pair(format!("mnv_ref{}", i), s, ops, bases);
+        }
+        // chrA:14001: twelve reference reads and nothing planted.
+        for i in 0..12usize {
+            let s = 13941 + 3 * i;
+            let (ops, bases) = plain(s);
+            push_pair(format!("clean_ref{}", i), s, ops, bases);
+        }
+
+        let cram_path = dir.join("small_variant.cram");
+        let repository =
+            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
+        {
+            let mut writer = noodles::cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(repository)
+                .build_from_path(&cram_path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            for rec in &records {
+                writer.write_record(&header, rec.clone()).unwrap();
+            }
+            writer.try_finish(&header).unwrap();
+        }
+
+        let index = noodles::cram::index(&cram_path).unwrap();
+        let mut index_writer = noodles::cram::crai::io::Writer::new(
+            std::fs::File::create(dir.join("small_variant.cram.crai")).unwrap(),
+        );
+        index_writer.write_index(&index).unwrap();
+        index_writer.finish().unwrap();
+
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// `small_variant_event` at a position of its own.
+    fn small_variant_event_at(pos: u64, reference: &[u8], alt: &[u8]) -> TruthEvent {
+        TruthEvent {
+            start: pos,
+            end: pos + reference.len() as u64,
+            ..small_variant_event(reference, alt)
+        }
+    }
+
+    #[test]
+    fn test_small_indel_and_mnv_allele_fractions_are_measured() {
+        // N9 stopped check_allele_freq calling an indel or an MNV a pass, but
+        // it did not measure one, so a truth VCF from
+        // `--event "snp:chr20:30000000:ACG:A"` carried a permanent
+        // `allele_freq FAIL` -- spike's own round trip broken for a second
+        // variant class, the same shape as N8's INS. Each site below is half
+        // alt reads and half reference reads.
+        let (dir, fasta, cram) = small_variant_cram("small_variant_af");
+
+        for (pos, reference, alt, what) in [
+            (5_000u64, &b"ACG"[..], &b"A"[..], "a 2 bp deletion"),
+            (8_000, &b"A"[..], &b"ATTTT"[..], "a 4 bp insertion"),
+            (11_000, &b"AC"[..], &b"GT"[..], "an MNV"),
+        ] {
+            let event = small_variant_event_at(pos, reference, alt);
+            let r = check_allele_freq(&cram, &fasta, &event, 20).unwrap();
+            assert_eq!(
+                r.observed,
+                "0.50",
+                "{} is carried by half the reads at chrA:{}",
+                what,
+                pos + 1
+            );
+            assert!(r.pass, "{} at its own allele fraction must PASS", what);
+
+            // The same record at a site where nothing was planted.
+            let clean = small_variant_event_at(14_000, reference, alt);
+            let r = check_allele_freq(&cram, &fasta, &clean, 20).unwrap();
+            assert_eq!(
+                r.observed, "0.00",
+                "nothing was planted at chrA:14001, so no read carries {}",
+                what
+            );
+            assert!(
+                !r.pass,
+                "{} must not pass at a site where nothing was planted",
+                what
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

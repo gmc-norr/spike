@@ -66,7 +66,8 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
-| N10 | Medium | **Not fixed** (found by the whole-branch review, recorded). No `validate` check measures a small indel's or an MNV's allele fraction. Now that N9 stops calling them a pass, a truth VCF holding one cannot report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT | `validate.rs:753-762` |
+| N10 | Medium | **Fixed** (found by the whole-branch review). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
+| N12 | Medium | **Not fixed** (found while closing N10, recorded). N5's donor-coverage refusal measures the **first** breakpoint only, so a multi-breakpoint event uncovered at any later junction side is simulated from anyway -- the same fusion is refused or accepted depending on which partner is named first | `simulate.rs:196-220` |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 
 ## High severity
@@ -829,6 +830,21 @@ branch introduced, not a pre-existing gap.
 - `test_event_no_check_applies_to_is_not_evaluable` was kept and re-pointed: it
   used an INS to stand for "an event no check covers", which INS no longer is,
   so it now uses `SVTYPE=CNV`. M11's invariant is unchanged and still tested.
+- **Follow-up: the threshold was weak below `SVLEN` ~10, and is now narrowed.**
+  `min(SVLEN, 50)` bases of inserted *or clipped* sequence is background once
+  SVLEN is small. Measured on the merged HG002 chr20 slice with a truth record
+  of `SVTYPE=INS;SVLEN=3` at the same five control positions: **1, 3, 0, 0 and
+  1** reads, and 3 is over the two-read pass mark -- chr20:38900000 reported
+  `ins_reads 3 PASS` for an insertion that was never planted. A read that
+  anchors both sides of a short insertion writes an `I` operation, so a soft
+  clip now counts only once the insertion reaches the 50 bp evidence cap, which
+  is exactly where a read can no longer anchor both sides. **Measured after:**
+  the same five positions give **0, 0, 0, 0 and 0** and all FAIL, while
+  genuinely planted 3 bp and 12 bp insertions (`ins:chr20:39300000:3`,
+  `ins:chr20:39400000:12`, aligned and merged) still find **12** reads each and
+  PASS, and the 300 bp INS above is untouched at **21 PASS, 6/6, exit 0** --
+  its evidence is clipped reads, which still count at the cap. The five control
+  numbers at the cap are **0, 1, 0, 0, 0**, reproducing the row above exactly.
 
 
 ### N9 · `validate`'s coverage gate is asymmetric in the wrong direction
@@ -898,26 +914,75 @@ returns a hard-coded `Ok(0.0)` for `start >= end` (`validate.rs:1083-1085`) and
   the flank average by length. With the load-time refusal above, the *event*
   region can no longer be zero-length.
 
-### N10 · No `validate` check measures a small indel's or an MNV's allele fraction
+### N10 · No `validate` check measured a small indel's or an MNV's allele fraction
 
-*Found by the whole-branch review, and recorded rather than fixed: it is a new
-check, not a correction, and it is the same shape as N8 -- which was fixed in
-this pass because `SVTYPE=INS` is what spike writes for its own `ins:` events.*
+*Found by the whole-branch review, recorded there, and fixed in this pass: it
+is the same shape as N8 -- spike's own round trip broken for a variant class
+spike itself writes -- and N8's fix left the machinery in place.*
 
-N9 stops `check_allele_freq` calling an indel or an MNV a pass. What it does
+N9 stopped `check_allele_freq` calling an indel or an MNV a pass. What it did
 not do is measure one. So a truth VCF holding a record from
 `--event "snp:chr20:30000000:ACG:A"` (spike writes it with an explicit
-multi-base REF) now carries a permanent `allele_freq FAIL`, exactly the
-position N8 described for INS. Measured: `AC>A` and `TG>AC` both report
-`N/A (indel or MNV) FAIL` against a BAM that has nothing to do with the
-verdict -- the return is taken before the BAM is opened.
+multi-base REF) carried a permanent `allele_freq FAIL`, exactly the position N8
+described for INS. Measured before, on a real run of
+`snp:chr20:39000000:TGG:T` + `snp:chr20:39100000:T:TCCGG` +
+`snp:chr20:39200000:AT:GC --seed 1` on the chr20 37.5-41.5 Mb HG002 slice,
+aligned with the generated `align.sh` and merged with `merge.sh`: all three
+rows read `N/A (indel or MNV) FAIL`, **3/6 PASS, exit 1** -- and the verdict
+was reached before the BAM was opened, so nothing about the data could change
+it.
 
-The fix is a real check, and the machinery for it now exists: N8's
-`cigar_shows_insertion_near` already walks a CIGAR for inserted sequence at a
-reference position, and the same walk over `I` and `D` operations of the
-allele's own length, divided by the pileup depth there, is an indel allele
-fraction. An MNV needs the per-base pileup at each differing offset. Neither
-was in scope for this pass.
+- **Fixed:** `check_allele_freq` now reads the REF/ALT pair's *shape* and picks
+  a counting rule for it. A **deletion** (`ACG` > `A`) and an **insertion**
+  (`A` > `ACCGG`) are counted off the CIGAR -- an indel is not a column in a
+  pileup -- as reads whose alignment carries a `D` or `I` operation of the
+  allele's own length at the junction just past the anchor base, against the
+  reads that span the same junction without one. The operation may sit within
+  10 bp of POS, because an aligner left-aligns an indel to the start of the
+  repeat it sits in. An **MNV** (`AT` > `GC`) is counted from the pileup, but
+  **jointly**: a read votes only if its bases are the whole alt run or the whole
+  ref run, since a fraction per base answers a different question at each offset
+  and a read carrying one of the two substitutions is not this variant. All
+  three then go through the same depth floor (5) and the same 0.15 tolerance as
+  a substitution.
+- **Measured after,** same run and same merged BAM: **6/6 PASS, exit 0**, the
+  three rows reading 0.40, 0.41 and 0.46 against `SIM_VAF=0.500`. The reads
+  behind them are **17, 19 and 13** carrying the variant, against 25, 27 and 15
+  spanning without it -- an independent re-implementation of the counting rule
+  over `samtools view` reproduces all six numbers exactly. `samtools mpileup`
+  sees the same two indels at 16 `-2` and 17 `+4` carriers, a base or two
+  fewer because of its own base-quality and BAQ filters, and **0** of either
+  at every control position.
+- **Specificity, both directions.** The same three truth records against the
+  **unspiked** slice BAM read 0.00, 0.00 and 0.00 and all FAIL (**3/6 PASS,
+  exit 1**). Against the spiked BAM at five positions where nothing was planted
+  (chr20:38600000, 38900000, 39500000, 39750000, 40100000), with the same three
+  allele shapes built from each position's own reference bases, all fifteen
+  checks read 0.00 and FAIL (**3/18 PASS, exit 1**); the supporting counts there
+  are **0, 0, 0, 0 and 0** for each of the three shapes, against 17, 19 and 13
+  at the planted sites. Each rule is also silent at the other two events' sites
+  (the deletion rule finds 0 at the insertion and MNV positions, and so on).
+- **Nothing is left `not_evaluable` that used to be measured, and one case is
+  left deliberately.** A **complex** allele -- one that changes length *and*
+  rewrites the anchor base, such as `AC` > `GTT`, `A` > `CG` or `AC` > `AGT` --
+  has neither a single CIGAR operation nor a single allele run to count, so it
+  reports `N/A (complex allele)` and FAILs. spike cannot produce one: its own
+  small-variant haplotype is built as `left | ALT | right`, and the truth record
+  it writes is whatever REF/ALT the user gave. The depth floor and the non-ACGT
+  allele exits are unchanged, and both still FAIL.
+- `test_allele_freq_it_cannot_measure_is_not_a_pass` was **corrected, not
+  weakened**: three of its four cases (`AC`>`A`, `A`>`ACGT`, `TG`>`AC`) were
+  the very shapes this entry gives a check, so they now reach the BAM and error
+  on a nonexistent path instead of returning a row. The invariant it pins --
+  an unmeasured allele fraction is never a pass -- is unchanged and is now
+  asserted over *five* cases (`AC`>`GTT`, `A`>`CG`, `AC`>`AGT`, `T`>`N`,
+  `TG`>`AN`). The three that moved are covered by two new tests:
+  `test_indel_and_mnv_allele_fractions_are_read_from_the_bam` (the verdict must
+  not be reached without opening a BAM) and
+  `test_small_indel_and_mnv_allele_fractions_are_measured` (a CRAM fixture with
+  real `50M2D50M`, `50M4I46M` and substituted-base CIGARs at half the reads
+  each, which must read 0.50 and PASS, and 0.00 and FAIL at a site where
+  nothing was planted). N9's `event_not_evaluable` path is untouched.
 
 
 ### N11 · Two `--help` strings contradicted the code, and the refusals had no single home
@@ -959,6 +1024,53 @@ string.
   skipped for this region: original reads are suppressed at random.` -- exit 0,
   FASTQ and truth VCF written. The README section records it under **"Not a
   refusal"** with that text, since a user looking for it will expect it there.
+
+
+### N12 · N5's donor-coverage refusal measures the first breakpoint only
+
+*Found while closing N10, and recorded rather than fixed -- the narrow fix is
+one line, but the correct one changes which events spike accepts across every
+multi-segment type, which is more than this commit can measure.*
+
+`48be0c8` closed N5's second door by refusing an event whose breakpoint has no
+donor coverage. It measures **one** position: `simulate.rs:196-220` takes
+`haplotype.breakpoints().first()`, maps it back with `hap_to_ref(bp - 1)` --
+the last reference base *before* the junction -- and refuses only if
+`estimate_coverage_at` is 0 or NaN there. A junction has two sides and a
+haplotype can have several, and none of the others is ever looked at.
+
+The answer to "is it refused, or accepted, on the wrong evidence?" is **both,
+depending on the order the event names its parts**. Measured on the chr20
+37.5-41.5 Mb HG002 slice, one BED with `GENEA` at chr20:38.42 Mb (covered) and
+`GENEB` at chr20:30.00 Mb (outside the slice), `--seed 1`, `af=0.2`:
+
+```
+--event "fusion:GENEB:exon1:GENEA:exon2"   0 pairs from B, 3032 from A
+  Error: ... has no donor coverage at its first breakpoint chr20:30000199 ...
+  exit 1, --output left empty
+--event "fusion:GENEA:exon1:GENEB:exon2"   3022 pairs from A, 0 pairs from B
+  INFO Tiling 15 synthetic reads across 4000bp haplotype (cov=58.0, vaf=0.20)
+  exit 0, 7 files, truth VCF written
+```
+
+Same two loci, same BAM, same seed: naming the covered partner first is enough
+to get 15 synthetic reads planted across a junction whose far half has no donor
+read behind it -- N5's headline symptom, through a third door. The same holds
+without a fusion: `del:chr20:41490000-41600000` on a slice whose reads stop at
+41,500,000 has a covered left breakpoint (`cov=57.7`) and **no reads at all** at
+its right one, and spike tiles 249 reads across it at exit 0.
+
+The fix is to map back both sides of every breakpoint -- `hap_to_ref(bp - 1)`
+and `hap_to_ref(bp)` for each -- and refuse on the first uncovered one, keeping
+the first breakpoint's coverage for the tiling count so the arithmetic (and
+M7's byte-identical output) does not move. It was not applied here because it
+also newly refuses a DEL or DUP whose *distal* junction side falls outside the
+covered window, which is a live shape: `test_simulate_event_keeps_pairs_
+straddling_footprint_edge` builds exactly such a pool (pairs at [800,1200) and
+[3800,4200) for a DEL at [1000,3000), so reference position 3000 has no donor
+coverage) and would newly fail. That test was already corrected once by
+`48be0c8`; deciding whether the shape it encodes is legitimate or is itself
+N5's symptom needs a measurement pass of its own.
 
 ## Low severity
 
