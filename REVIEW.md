@@ -64,7 +64,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-220, 418-420, 461-486` (now) |
 | N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
-| N8 | Medium | **Not fixed** (found during the fix run). No `validate` check covers INS, and an uncovered event is now a *failed* result, so any truth VCF holding an INS can never report all-PASS | `validate.rs:133-180` |
+| N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 
 ## High severity
 
@@ -716,8 +716,10 @@ Markov base bins and 308/1208 Markov cycle bins unusable.
 
 ### N8 · Any truth VCF holding an INS loses one check to "not evaluable"
 
-*Found while reviewing the L15 fix pass (`af9d9fa`). Recorded, not fixed: the
-fix is an INS-specific check, which is new work rather than a correction.*
+*Found while reviewing the L15 fix pass (`af9d9fa`). Recorded unfixed at the
+time -- an INS-specific check is new work rather than a correction -- and
+fixed in the whole-branch pass, because the alternative is shipping a `spike
+validate` that cannot pass on spike's own output.*
 
 `check_event` (`validate.rs:133-180`) dispatches on `sv_type` alone:
 `coverage_ratio` for DEL/DUP, `split_reads` for DEL/DUP/INV/BND, `allele_freq`
@@ -743,13 +745,47 @@ WARN spike::validate] no check applies to INS chr20:38430000 (unknown), so it wa
 ```
 
 (The DEL rows fail because this run validates against the *unspiked* slice;
-the INS row is the finding, and it is independent of the BAM.) `af9d9fa`'s
-branch is right for what it was for -- M11, where an INS-only truth VCF scored
-3/3 PASS on the three global checks alone -- but the cost now lands on every
-mixed truth set: the honest "we did not check this" is indistinguishable, in
-the verdict and in the exit status, from "this spike-in is wrong". The real
-fix is a check INS can pass: split reads at the insertion point, or reads
-carrying the inserted sequence.
+the INS row is the finding, and it is independent of the BAM. Re-measured in
+the whole-branch pass against a properly spiked BAM -- `del:chr20:38412500-
+38422500` + `ins:chr20:39000000:300 --seed 1`, aligned with the generated
+`align.sh` and merged with `merge.sh` -- the two DEL rows PASS and the score is
+**5/6 PASS, exit 1**, with the INS row the only failure on a perfect run.)
+`af9d9fa`'s branch is right for what it was for -- M11, where an INS-only truth
+VCF scored 3/3 PASS on the three global checks alone -- but the cost landed on
+every mixed truth set: the honest "we did not check this" was
+indistinguishable, in the verdict and in the exit status, from "this spike-in
+is wrong". README's step 4 ("verify the spike-in looks correct before running
+the caller") was therefore broken for insertions, and this is behaviour the
+branch introduced, not a pre-existing gap.
+
+- **Note on the suggested fix.** "Reads carrying the inserted sequence" is not
+  available to `validate`: the truth VCF writes INS as a symbolic `<INS>` with
+  `SVLEN` only (`truth.rs:264`), so the inserted bases spike generated are not
+  in the file `validate` reads. What *is* available is the shape the aligner
+  gives them.
+- **Fixed:** a new `ins_reads` check counts reads whose alignment **leaves the
+  reference at POS** -- an `I` CIGAR operation when the insertion fits inside a
+  read that anchors on both sides, a soft clip at the insertion point when it
+  does not. A read counts when the operation is at least `min(SVLEN, 50)` bases
+  and its reference boundary is within 100 bp of POS; the check passes at 2
+  such reads, the same threshold and the same reasoning as `check_split_reads`
+  (one clipped read is background anywhere, two at one point are not). An INS
+  record with no usable `SVLEN` has no length to look for and is a failed
+  check, so the "uncheckable is a failure" principle is not weakened.
+- **Measured, same run as above:** the INS row now reads
+  `ins_reads  >=2 reads with >=50bp inserted at chr20:39000001  21  PASS`, and
+  the run scores **6/6 PASS, exit 0** -- README step 4 works for insertions
+  again. Specificity, on the same merged BAM: the same check run at five
+  control positions where nothing was planted (chr20:38600000, 38900000,
+  39500000, 39750000, 40100000) finds **0, 1, 0, 0 and 0** reads and FAILs all
+  five, so the threshold of 2 separates the planted event from the background
+  by a factor of 21.
+- `spike validate --help` now prints the whole checks-by-event-type table and
+  states that a check that cannot run is a failed check, so which types are
+  covered is visible without reading the source. README carries the same table.
+- `test_event_no_check_applies_to_is_not_evaluable` was kept and re-pointed: it
+  used an INS to stand for "an event no check covers", which INS no longer is,
+  so it now uses `SVTYPE=CNV`. M11's invariant is unchanged and still tested.
 
 ## Low severity
 

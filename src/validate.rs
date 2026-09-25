@@ -40,6 +40,10 @@ struct TruthEvent {
     /// For SmallVariant: explicit REF/ALT alleles.
     ref_allele: Option<Vec<u8>>,
     alt_allele: Option<Vec<u8>>,
+    /// For INS: the inserted length (`SVLEN`). An insertion has no reference
+    /// span, so `end == start` and the length cannot be read off the
+    /// coordinates the way every other type's can. None for every other type.
+    ins_len: Option<u64>,
 }
 
 /// Result of a single validation check.
@@ -151,6 +155,13 @@ fn check_event(args: &ValidateArgs, event: &TruthEvent, results: &mut Vec<CheckR
     if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
         let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
         results.push(check_outcome(&label, "split_reads", r));
+    }
+
+    // Reads carrying the inserted sequence (INS only: it is the one event
+    // type with no second breakpoint and no reference span of its own).
+    if event.sv_type == "INS" {
+        let r = check_ins_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
+        results.push(check_outcome(&label, "ins_reads", r));
     }
 
     // Allele frequency (meaningful for SNPs/small variants).
@@ -275,6 +286,18 @@ fn print_usage() {
     eprintln!("  --flank          Flanking bp for coverage comparison (default: 5000)");
     eprintln!("  --json           Output JSON instead of text table");
     eprintln!("  --help, -h       Show this help");
+    eprintln!();
+    eprintln!("Checks, by truth-event type:");
+    eprintln!("  DEL, DUP         coverage_ratio, split_reads");
+    eprintln!("  INV, BND         split_reads");
+    eprintln!("  INS              ins_reads (reads whose alignment leaves the");
+    eprintln!("                   reference at POS -- an I operation or a soft clip)");
+    eprintln!("  SNP (1 bp)       allele_freq");
+    eprintln!("  every event      insert_size, dup_rate, mean_mapq, over the whole sample");
+    eprintln!();
+    eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
+    eprintln!("exit 0 means every check ran and every check passed. An event type no");
+    eprintln!("check covers (e.g. SVTYPE=CNV) is reported as `event_checked FAIL`.");
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +356,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: None,
                     alt_allele: None,
+                    ins_len: None,
                 });
             }
             Some("DUP") => {
@@ -348,6 +372,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: None,
                     alt_allele: None,
+                    ins_len: None,
                 });
             }
             Some("INV") => {
@@ -363,9 +388,15 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: None,
                     alt_allele: None,
+                    ins_len: None,
                 });
             }
             Some("INS") => {
+                // SVLEN is the inserted length; spike writes it positive, but
+                // other producers sign it, so take the magnitude.
+                let ins_len = parse_info_field(info, "SVLEN")
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .map(|v| v.unsigned_abs());
                 events.push(TruthEvent {
                     chrom,
                     start: vcf_pos,
@@ -376,6 +407,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: None,
                     alt_allele: None,
+                    ins_len,
                 });
             }
             Some("BND") => {
@@ -397,6 +429,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: None,
                     alt_allele: None,
+                    ins_len: None,
                 });
             }
             _ => {
@@ -416,6 +449,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     gene,
                     ref_allele: Some(ref_allele),
                     alt_allele: Some(alt_allele),
+                    ins_len: None,
                 });
             }
         }
@@ -583,6 +617,59 @@ fn check_split_reads(
         expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_SPLIT_READS,
+    })
+}
+
+/// Check that reads at an INS breakpoint carry the inserted sequence.
+///
+/// An insertion has no second reference breakpoint and no reference span, so
+/// neither the coverage-ratio nor the split-read check applies to it. What it
+/// does leave behind is sequence that does not fit the reference at one point,
+/// which the aligner records as an `I` operation or a soft clip. spike writes
+/// `SVTYPE=INS` itself (`truth.rs`), so without this check `spike validate`
+/// could never exit 0 on spike's own output.
+fn check_ins_reads(
+    bam_path: &str,
+    ref_path: &str,
+    event: &TruthEvent,
+    min_mapq: u8,
+) -> Result<CheckResult> {
+    // At least this many reads must carry it. Two matches `check_split_reads`:
+    // one clipped read is background anywhere, two at the same point are not.
+    const MIN_INS_READS: usize = 2;
+    // How far from POS the alignment may leave the reference. An aligner
+    // places the boundary within a few bases of the insertion point; 100 bp
+    // covers that without reaching the next feature.
+    const PAD: u64 = 100;
+    // Longest clip an insertion of any size is required to produce. A read is
+    // at most a few hundred bases, so a 1 kb insertion still only clips part
+    // of one; past this the threshold would reject the event's own reads.
+    const MAX_EVIDENCE_LEN: u64 = 50;
+
+    let label = format_event_label(event);
+    let Some(ins_len) = event.ins_len.filter(|&n| n > 0) else {
+        bail!("{}: no SVLEN, so there is no insertion length to look for", label);
+    };
+    // A short insertion fits inside a read as an `I` operation of its own
+    // length; a long one is clipped, and only part of it is in any one read.
+    let min_len = ins_len.min(MAX_EVIDENCE_LEN);
+
+    let names = reads_with_inserted_sequence(
+        bam_path, ref_path, &event.chrom, event.start, PAD, min_len, min_mapq,
+    )?;
+
+    Ok(CheckResult {
+        event_label: label,
+        check_name: "ins_reads".to_string(),
+        expected: format!(
+            ">={} reads with >={}bp inserted at {}:{}",
+            MIN_INS_READS,
+            min_len,
+            event.chrom,
+            event.start + 1
+        ),
+        observed: format!("{}", names.len()),
+        pass: names.len() >= MIN_INS_READS,
     })
 }
 
@@ -969,6 +1056,44 @@ fn names_a_duplicate_marker(token: &str) -> bool {
         || name.starts_with("bammarkduplicates")
 }
 
+/// True if a read aligned at `align_start` carries at least `min_len` bases
+/// that do not fit the reference within `pad` of `pos`.
+///
+/// An aligner represents an insertion two ways depending on its size: an `I`
+/// operation when the inserted sequence is short enough to fit inside a read
+/// that still anchors on both sides, and a soft clip at the insertion point
+/// when it is not. Both are counted, at the reference position where the
+/// alignment leaves the reference -- for a leading clip that is the alignment
+/// start, for a trailing clip the alignment end.
+fn cigar_shows_insertion_near(
+    ops: impl Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>>,
+    align_start: u64,
+    pos: u64,
+    pad: u64,
+    min_len: u64,
+) -> bool {
+    let mut ref_pos = align_start;
+    for op in ops.flatten() {
+        match op.kind() {
+            Kind::Insertion | Kind::SoftClip => {
+                if op.len() as u64 >= min_len && ref_pos.abs_diff(pos) <= pad {
+                    return true;
+                }
+            }
+            Kind::Match
+            | Kind::Deletion
+            | Kind::Skip
+            | Kind::SequenceMatch
+            | Kind::SequenceMismatch => {
+                ref_pos += op.len() as u64;
+            }
+            // HardClip and Pad consume neither reference nor stored sequence.
+            _ => {}
+        }
+    }
+    false
+}
+
 /// A global check its sample cannot answer: a failed result, never a silent
 /// pass (M10).
 fn not_evaluable(check_name: &str, expected: &str, observed: &str, why: &str) -> CheckResult {
@@ -1284,6 +1409,114 @@ fn split_reads_to_partner(
     }
 
     Ok(names)
+}
+
+/// Names of reads within `pad` of 0-based `pos` on `chrom` whose alignment
+/// carries at least `min_len` bases of sequence the reference has not got
+/// there (see [`cigar_shows_insertion_near`]).
+fn reads_with_inserted_sequence(
+    bam_path: &str,
+    ref_path: &str,
+    chrom: &str,
+    pos: u64,
+    pad: u64,
+    min_len: u64,
+    min_mapq: u8,
+) -> Result<HashSet<String>> {
+    let mut names = HashSet::new();
+    let start = pos.saturating_sub(pad);
+    let end = pos.saturating_add(pad);
+
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let start_pos = crate::extract::safe_noodles_position(start + 1);
+        let end_pos = crate::extract::safe_noodles_position(end);
+        let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for the insertion check")?;
+        let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
+
+        for rec_result in query {
+            let cram_record = rec_result?;
+            let buf = cram_record.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole and `Query`
+            // filters on coordinates alone (L2, N4).
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
+            if !usable_alignment(buf.flags(), buf.mapping_quality().map(u8::from), min_mapq) {
+                continue;
+            }
+            let Some(align_start) = buf.alignment_start() else {
+                continue;
+            };
+            let align_start = usize::from(align_start).saturating_sub(1) as u64;
+            let cigar = buf.cigar();
+            if cigar_shows_insertion_near(
+                CigarTrait::iter(&cigar),
+                align_start,
+                pos,
+                pad,
+                min_len,
+            ) {
+                if let Some(n) = buf.name() {
+                    names.insert(String::from_utf8_lossy(n.as_ref()).into_owned());
+                }
+            }
+        }
+    } else {
+        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+            .build_from_path(bam_path)
+            .context("failed to open BAM for the insertion check")?;
+        let header = reader.read_header()?;
+
+        let start_pos = crate::extract::safe_noodles_position(start + 1);
+        let end_pos = crate::extract::safe_noodles_position(end);
+        let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+        let query = reader.query(&header, &region)?;
+
+        for rec_result in query {
+            let record = rec_result?;
+            if !usable_alignment(
+                record.flags(),
+                record.mapping_quality().map(u8::from),
+                min_mapq,
+            ) {
+                continue;
+            }
+            let align_start = match record.alignment_start() {
+                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
+                _ => continue,
+            };
+            let cigar = record.cigar();
+            if cigar_shows_insertion_near(cigar.iter(), align_start, pos, pad, min_len) {
+                if let Some(n) = record.name() {
+                    names.insert(String::from_utf8_lossy(n.as_ref()).into_owned());
+                }
+            }
+        }
+    }
+
+    Ok(names)
+}
+
+/// The record filter every scan here shares: a primary, mapped, non-duplicate
+/// alignment that clears `min_mapq`.
+fn usable_alignment(
+    flags: noodles::sam::alignment::record::Flags,
+    mapping_quality: Option<u8>,
+    min_mapq: u8,
+) -> bool {
+    !(flags.is_unmapped()
+        || flags.is_secondary()
+        || flags.is_supplementary()
+        || flags.is_duplicate()
+        || flags.is_qc_fail())
+        && mapping_quality.unwrap_or(0) >= min_mapq
 }
 
 /// True if an SA:Z value (`chrom,pos,strand,CIGAR,mapQ,NM;...`, 1-based pos)
@@ -1669,6 +1902,7 @@ fn escape_json(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noodles::sam::alignment::record::cigar::Op;
 
     #[test]
     fn test_sa_points_near_partner_only() {
@@ -1762,6 +1996,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             partner: None,
             ref_allele: None,
             alt_allele: None,
+            ins_len: None,
         };
         assert_eq!(format_event_label(&event), "DEL chr7:55000-56000 (EGFR)");
     }
@@ -1778,6 +2013,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             partner: None,
             ref_allele: None,
             alt_allele: None,
+            ins_len: None,
         };
         assert_eq!(format_event_label(&event), "INS chr7:55200 (EGFR)");
     }
@@ -2137,6 +2373,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             partner: Some((chrom.to_string(), end)),
             ref_allele: None,
             alt_allele: None,
+            ins_len: None,
         }
     }
 
@@ -2237,6 +2474,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             partner: None,
             ref_allele: None,
             alt_allele: None,
+            ins_len: Some(300),
         }
     }
 
@@ -2329,18 +2567,117 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
 
     #[test]
     fn test_event_no_check_applies_to_is_not_evaluable() {
-        // An INS-only truth VCF used to score 3/3 PASS: the one truth event
-        // was never checked and the three globals passed on background reads
-        // (M11's door, one step over). No check reads the BAM here, so the
-        // paths need not exist.
+        // A truth VCF whose events no check covers used to score 3/3 PASS:
+        // the events were never checked and the three globals passed on
+        // background reads (M11's door, one step over). INS is checked now
+        // (`ins_reads`), so this uses a type that still reaches no branch.
+        // No check reads the BAM here, so the paths need not exist.
         let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
-        let event = ins_event("chrA", 10_000);
+        let event = TruthEvent {
+            sv_type: "CNV".to_string(),
+            ..ins_event("chrA", 10_000)
+        };
         let mut results: Vec<CheckResult> = Vec::new();
 
         check_event(&args, &event, &mut results);
 
         assert_eq!(results.len(), 1, "an unchecked event must leave a result");
         assert!(!results[0].pass, "an event no check covers may not pass");
+    }
+
+    #[test]
+    fn test_ins_event_gets_a_real_check() {
+        // spike writes SVTYPE=INS itself (truth.rs), so "no check applies"
+        // made `spike validate` unable to exit 0 on spike's own output --
+        // README step 4 broken for insertions. An INS must get a check that
+        // reads the BAM, not a verdict reached without opening it.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event = ins_event("chrA", 10_000);
+        let mut results: Vec<CheckResult> = Vec::new();
+
+        check_event(&args, &event, &mut results);
+
+        assert_eq!(results.len(), 1, "an INS must leave exactly one result");
+        assert_eq!(
+            results[0].check_name, "ins_reads",
+            "an INS must be checked for reads carrying the inserted sequence"
+        );
+    }
+
+    #[test]
+    fn test_insertion_evidence_is_read_from_the_cigar() {
+        // `std::io::Error` is not `Clone`, so each case rebuilds its ops.
+        fn ops(spec: &[(Kind, usize)]) -> Vec<std::io::Result<Op>> {
+            spec.iter().map(|&(k, n)| Ok(Op::new(k, n))).collect()
+        }
+        // 100M at 1000, then a 300 bp soft clip: the clip boundary is 1100.
+        let clip_at_1100 = [(Kind::Match, 100), (Kind::SoftClip, 300)];
+        assert!(cigar_shows_insertion_near(
+            ops(&clip_at_1100).into_iter(),
+            1000,
+            1100,
+            100,
+            50
+        ));
+        // Same read, a breakpoint 500 bp away: not this event's evidence.
+        assert!(!cigar_shows_insertion_near(
+            ops(&clip_at_1100).into_iter(),
+            1000,
+            1600,
+            100,
+            50
+        ));
+        // Same read, clip too short to be the insertion.
+        assert!(!cigar_shows_insertion_near(
+            ops(&clip_at_1100).into_iter(),
+            1000,
+            1100,
+            100,
+            400
+        ));
+
+        // A leading clip's boundary is the alignment start.
+        let leading = [(Kind::SoftClip, 120), (Kind::Match, 31)];
+        assert!(cigar_shows_insertion_near(
+            ops(&leading).into_iter(),
+            1100,
+            1100,
+            100,
+            50
+        ));
+
+        // An I operation after 50M, a 200 bp D and 10M from 1000 sits at
+        // reference 1260: the deletion must advance the reference position.
+        let with_del = [
+            (Kind::Match, 50),
+            (Kind::Deletion, 200),
+            (Kind::Match, 10),
+            (Kind::Insertion, 60),
+            (Kind::Match, 91),
+        ];
+        assert!(cigar_shows_insertion_near(
+            ops(&with_del).into_iter(),
+            1000,
+            1260,
+            10,
+            50
+        ));
+        assert!(!cigar_shows_insertion_near(
+            ops(&with_del).into_iter(),
+            1000,
+            1050,
+            10,
+            50
+        ));
+
+        // A plain 151M read is evidence of nothing.
+        assert!(!cigar_shows_insertion_near(
+            ops(&[(Kind::Match, 151)]).into_iter(),
+            1000,
+            1100,
+            100,
+            50
+        ));
     }
 
     #[test]

@@ -429,6 +429,8 @@ spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
   --json           Output JSON instead of text table
 ```
 
+The same table of checks-by-event-type is printed by `spike validate --help`.
+
 The three `[global]` checks — `insert_size`, `dup_rate` and `mean_mapq` — are
 computed from one sample of the reads in the truth events' own windows (event
 +/- `--flank`), read with the same indexed query the per-event checks use, not
@@ -466,11 +468,36 @@ checks fail rather than reporting whole-file statistics for a run that validated
 nothing.
 
 A truth event **no check applies to** is reported as a failed `event_checked`
-result rather than left out. Only DEL and DUP get `coverage_ratio`, only
-DEL/DUP/INV/BND get `split_reads`, and only a SNP with explicit REF/ALT gets
-`allele_freq`, so an INS has no per-event check at all: without this an
-INS-only truth VCF scored `3/3 PASS` on the three global checks alone, having
-verified nothing about the one event it was given.
+result rather than left out: without this, a truth VCF of such events scored
+`3/3 PASS` on the three global checks alone, having verified nothing about the
+events it was given. Which check covers which type:
+
+| Truth event | Per-event checks |
+| --- | --- |
+| DEL, DUP | `coverage_ratio`, `split_reads` |
+| INV, BND | `split_reads` |
+| INS | `ins_reads` |
+| SNP (single-base REF and ALT) | `allele_freq` |
+| anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
+
+`ins_reads` counts reads whose alignment **leaves the reference at POS**: an
+insertion has no second breakpoint and no reference span, so neither
+`coverage_ratio` nor `split_reads` can see it, but an aligner still has to put
+the inserted bases somewhere -- an `I` CIGAR operation when the insertion fits
+inside a read that anchors on both sides, a soft clip at the insertion point
+when it does not. Either counts, if it is at least `min(SVLEN, 50)` bases long
+and its reference boundary is within 100 bp of POS, and the check passes at
+two such reads (the same threshold `split_reads` uses: one clipped read is
+background anywhere, two at the same point are not). An INS record with no
+usable `SVLEN` has no length to look for and is a failed check.
+
+Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
+and merged with `merge.sh`: **21** reads carry the planted 300 bp insertion at
+chr20:39000000, against **0, 0, 0, 0 and 1** at five control positions in the
+same BAM where nothing was planted. Before this check existed, spike's own
+round trip could not succeed for insertions -- the same run scored `5/6 PASS`
+and exited **1** on the `event_checked` row, and now scores `6/6 PASS` and
+exits 0.
 
 ### Controlling the read extraction region
 
