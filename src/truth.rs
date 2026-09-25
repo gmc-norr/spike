@@ -483,7 +483,7 @@ mod tests {
             },
             del("chr1", 2, 5),
         ];
-        let path = std::env::temp_dir().join(format!("spike_truth_{}.vcf", std::process::id()));
+        let path = std::env::temp_dir().join(format!("spike_truth_sorted_{}.vcf", std::process::id()));
         write_truth_vcf(&events, &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
