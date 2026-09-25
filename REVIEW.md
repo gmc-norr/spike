@@ -1851,6 +1851,19 @@ run):
 A fix -- what `validate` should count -- comes after this, with a plan of its
 own.
 
+**Amendment (before any code or result).** As written, "F = 0" is not
+`validate`'s count. It still asks a read to cover the whole repeat region
+plus the anchor bases, and `validate` asks neither of a carrier, nor that of
+a spanning read in a repeat. So the plan contradicted itself in two places,
+now resolved to what they were meant to say:
+- **The ruler check** runs with the flank filter *off*: `validate`'s own rule.
+- **The baselines** in the criteria are that unfiltered count too: "the indel
+  mean fraction rises by >= 0.04 over F = 0" reads "over the unfiltered
+  count", and so do the SNV control's two limits.
+
+F = 0, 5, 10, 20, 30 are all still reported. For an SNV, F = 0 and
+unfiltered are the same thing.
+
 ## Low severity
 
 | ID | Problem | Where | Fix |
