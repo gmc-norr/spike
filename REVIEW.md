@@ -2865,11 +2865,11 @@ changed; **none was refuted**, and every number the review printed came back ide
 | --- | --- | --- | --- |
 | CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, fixed |
 | CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
-| CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note |
+| CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note; its fail-closed half fixed for `--gvcf` |
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
-| CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
-| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence and the AF caps fixed; input GT, ploidy and `af=het` still open) |
+| CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note; relabelled (warning, help, README), not renamed |
+| CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence, the AF caps and `af=het` fixed; input GT and ploidy still open) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, design note |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
@@ -2957,6 +2957,21 @@ represented; the gVCF path drops non-SNP alleles outright.
 **AF 0.360** (32 deletion-supporting vs 57 reference-supporting reads). Code:
 `src/loh.rs:34` (`HashMap<u64, u8>`), `src/loh.rs:513` (`if ref_allele.len() != 1 || alt_allele.len() != 1 { return; }`).
 
+**Fixed (fail-closed, for `--gvcf` only; `f08228d`).** An unreadable `--gvcf` logged a
+warning and went on with the region's reads suppressed at random, at exit 0. It now stops the
+run: `loh::sample_copies` wraps the gVCF read error in `GvcfUnreadable`, and
+`sample_copies_for_event` returns it. Measured on the HG002 BAM,
+`del:chr20:38412500-38422500 --seed 1`: a plain-gzip, a missing and an unindexed `.vcf.gz`,
+and a good one with no `bcftools` on PATH, each **exit 1 with an empty output directory** and
+the cause quoted; the indexed chr20 gVCF still exits 0. **Still open:** a failed pileup
+(no `--gvcf`, or a readable one with no het SNPs in the region) still warns and goes on; the
+footprint scan for non-SNP variation; and the indel model itself. `NextStep::SkipLoh` became
+`NextStep::Stop`, and the two tests quoted under CR-BUILD below were renamed:
+`test_a_gvcf_read_that_fails_says_loh_is_skipped` is now
+`test_a_gvcf_read_that_fails_says_the_run_stops`, and
+`test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup` is now
+`..._warns_about_the_stop_not_the_pileup`. The quotes below are left as they were measured.
+
 ### CR4 -- the training filter also decides what can be edited
 
 **Claim.** Only proper pairs passing the MAPQ/flag filters enter the donor pool, so every
@@ -2999,6 +3014,14 @@ fragments on top of `C` retained originals at v=0.5. `from_fusion` (`src/haploty
 builds one join with flanks, not a derivative chromosome pair, so copy number is not
 conserved.
 
+**Relabelled, not renamed (`a1ba176`).** A rename is a CLI change, so the mode keeps its name
+and says what it is instead: `fusion_mode_warning` logs once per run with a fusion event, the
+`--event` help line says a fusion adds one junction and is not a balanced translocation, and
+the README's fusion section says what to use it for and what not to read into it. Measured on
+the HG002 BAM with a two-gene chr20 BED, `fusion:GENEA:exon2:GENEB:exon2 --seed 1`: the
+warning prints once and the run exits 0. The model itself is unchanged; derivative-chromosome
+paths stay blocked on CR1's grouped-event composition.
+
 ### CR7 -- truth lacks what germline genotype and sequence validation need
 
 **Claim, in five parts,** all confirmed:
@@ -3007,7 +3030,10 @@ conserved.
 - **No ploidy or CN model.** `genotype_from_vaf` has no haploid or CN>2 path.
 - **`af=het` moves the event fraction,** not just the observation:
   `Beta(40,40)` (`src/main.rs:430`) feeds `resolved_af`, which drives both suppression and
-  generation.
+  generation. **Fixed (`8dca8d0`):** `af=het` is exactly 0.5, the same as `af=0.5`, through
+  `resolve_af_spec`. Before, seed 0 drew 0.4605. Runs with an `af=het` event no longer take
+  draws from the run's RNG, so for the same `--seed` they suppress and generate different
+  reads than before; runs without one are unchanged.
 - **Insertion sequence is lost.** Truth wrote `<INS>` with SVLEN only (`src/truth.rs:264`);
   a generated sequence was a local value in `src/main.rs:1252` and was never stored in the
   event. **Fixed -- this bullet only; the other four are open.** `build_haplotype` writes the

@@ -1,4 +1,16 @@
 > Copied unchanged from the detached run's `/home/parlar_ai/spike-codex-run/NEW-FINDINGS.md` (2026-09-25). The `STATUS.md`, `TASKS.md` and `scratch/` it names are in that folder, outside git.
+>
+> **Status since the copy** (the findings below are left as the run wrote them):
+>
+> | ID | Status |
+> | --- | --- |
+> | NF1 | Open. Changing `MIN_EVENTS` or the region guidance is a default change. |
+> | NF2 | Fixed, `dc73bf1`: the adjacent probes pass `--allow-overlap`; the script runs to exit 0 with all 14 rows. |
+> | NF3 | Fixed, `395dcc7`: the last pid-only temp name in `truth.rs` is unique per test. |
+> | NF4 | Written down, `39b1aa1`: the README's Build section says one target dir per commit, and md5 the binaries. A practice, not code. |
+> | NF5 | Open (documented, not fixed). |
+> | NF6 | Fixed, `d35f31b`: a type with no expected ratio gets no verdict (`N/A`, not a pass). |
+> | NF7 | Fixed in part, `2844aff`: the harness records every tool's version in `<outdir>/tool_versions.tsv`. It still pins none. |
 
 # NEW-FINDINGS — found during this run, not fixed
 

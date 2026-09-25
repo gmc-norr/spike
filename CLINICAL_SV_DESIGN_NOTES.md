@@ -1,4 +1,11 @@
 > Copied unchanged from the detached run's `/home/parlar_ai/spike-codex-run/DESIGN-NOTES.md` (2026-09-25). The `STATUS.md`, `TASKS.md` and `scratch/` it names are in that folder, outside git.
+>
+> **Done since the copy** (the notes below are left as the run wrote them): the first three
+> items of its suggested order. **CR7(c)**, `8dca8d0`: `af=het` is exactly 0.5. **CR3's
+> fail-closed half**, `f08228d`: an unreadable `--gvcf` stops the run, with no flag; a failed
+> pileup still only warns, and the footprint scan is not done. **CR6 relabel**, `a1ba176`: a
+> warning, the help line and the README say what fusion mode is; no rename. Details and
+> measurements are in `REVIEW.md` under each CR.
 
 # DESIGN-NOTES — the Codex findings that change spike's model or its defaults
 
