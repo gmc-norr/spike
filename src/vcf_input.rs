@@ -236,11 +236,16 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                     .unwrap_or("unknown")
                     .to_string();
 
+                // Uppercase, as types.rs documents SmallVariant's alleles and
+                // as exon.rs's snp: spec already stores them: synthesis
+                // uppercases either way, so the stored case only ever reaches
+                // the truth VCF text, and the same variant must not be written
+                // one way via --vcf and another via --event.
                 events.push(SimEvent::SmallVariant {
                     chrom: record.chrom.clone(),
                     pos: record.pos,
-                    ref_allele: record.ref_allele.as_bytes().to_vec(),
-                    alt_allele: record.alt.as_bytes().to_vec(),
+                    ref_allele: record.ref_allele.to_ascii_uppercase().into_bytes(),
+                    alt_allele: record.alt.to_ascii_uppercase().into_bytes(),
                     gene,
                     allele_fraction: af,
                 });
@@ -697,6 +702,39 @@ mod tests {
             }
             _ => panic!("expected SmallVariant"),
         }
+    }
+
+    /// The alleles a SimEvent carries, for comparing two entry points.
+    fn small_variant_alleles(event: &SimEvent) -> (Vec<u8>, Vec<u8>) {
+        match event {
+            SimEvent::SmallVariant {
+                ref_allele,
+                alt_allele,
+                ..
+            } => (ref_allele.clone(), alt_allele.clone()),
+            other => panic!("expected SmallVariant, got {:?}", other),
+        }
+    }
+
+    /// types.rs documents SmallVariant's alleles as uppercase and
+    /// exon.rs's `snp:` spec upholds it, so a soft-masked lowercase record
+    /// read from a VCF must not land in the truth VCF in a different case
+    /// than the same variant typed on the command line.
+    #[test]
+    fn test_small_variant_alleles_are_uppercased_like_the_event_spec() {
+        let vcf = "chr1\t100\tsnp1\ta\tc\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        let (spec_event, _) = crate::exon::parse_event_spec("snp:chr1:100:a:c", &[]).unwrap();
+        assert_eq!(
+            small_variant_alleles(&events[0]),
+            small_variant_alleles(&spec_event),
+            "the same variant through --vcf and --event must store the same alleles"
+        );
+        assert_eq!(
+            small_variant_alleles(&events[0]),
+            (b"A".to_vec(), b"C".to_vec())
+        );
     }
 
     #[test]
