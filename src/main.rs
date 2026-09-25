@@ -163,10 +163,16 @@ struct Args {
     #[arg(long)]
     gvcf: Option<String>,
 
-    /// Allow overlapping events on the same chromosome.
+    /// Allow events on the same chromosome that overlap or come within 7000bp
+    /// of each other.
     ///
-    /// By default, overlapping events are rejected to keep event effects
-    /// independent and truth interpretation unambiguous.
+    /// By default they are rejected to keep event effects independent and truth
+    /// interpretation unambiguous. The check is on each event's replacement
+    /// footprint, not its span: an event replaces reads -- removes the
+    /// originals and tiles synthetic ones -- across its span grown by 3500bp on
+    /// each side (2000bp of haplotype flank + 1500bp of fragment). So two spans
+    /// must be at least 7000bp apart, or each event's synthetic flank writes
+    /// plain reference over the other event's edit and cancels it.
     #[arg(long)]
     allow_overlap: bool,
 
@@ -634,28 +640,29 @@ fn main() -> Result<()> {
 /// multi-event simulations independent. When `allow_overlap` is true, overlaps
 /// are allowed but logged as warnings.
 fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<()> {
-    let mut overlaps: Vec<(usize, usize, String, u64, u64, u64, u64)> = Vec::new();
+    let mut overlaps: Vec<FootprintOverlap> = Vec::new();
 
     for i in 0..events.len() {
         let regions_i = event_footprints_for_overlap(&events[i]);
         for j in (i + 1)..events.len() {
             let regions_j = event_footprints_for_overlap(&events[j]);
-            for (chrom_i, start_i, end_i) in &regions_i {
-                for (chrom_j, start_j, end_j) in &regions_j {
-                    if chrom_i != chrom_j {
+            for region_i in &regions_i {
+                for region_j in &regions_j {
+                    if region_i.chrom != region_j.chrom {
                         continue;
                     }
-                    let has_overlap = start_i < end_j && start_j < end_i;
+                    let has_overlap = region_i.footprint.0 < region_j.footprint.1
+                        && region_j.footprint.0 < region_i.footprint.1;
                     if has_overlap {
-                        overlaps.push((
-                            i + 1,
-                            j + 1,
-                            chrom_i.to_string(),
-                            *start_i,
-                            *end_i,
-                            *start_j,
-                            *end_j,
-                        ));
+                        overlaps.push(FootprintOverlap {
+                            event_i: i + 1,
+                            event_j: j + 1,
+                            chrom: region_i.chrom.clone(),
+                            span_i: region_i.span,
+                            footprint_i: region_i.footprint,
+                            span_j: region_j.span,
+                            footprint_j: region_j.footprint,
+                        });
                     }
                 }
             }
@@ -667,17 +674,18 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
     }
 
     if allow_overlap {
-        for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps {
+        for overlap in overlaps {
             log::warn!(
                 "Events {} and {} have intersecting replacement footprints on \
-                 {} ({}-{} vs {}-{}). Overlap composition is approximate.",
-                i,
-                j,
-                chrom,
-                start_i,
-                end_i,
-                start_j,
-                end_j,
+                 {}: spans {} and {} (footprints {} and {}). Overlap \
+                 composition is approximate.",
+                overlap.event_i,
+                overlap.event_j,
+                overlap.chrom,
+                format_range(overlap.span_i),
+                format_range(overlap.span_j),
+                format_range(overlap.footprint_i),
+                format_range(overlap.footprint_j),
             );
         }
         return Ok(());
@@ -687,17 +695,29 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
         "overlapping events detected (default is to reject overlaps).\n\
          Each event replaces reads across its span grown by {}bp on each side \
          ({}bp of haplotype flank + {}bp of fragment), and two such replacement \
-         footprints may not intersect.\n\
+         footprints may not intersect: two spans on one chromosome must be at \
+         least {}bp apart.\n\
          Use --allow-overlap to override.\n",
         FOOTPRINT_MARGIN,
         HAP_FLANK,
         crate::stats::MAX_FRAGMENT_LEN,
+        2 * FOOTPRINT_MARGIN,
     );
-    for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps.iter().take(10) {
+    // Each line names the spans as well as the footprints: the spans are the
+    // numbers the user typed (or that a --vcf record carries), and a footprint
+    // appears nowhere in the input, so footprints alone leave a 50-record --vcf
+    // unsearchable for the offending pair.
+    for overlap in overlaps.iter().take(10) {
         msg.push_str(&format!(
             "  - events {} and {} have intersecting replacement footprints on \
-             {} ({}-{} vs {}-{})\n",
-            i, j, chrom, start_i, end_i, start_j, end_j
+             {}: spans {} and {} (footprints {} and {})\n",
+            overlap.event_i,
+            overlap.event_j,
+            overlap.chrom,
+            format_range(overlap.span_i),
+            format_range(overlap.span_j),
+            format_range(overlap.footprint_i),
+            format_range(overlap.footprint_j),
         ));
     }
     if overlaps.len() > 10 {
@@ -721,6 +741,36 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
 /// range and still reach into it, so the longest fragment is added as well.
 const FOOTPRINT_MARGIN: u64 = HAP_FLANK + crate::stats::MAX_FRAGMENT_LEN as u64;
 
+/// One region of an event, with both the span the user asked for and the
+/// replacement footprint around it. The span is kept alongside the footprint so
+/// the rejection message can name the coordinates that appear in the user's
+/// input, not only the derived ones.
+struct EventFootprint {
+    chrom: String,
+    /// The event's own interval, 0-based half-open.
+    span: (u64, u64),
+    /// `span` grown by `FOOTPRINT_MARGIN` on each side.
+    footprint: (u64, u64),
+}
+
+/// A pair of event regions whose replacement footprints intersect, with
+/// everything the message needs: both 1-based event numbers, the chromosome,
+/// and each event's span beside its footprint.
+struct FootprintOverlap {
+    event_i: usize,
+    event_j: usize,
+    chrom: String,
+    span_i: (u64, u64),
+    footprint_i: (u64, u64),
+    span_j: (u64, u64),
+    footprint_j: (u64, u64),
+}
+
+/// Format an interval the way the overlap messages print it.
+fn format_range((start, end): (u64, u64)) -> String {
+    format!("{}-{}", start, end)
+}
+
 /// Return the replacement footprint of each of an event's regions: the range
 /// over which that event removes originals and lays synthetic reads down.
 ///
@@ -730,17 +780,18 @@ const FOOTPRINT_MARGIN: u64 = HAP_FLANK + crate::stats::MAX_FRAGMENT_LEN as u64;
 /// its footprint -- sequence another event may have deleted or inverted -- which
 /// corrupts that event the same way, so fusions are checked like every other
 /// event.
-fn event_footprints_for_overlap(event: &SimEvent) -> Vec<(String, u64, u64)> {
+fn event_footprints_for_overlap(event: &SimEvent) -> Vec<EventFootprint> {
     event_regions_for_overlap(event)
         .into_iter()
-        .map(|(chrom, start, end)| {
+        .map(|(chrom, start, end)| EventFootprint {
+            chrom,
+            span: (start, end),
             // Saturating at 0 as the haplotype constructors do at a chromosome
             // start; a footprint past a chromosome end is harmless here.
-            (
-                chrom,
+            footprint: (
                 start.saturating_sub(FOOTPRINT_MARGIN),
                 end.saturating_add(FOOTPRINT_MARGIN),
-            )
+            ),
         })
         .collect()
 }
@@ -1911,6 +1962,29 @@ mod tests {
             "the help above claims below {} is refused",
             HAP_FLANK
         );
+
+        // CR1 widened the overlap check from event spans to replacement
+        // footprints, so --allow-overlap now also gates pairs that do not
+        // overlap at all: two spans on one chromosome closer than
+        // 2 * FOOTPRINT_MARGIN are refused as well. A user reading "overlapping
+        // events are rejected" and then refused for two events 1kb apart has
+        // been told the wrong thing.
+        let footprint_gap = 2 * FOOTPRINT_MARGIN;
+        assert!(
+            help.contains(&footprint_gap.to_string()),
+            "--allow-overlap's help must state the {footprint_gap}bp gap the code enforces"
+        );
+        assert!(
+            validate_event_overlaps(
+                &[
+                    del("chr1", 100_000, 200_000),
+                    del("chr1", 200_000 + footprint_gap - 1, 300_000),
+                ],
+                false,
+            )
+            .is_err(),
+            "the help above claims spans closer than {footprint_gap}bp are refused"
+        );
     }
 
     #[test]
@@ -2965,7 +3039,29 @@ done"#,
                 err.contains(&footprint),
                 "the error must name the footprint {footprint}:\n{err}"
             );
+            // ... and the span, which is what the user actually typed. A
+            // footprint appears nowhere in the input, so a 50-record --vcf
+            // whose message names only footprints cannot be searched for the
+            // offending pair without subtracting the margin by hand.
+            let span = format!("{start}-{end}");
+            assert!(
+                err.contains(&span),
+                "the error must name the span {span} the user typed:\n{err}"
+            );
         }
+    }
+
+    #[test]
+    fn test_overlap_policy_rejects_one_below_the_footprint_boundary() {
+        // The reject side of the boundary that
+        // `test_overlap_policy_allows_touching_boundaries` pins from the accept
+        // side: one bp closer than 2 * FOOTPRINT_MARGIN and the two footprints
+        // share a base, so the pair must be refused.
+        let events = vec![
+            del("chr1", 100_000, 200_000),
+            del("chr1", 200_000 + 2 * FOOTPRINT_MARGIN - 1, 300_000),
+        ];
+        assert!(validate_event_overlaps(&events, false).is_err());
     }
 
     #[test]
@@ -3014,6 +3110,31 @@ done"#,
             include_str!("extract.rs").matches(builder).count(),
             2,
             "extract.rs builds an indexed CRAM reader outside the pruning opener"
+        );
+    }
+
+    /// `scripts/validate_pipeline.sh` clusters the truth VCF's DELs on
+    /// `FOOTPRINT_GAP`, a hand-written copy of `2 * FOOTPRINT_MARGIN`: the shell
+    /// cannot read the Rust constant, so nothing but this test stops the two
+    /// drifting apart. If the constant grows, the script keeps records spike
+    /// then rejects and the run dies in step 3 rather than in the filter that
+    /// exists to prevent it.
+    #[test]
+    fn test_validate_pipeline_script_mirrors_the_footprint_margin() {
+        let script = include_str!("../scripts/validate_pipeline.sh");
+        let assignment = script
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("FOOTPRINT_GAP="))
+            .expect("validate_pipeline.sh must set FOOTPRINT_GAP");
+        let literal = assignment.split_whitespace().next().unwrap_or(assignment);
+
+        assert_eq!(
+            literal.parse::<u64>().ok(),
+            Some(2 * FOOTPRINT_MARGIN),
+            "validate_pipeline.sh's FOOTPRINT_GAP ({}) must equal \
+             2 * FOOTPRINT_MARGIN ({})",
+            literal,
+            2 * FOOTPRINT_MARGIN
         );
     }
 

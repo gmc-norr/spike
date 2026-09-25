@@ -229,13 +229,13 @@ AF specifiers:
 
 By default, events on the same chromosome that land on each other are rejected to keep effects independent. Use `--allow-overlap` to override (they are then simulated independently and merged, which is approximate where they meet).
 
-What counts as landing on each other is the **replacement footprint**, not the event span. Each event is simulated on its own against the original BAM, and it replaces reads — removes the originals and tiles synthetic ones — across its span *plus 3500 bp on each side*: 2000 bp of haplotype flank (the reference spike carries either side of the edit, `HAP_FLANK`) plus 1500 bp for the longest fragment it can emit (`MAX_FRAGMENT_LEN`). So an event's footprint is `start - 3500 .. end + 3500`, and **two events must leave at least 7000 bp between the end of one span and the start of the next.** Closer than that and each event's synthetic flank writes plain reference over the other event's edit, undoing it: two 1 kb homozygous deletions 1 kb apart recovered 70x and 74x of a 75x baseline instead of 0x. The error names both events and both footprints:
+What counts as landing on each other is the **replacement footprint**, not the event span. Each event is simulated on its own against the original BAM, and it replaces reads — removes the originals and tiles synthetic ones — across its span *plus 3500 bp on each side*: 2000 bp of haplotype flank (the reference spike carries either side of the edit, `HAP_FLANK`) plus 1500 bp for the longest fragment it can emit (`MAX_FRAGMENT_LEN`). So an event's footprint is `start - 3500 .. end + 3500`, and **two events must leave at least 7000 bp between the end of one span and the start of the next.** Closer than that and each event's synthetic flank writes plain reference over the other event's edit, undoing it: two 1 kb homozygous deletions 1 kb apart recovered 70x and 74x of a 75x baseline instead of 0x. The error names both events, both spans as you gave them, and both footprints:
 
 ```
 Error: overlapping events detected (default is to reject overlaps).
-Each event replaces reads across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment), and two such replacement footprints may not intersect.
+Each event replaces reads across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment), and two such replacement footprints may not intersect: two spans on one chromosome must be at least 7000bp apart.
 Use --allow-overlap to override.
-  - events 1 and 2 have intersecting replacement footprints on chrT (6500-14500 vs 8500-16500)
+  - events 1 and 2 have intersecting replacement footprints on chrT: spans 10000-11000 and 12000-13000 (footprints 6500-14500 and 8500-16500)
 ```
 
 `--allow-overlap` still accepts them with a warning, and the composition is still approximate there — it does not make nearby events compose correctly.
@@ -778,9 +778,9 @@ Options:
           Optional gVCF/VCF with SNP calls for LOH simulation. When provided, het SNP positions are extracted from this file to determine which reads belong to the deleted haplotype (more accurate than the default pileup-based approach). Supports .vcf and .vcf.gz (requires bcftools in PATH for .vcf.gz)
 
       --allow-overlap
-          Allow overlapping events on the same chromosome.
+          Allow events on the same chromosome that overlap or come within 7000bp of each other.
           
-          By default, overlapping events are rejected to keep event effects independent and truth interpretation unambiguous.
+          By default they are rejected to keep event effects independent and truth interpretation unambiguous. The check is on each event's replacement footprint, not its span: an event replaces reads -- removes the originals and tiles synthetic ones -- across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment). So two spans must be at least 7000bp apart, or each event's synthetic flank writes plain reference over the other event's edit and cancels it.
 
       --dup-model <DUP_MODEL>
           Duplication model: "full" (default) builds a full tandem haplotype with duplicated region appearing twice, producing both junction reads and correct depth increase from a single tiling pass. "junction" uses the legacy junction-only haplotype with separate depth copies
@@ -814,7 +814,7 @@ the message is the exact text spike prints, measured by running it.
 | An event beyond the end of its chromosome | `DEL event start on chr20 is at or beyond chromosome length (99000000 >= 64444167)` | `validate_interval` / `validate_point` |
 | An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
-| Two events whose replacement footprints (span ± 3500 bp) intersect, without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Each event replaces reads across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment), and two such replacement footprints may not intersect.`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 have intersecting replacement footprints on chrT (6500-14500 vs 8500-16500)` | `main.rs` |
+| Two events whose replacement footprints (span ± 3500 bp) intersect, without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Each event replaces reads across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment), and two such replacement footprints may not intersect: two spans on one chromosome must be at least 7000bp apart.`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 have intersecting replacement footprints on chrT: spans 10000-11000 and 12000-13000 (footprints 6500-14500 and 8500-16500)` | `main.rs` |
 | A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 read pair(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
 | No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |

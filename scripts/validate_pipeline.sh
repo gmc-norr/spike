@@ -624,7 +624,7 @@ step2_filter_truth_vcf() {
     fi
 
     if [[ "$n_after" -lt "$MIN_EVENTS" ]]; then
-        fail "Only $n_after events after filtering (need $MIN_EVENTS). Check the truth VCF, --region and --max-events."
+        fail "Only $n_after events after filtering (need $MIN_EVENTS). Clustering drops every truth DEL within ${FOOTPRINT_GAP}bp of a kept one, which spike requires, so a small --region can thin out fast; check the truth VCF, --region and --max-events, or lower --min-events."
     fi
 
     # bgzip + tabix for spike
