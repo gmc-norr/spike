@@ -634,6 +634,77 @@ fn floor_tiling_count(requested: usize, coverage: f64, vaf: f64) -> usize {
     MIN_TILED_FRAGMENTS
 }
 
+/// The fragment starts in `[0, max_start]` whose fragment overlaps reference
+/// sequence, as inclusive intervals.
+///
+/// A fragment `[s, s + frag_len)` touches a reference segment at haplotype
+/// `[a, b)` exactly when `s < b` and `s + frag_len > a`, so that segment
+/// contributes `[a - (frag_len - 1), min(b - 1, max_start)]` -- the same
+/// predicate `overlaps_ref_segment` tests, one segment at a time. Segments are
+/// in haplotype order, so the intervals come out ascending and only
+/// neighbours can meet; touching or nearby reference segments are merged,
+/// because a start listed twice would be drawn twice and would make the
+/// union's total length too long.
+fn ref_overlapping_start_intervals(
+    haplotype: &VariantHaplotype,
+    frag_len: u64,
+    max_start: u64,
+) -> Vec<(u64, u64)> {
+    let mut intervals: Vec<(u64, u64)> = Vec::new();
+    if frag_len == 0 {
+        return intervals;
+    }
+    for seg in &haplotype.segments {
+        if seg.origin.is_none() {
+            continue; // novel sequence anchors nothing
+        }
+        let seg_start = seg.hap_offset;
+        let seg_end = seg_start + seg.sequence.len() as u64;
+        if seg_end == 0 {
+            continue; // an empty segment at offset 0 reaches no start
+        }
+        let lo = seg_start.saturating_sub(frag_len - 1);
+        let hi = (seg_end - 1).min(max_start);
+        if lo > hi {
+            continue; // wholly past max_start
+        }
+        match intervals.last_mut() {
+            Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
+            _ => intervals.push((lo, hi)),
+        }
+    }
+    intervals
+}
+
+/// Draw a fragment start uniformly over the starts that overlap reference.
+///
+/// The draw is over the union's total length and then mapped into the
+/// intervals, so every valid start is equally likely, a start outside the
+/// union can never come out, and there is nothing to retry. `None` when the
+/// union is empty -- no reference segment within `frag_len` of any start --
+/// which the caller skips rather than placing a fragment anyway.
+fn sample_ref_overlapping_start(
+    haplotype: &VariantHaplotype,
+    frag_len: u64,
+    max_start: u64,
+    rng: &mut StdRng,
+) -> Option<u64> {
+    let intervals = ref_overlapping_start_intervals(haplotype, frag_len, max_start);
+    let total: u64 = intervals.iter().map(|&(lo, hi)| hi - lo + 1).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut offset = rng.gen_range(0..total);
+    for (lo, hi) in intervals {
+        let len = hi - lo + 1;
+        if offset < len {
+            return Some(lo + offset);
+        }
+        offset -= len;
+    }
+    None // unreachable: `offset` is below the intervals' total length
+}
+
 /// Tile synthetic reads across the variant haplotype.
 ///
 /// Number of reads is determined by coverage, VAF, and haplotype/zone length.
@@ -722,20 +793,20 @@ fn tile_haplotype_reads(
                 continue;
             }
             rng.gen_range(zone_start..=zone_end)
+        } else if has_novel {
+            // Uniform across the starts whose fragment overlaps reference
+            // sequence, drawn in proportion to those intervals' lengths.
+            // `compute_tiling_count` left the novel-only starts out of the
+            // budget, so accepting one here would spend a
+            // reference-overlapping fragment on a read pair with no reference
+            // anchor (CR5).
+            match sample_ref_overlapping_start(haplotype, frag_len, max_start, rng) {
+                Some(start) => start,
+                None => continue,
+            }
         } else {
             // Uniform across the whole haplotype.
-            // For haplotypes with novel segments, reject placements that
-            // land entirely in novel sequence (up to 10 attempts).
-            let mut start = rng.gen_range(0..=max_start);
-            if has_novel {
-                for _ in 0..10 {
-                    if haplotype.overlaps_ref_segment(start, frag_len) {
-                        break;
-                    }
-                    start = rng.gen_range(0..=max_start);
-                }
-            }
-            start
+            rng.gen_range(0..=max_start)
         };
 
         let name = format!("{}_hap_{:06}", name_prefix, idx);
@@ -1127,6 +1198,103 @@ mod tests {
         assert!(hap.overlaps_ref_segment(3000, 400));
     }
 
+    // ---------------------------------------------------------------
+    // Reference-overlapping start sampler
+    // ---------------------------------------------------------------
+
+    /// Every reference-segment layout the sampler has to get right: flanks at
+    /// both ends, two insertions of different sizes, and two reference
+    /// segments that touch (so their start intervals overlap and must merge).
+    fn mixed_haplotype() -> VariantHaplotype {
+        make_haplotype(vec![
+            ref_segment(0, 20),
+            novel_segment(30),
+            ref_segment(20, 20),
+            ref_segment(40, 10),
+            novel_segment(5),
+            ref_segment(50, 10),
+        ])
+    }
+
+    #[test]
+    fn test_ref_overlapping_start_intervals_are_exactly_the_valid_starts() {
+        let hap = mixed_haplotype();
+        assert_eq!(hap.total_len, 95);
+
+        for frag_len in 1..=hap.total_len {
+            let max_start = hap.total_len - frag_len;
+            let intervals = ref_overlapping_start_intervals(&hap, frag_len, max_start);
+
+            // Ascending and disjoint: an unmerged overlap would draw a shared
+            // start twice and make the union's total length too long.
+            for pair in intervals.windows(2) {
+                assert!(
+                    pair[0].1 < pair[1].0,
+                    "frag_len {}: intervals {:?} overlap or are out of order",
+                    frag_len,
+                    intervals
+                );
+            }
+
+            let listed: Vec<u64> = intervals
+                .iter()
+                .flat_map(|&(lo, hi)| lo..=hi)
+                .collect();
+            let valid: Vec<u64> = (0..=max_start)
+                .filter(|&start| hap.overlaps_ref_segment(start, frag_len))
+                .collect();
+            assert_eq!(listed, valid, "frag_len {}", frag_len);
+        }
+    }
+
+    #[test]
+    fn test_sample_ref_overlapping_start_uses_both_flanks_of_a_long_insertion() {
+        // ref [0,1000) | 100 kb insertion | ref [1000,2000). At frag_len 400
+        // the valid starts are [0,999] on the left and [100601,101600] on the
+        // right: 1000 each, so a sampler that weights by interval length
+        // splits its draws evenly.
+        let hap = make_haplotype(vec![
+            ref_segment(0, 1000),
+            novel_segment(100_000),
+            ref_segment(1000, 1000),
+        ]);
+        let frag_len = 400;
+        let max_start = hap.total_len - frag_len;
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let mut left = 0;
+        let mut right = 0;
+        for _ in 0..1000 {
+            let start = sample_ref_overlapping_start(&hap, frag_len, max_start, &mut rng)
+                .expect("a haplotype with reference flanks always has a valid start");
+            assert!(
+                hap.overlaps_ref_segment(start, frag_len),
+                "start {} puts the fragment wholly inside the insertion",
+                start
+            );
+            if start < 1000 {
+                left += 1;
+            } else {
+                right += 1;
+            }
+        }
+        assert!(
+            left > 350 && right > 350,
+            "sampler favours one flank: {} left, {} right",
+            left,
+            right
+        );
+    }
+
+    #[test]
+    fn test_sample_ref_overlapping_start_is_none_without_reference_sequence() {
+        // No reference segment at all: there is no valid start, and the
+        // caller must skip the fragment rather than invent one.
+        let hap = make_haplotype(vec![novel_segment(1000)]);
+        let mut rng = StdRng::seed_from_u64(7);
+        assert!(sample_ref_overlapping_start(&hap, 400, 600, &mut rng).is_none());
+    }
+
     // ── Read evidence tests per SV type ─────────────────────────────────
 
     use crate::reference::SharedReference;
@@ -1136,14 +1304,21 @@ mod tests {
     use std::collections::HashMap as StdHashMap;
 
     fn mock_synth_gen(read_length: usize) -> SynthReadGenerator<'static> {
-        let q30 = vec![b'!' + 30; read_length];
+        mock_synth_gen_at_q(read_length, 30)
+    }
+
+    /// `mock_synth_gen` at a chosen Phred. Q93, the FASTQ maximum, puts the
+    /// substitution rate at 5e-10 per base, so a read's bases are the
+    /// haplotype's own and a read's origin can be read off its sequence.
+    fn mock_synth_gen_at_q(read_length: usize, phred: u8) -> SynthReadGenerator<'static> {
+        let qual = vec![b'!' + phred; read_length];
         let pairs: Vec<ReadPair> = (0..100)
             .map(|i| ReadPair {
                 name: format!("mock_{}", i),
                 seq1: vec![b'A'; read_length],
-                qual1: q30.clone(),
+                qual1: qual.clone(),
                 seq2: vec![b'T'; read_length],
-                qual2: q30.clone(),
+                qual2: qual.clone(),
                 ref_start: i as u64 * 500,
                 ref_end: i as u64 * 500 + 500,
                 insert_size: 500,
@@ -2281,6 +2456,44 @@ mod tests {
             "only {} of {} tiled pairs carry inserted sequence",
             with_insert,
             n
+        );
+    }
+
+    #[test]
+    fn test_long_insertion_tiling_never_places_a_fragment_inside_the_insertion() {
+        // ref (A) [0,1000) | 100 kb insertion (G) | ref (A) [1000,2000).
+        // At the 400 bp mean fragment only 2000 of the 101601 starts put any
+        // reference base in the fragment -- about one in fifty -- so a uniform
+        // draw misses almost every time and the ten-redraw loop runs out.
+        let hap = make_haplotype(vec![
+            ref_segment(0, 1000),
+            novel_segment(100_000),
+            ref_segment(1000, 1000),
+        ]);
+        let gen = mock_synth_gen_at_q(150, 93);
+        let pool = make_pool(vec![]);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let pairs =
+            tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "ins", &mut rng);
+        assert!(!pairs.is_empty(), "the insertion haplotype should be tiled");
+
+        // The flanks are A, so a read off them carries A (T when the mate is
+        // reverse-complemented); the insertion is G, so a read wholly inside
+        // it carries only G or C. A pair with neither A nor T came off a
+        // fragment that lay entirely in inserted sequence -- exactly the
+        // placement `compute_tiling_count` left out of the budget.
+        let touches_reference = |p: &&ReadPair| {
+            let off_a_flank = |seq: &[u8]| seq.iter().any(|&b| b == b'A' || b == b'T');
+            off_a_flank(&p.seq1) || off_a_flank(&p.seq2)
+        };
+        let inside = pairs.len() - pairs.iter().filter(touches_reference).count();
+        assert_eq!(
+            inside,
+            0,
+            "{} of {} tiled fragments lay wholly inside the insertion",
+            inside,
+            pairs.len()
         );
     }
 

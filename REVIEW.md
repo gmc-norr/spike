@@ -2706,7 +2706,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
 | CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note |
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
-| CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, not fixed |
+| CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
@@ -2783,6 +2783,16 @@ placement loop redraws at most ten times and then accepts its last start anyway.
 budget is 500 *reference-overlapping* fragments at both extremes. Code:
 `src/simulate.rs:591` (the exclusion), `src/simulate.rs:727` (the ten-try loop),
 `src/synth.rs:818` (the nearest-reference fallback that lets an invalid start through).
+
+**Fixed.** The redraw loop is gone: for the fragment length drawn, tiling now builds the
+start intervals whose fragment overlaps a reference segment, merges them, and draws
+uniformly over their total length, so an excluded start can never come out. Measured on the
+same probe (pairs with a reference 31-mer, out of 500): **493 -> 494 (1 kb), 481 -> 491
+(10 kb), 165 -> 489 (100 kb), 16 -> 494 (1 Mb)**; `synthetic_pairs` stays at 500 in all four
+rows. (Before-numbers are branch HEAD `5aa5059`, not `4efa0f4`, whose 498/485/171/17 moved
+when CR8 changed the donor pool.) The residual few is the probe's own conservatism, not a
+bad placement: the longest exact reference run in either mate of every pair still unanchored
+is 29 bases or fewer, below the 31 the seed needs.
 
 ### CR6 -- fusion mode is additive junction evidence, not a balanced translocation
 

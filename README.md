@@ -959,7 +959,7 @@ ref[P-F .. P]         <inserted bases>       ref[P .. P+F]
 ```
 The inserted sequence is either user-specified or randomly generated. It has no reference origin (novel sequence).
 
-**Simulation**: Suppress-and-replace. Reads spanning left_flank→novel or novel→right_flank produce chimeric reads at the insertion point. Rejection sampling during tiling ensures fragments are not placed entirely within the novel sequence (such reads wouldn't align to the reference at all).
+**Simulation**: Suppress-and-replace. Reads spanning left_flank→novel or novel→right_flank produce chimeric reads at the insertion point. Tiling draws each fragment start from the starts that overlap reference sequence, so no fragment is placed entirely within the novel sequence (such reads wouldn't align to the reference at all).
 
 **Observable signals**:
 - No depth change in flanking regions
@@ -1029,7 +1029,7 @@ Averaged over both copies this is `VAF`. At VAF 0.5 it removes every read of the
 
 The number of synthetic reads to tile is:
 
-- **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
+- **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform over exactly that set, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
 - **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95).
 
 `mean_fragment_length` is the library's own mean. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth.
@@ -1038,7 +1038,7 @@ Fragment lengths are sampled from the empirical distribution of the donor reads.
 
 Each fragment comes from one of the sample's copies and carries its alleles. Up to VAF 0.5 all fragments come from the event copy. Above 0.5 the other copy gives `max(0, 2*VAF - 1) / (2*VAF)` of them, matching what was suppressed from it.
 
-For additive events, fragment placement is restricted to positions that cross a segment boundary (breakpoint). For non-additive events, placement is uniform across the haplotype, with rejection sampling to avoid placing fragments entirely within novel (non-reference) sequence.
+For additive events, fragment placement is restricted to positions that cross a segment boundary (breakpoint). For non-additive events, placement is uniform across the haplotype; where the haplotype carries novel (non-reference) sequence, the start is drawn from the starts whose fragment overlaps reference, in proportion to those intervals' lengths for the fragment length drawn, so a fragment is never placed entirely within novel sequence.
 
 ## The sample's SNPs
 
