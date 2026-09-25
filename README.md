@@ -770,7 +770,7 @@ the message is the exact text spike prints, measured by running it.
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
 | Two events overlapping without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 overlap on chr20 (38412500-38422500 vs 38415000-38420000)` | `main.rs` |
 | A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 record(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
-| No donor coverage at the event's first breakpoint ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at its first breakpoint chr20:29999999: the pool holds 6117 read pair(s) but none of them cover that position. ...` | `simulate.rs` |
+| No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
 | A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
 | A read whose quality string does not match its sequence, or holds a byte outside `!`-`~` | `read <name>/1 has 150 quality byte(s) for 151 base(s); refusing to write invalid FASTQ` | `write_paired_fastq` |
@@ -1076,31 +1076,43 @@ Without that check a starved window is silent. spike logs `Built read pool: 0 pa
 The 30-pair floor above counts the pool as a whole, summed over every window
 the event was extracted from. That is not the same question the tiling count
 asks: the number of synthetic fragments is `coverage x VAF`, and `coverage` is
-measured in a 2 kb window around the *first breakpoint* only. A pool can clear
-30 pairs and still measure coverage 0 there -- `--region` pointing somewhere
+measured in a 2 kb window around a breakpoint. A pool can clear 30 pairs and
+still measure coverage 0 where the event is -- `--region` pointing somewhere
 the event is not, or a fusion whose other partner carries the whole pool. The
 tiling count then collapses to its floor of 2, and spike used to write those 2
 invented pairs and a truth VCF beside them and exit **0**.
 
-A breakpoint with no donor coverage is now refused the same way a starved pool
-is: the run exits non-zero and writes nothing.
+An event with no donor coverage is now refused the same way a starved pool is:
+the run exits non-zero and writes nothing. Every breakpoint of the haplotype is
+measured, both sides of each -- the last reference base before the cut and the
+first after it -- so the verdict never depends on the order the event names its
+parts. **How many of them have to be covered depends on how many places the
+donor reads came from:**
 
-**The refusal measures the first breakpoint only, and that is a known gap**
-(REVIEW.md N12). A junction has two sides and a haplotype can have several;
-only the side the *first* breakpoint maps back to is ever looked at. The same
-fusion is therefore refused or accepted depending on which partner is named
-first: with `GENEA` covered and `GENEB` in an uncovered region,
-`fusion:GENEB:exon1:GENEA:exon2` exits 1 while `fusion:GENEA:exon1:GENEB:exon2`
-plants 15 synthetic reads across the uncovered junction and exits 0. A DEL
-whose distal breakpoint falls outside the covered window
-(`del:chr20:41490000-41600000` on a BAM whose reads stop at 41,500,000) is
-accepted the same way. Check that **every** side of every breakpoint lies in a
-covered region; spike does not yet do it for you.
+- A **fusion** is extracted from two loci, one per partner, and every fragment
+  spike plants spans the junction between them. A partner with no donor reads
+  makes half of every planted read invention, so **both** sides of the junction
+  must be covered. `fusion:GENEA:exon1:GENEB:exon2` and
+  `fusion:GENEB:exon1:GENEA:exon2` over the same two loci now give the same
+  answer.
+- **Every other event** (DEL, DUP, INV, INS, small variants) is extracted from
+  one locus and tiled across its whole haplotype, so it needs donor depth
+  *somewhere* around it: it is refused only when **no** side of any of its
+  breakpoints is covered. One uncovered side is ordinary input -- a thin spot,
+  or the far side of an event that straddles the edge of a sliced or panel BAM.
+  `del:chr20:41490000-41600000` on a BAM whose reads stop at 41,500,000 is
+  simulated, and so is the mirror image whose *near* side is the uncovered one;
+  the tiling count is then scaled by the first covered side's coverage.
 
 ```
-Error: event chr20:30000000-30010000 has no donor coverage at its first breakpoint
-chr20:29999999: the pool holds 6117 read pair(s) but none of them cover that
-position. ...
+Error: event chr20:30000000-30010000 has no donor coverage at any of its breakpoints
+(chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them
+cover that. ...
+
+Error: event chr20:38420200-38420200 has no donor coverage on one side of its junction
+-- every read spike plants for a fusion spans the junction, so each partner needs donor
+reads of its own (chr20:30005000): the pool holds 3022 read pair(s) but none of them
+cover that. ...
 ```
 
 When the coverage is real but thin, the floor still applies -- a haplotype

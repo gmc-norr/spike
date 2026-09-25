@@ -61,13 +61,13 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `count_alleles_cram`, `collect_snp_alleles_cram` (`loh.rs`); `count_depth_in_region`, `split_reads_to_partner`, `pileup_region` (`validate.rs`) -- function names, because the line numbers this row first carried have drifted twice |
-| N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-220, 418-420, 461-486` (now) |
+| N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured, at every breakpoint side rather than the first only (N12) | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-210, 379-495, 519-521, 573-587` (now) |
 | N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Fixed** (found during the fix run). No `validate` check covered INS, and an uncovered event is a *failed* result, so any truth VCF holding an INS could never report all-PASS -- spike's own round trip, broken for insertions. `ins_reads` now counts reads whose alignment leaves the reference at POS | `validate.rs:133-180` (at `39d9773`); `validate.rs:137-190, 631-686, 1068-1101, 1417-1500` (now) |
 | N9 | High | **Fixed** (found by the whole-branch review). `validate`'s per-event `allele_freq` answered `pass: true` on three questions it had not asked -- any indel or MNV, a pileup depth below 5, a non-ACGT alt -- and `load_truth_events` routed unrecognised SVTYPEs into the same arm, so `<CNV>` passed as an indel. A truth record with `END <= POS` PASSed `coverage_ratio` over a region no query read | `validate.rs:601-609, 630-639, 645-655, 397, 1083-1085` (at `39d9773`) |
 | N10 | Medium | **Fixed** (found by the whole-branch review). No `validate` check measured a small indel's or an MNV's allele fraction, so once N9 stopped calling them a pass a truth VCF holding one could not report all-PASS -- the same shape as N8, for `snp:` events with multi-base REF or ALT. `allele_freq` now picks a counting rule from the REF/ALT shape: a del/ins/MNV run on the chr20 slice goes from **3/6 PASS, exit 1** to **6/6 PASS, exit 0** | `validate.rs:753-762` (at `6e0c49a`) |
-| N12 | Medium | **Not fixed** (found while closing N10, recorded). N5's donor-coverage refusal measures the **first** breakpoint only, so a multi-breakpoint event uncovered at any later junction side is simulated from anyway -- the same fusion is refused or accepted depending on which partner is named first | `simulate.rs:196-220` |
+| N12 | Medium | **Fixed** (found while closing N10). N5's donor-coverage refusal measured the **first** breakpoint only, so the same fusion was refused or accepted depending on which partner was named first. Now every breakpoint side is measured, scoped to the loci the pool was extracted from: both sides for a fusion, at least one for a single-locus event | `simulate.rs:196-220` (at `ad9881e`); `simulate.rs:203-210, 379-495` (now) |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 
 ## High severity
@@ -640,10 +640,13 @@ only thing left that could notice, and it did not.
   `compute_tiling_count` returns 0 for a non-positive (or NaN) coverage instead
   of falling through to the floor, and `simulate_event_with_copies` refuses the
   event right after `estimate_coverage_at`. Measured: both commands above now
-  exit **1** with `event chr20:30000000-30010000 has no donor coverage at its
-  first breakpoint chr20:29999999: the pool holds 6117 read pair(s) but none of
-  them cover that position. ...` and leave `--output` empty -- **7 files and
-  exit 0 before, 0 files and exit 1 after**.
+  exit **1** with `event chr20:30000000-30010000 has no donor coverage at any
+  of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read
+  pair(s) but none of them cover that. ...` and leave `--output` empty --
+  **7 files and exit 0 before, 0 files and exit 1 after**. (The refusal first
+  keyed on the first breakpoint only; [N12](#n12--n5s-donor-coverage-refusal-measured-the-first-breakpoint-only)
+  widened it to every breakpoint side, which is what makes the fusion route
+  above refused whichever partner is named first.)
 
 - **The floor's other half: it understated the planted fraction.** At
   low-but-nonzero coverage the requested count rounds below 2 and the floor
@@ -1026,18 +1029,16 @@ string.
   refusal"** with that text, since a user looking for it will expect it there.
 
 
-### N12 · N5's donor-coverage refusal measures the first breakpoint only
+### N12 · N5's donor-coverage refusal measured the first breakpoint only
 
-*Found while closing N10, and recorded rather than fixed -- the narrow fix is
-one line, but the correct one changes which events spike accepts across every
-multi-segment type, which is more than this commit can measure.*
+*Found while closing N10, recorded there, **fixed here**.*
 
 `48be0c8` closed N5's second door by refusing an event whose breakpoint has no
-donor coverage. It measures **one** position: `simulate.rs:196-220` takes
-`haplotype.breakpoints().first()`, maps it back with `hap_to_ref(bp - 1)` --
-the last reference base *before* the junction -- and refuses only if
-`estimate_coverage_at` is 0 or NaN there. A junction has two sides and a
-haplotype can have several, and none of the others is ever looked at.
+donor coverage. It measured **one** position: `simulate.rs:196-220` took
+`haplotype.breakpoints().first()`, mapped it back with `hap_to_ref(bp - 1)` --
+the last reference base *before* the junction -- and refused only if
+`estimate_coverage_at` was 0 or NaN there. A junction has two sides and a
+haplotype can have several, and none of the others was ever looked at.
 
 The answer to "is it refused, or accepted, on the wrong evidence?" is **both,
 depending on the order the event names its parts**. Measured on the chr20
@@ -1060,17 +1061,70 @@ without a fusion: `del:chr20:41490000-41600000` on a slice whose reads stop at
 41,500,000 has a covered left breakpoint (`cov=57.7`) and **no reads at all** at
 its right one, and spike tiles 249 reads across it at exit 0.
 
-The fix is to map back both sides of every breakpoint -- `hap_to_ref(bp - 1)`
-and `hap_to_ref(bp)` for each -- and refuse on the first uncovered one, keeping
-the first breakpoint's coverage for the tiling count so the arithmetic (and
-M7's byte-identical output) does not move. It was not applied here because it
-also newly refuses a DEL or DUP whose *distal* junction side falls outside the
-covered window, which is a live shape: `test_simulate_event_keeps_pairs_
-straddling_footprint_edge` builds exactly such a pool (pairs at [800,1200) and
-[3800,4200) for a DEL at [1000,3000), so reference position 3000 has no donor
-coverage) and would newly fail. That test was already corrected once by
-`48be0c8`; deciding whether the shape it encodes is legitimate or is itself
-N5's symptom needs a measurement pass of its own.
+**Fixed.** `donor_coverage_for_tiling` now maps back *both* sides of *every*
+breakpoint -- `hap_to_ref(bp - 1)` and `hap_to_ref(bp)` for each -- and asks
+`estimate_coverage_at` about all of them. Refusing on the first uncovered one
+was the obvious next step and is wrong: it turns a DEL whose distal junction
+side falls outside the covered window into an error, and that shape is ordinary
+input on a sliced or panel BAM.
+
+**The rule this lands on:** *the positions that must carry donor coverage are
+the breakpoint sides of each locus the pool was extracted from.*
+`extract_pool_for_event` searches **two** windows for a fusion, one per
+partner, and **one** for everything else, so:
+
+- **Fusion:** every breakpoint side must be covered. Every fragment spike
+  plants for a fusion spans the junction (`breakpoint_only`), so a partner with
+  no donor reads makes half of every planted read invention. Testing all sides
+  is also what makes the verdict symmetric in the naming order.
+- **Every other event:** refused only when **no** side of any of its
+  breakpoints is covered -- "no donor coverage anywhere near this event", which
+  is what N5 measured. One uncovered side is a thin spot or the far edge of a
+  slice, not a refusal. The tiling count is then scaled by the first *covered*
+  side; for every event that already ran, that is the first side exactly as
+  before, so no working run changes its arithmetic or its bytes (M7).
+
+Measured on the chr20 37.5-41.5 Mb HG002 slice, `--seed 1`, branch HEAD
+`ad9881e` -> this commit:
+
+| command | before | after |
+| --- | --- | --- |
+| `fusion:GENEA:exon1:GENEB:exon2;af=0.2` (covered partner first) | `Tiling 15 synthetic reads ... (cov=58.0)`, 8 files, **exit 0** | **exit 1**, 0 files, `... no donor coverage on one side of its junction ... (chr20:30005000)` |
+| `fusion:GENEB:exon1:GENEA:exon2;af=0.2` (same two loci, named the other way) | **exit 1**, 0 files | **exit 1**, 0 files -- the two orders now agree |
+| `del:chr20:41490000-41600000` (slice ends 41,500,000; distal side uncovered) | `Tiling 249 synthetic reads ... (cov=57.7)`, **exit 0** | unchanged: `Tiling 249 ... (cov=57.7)`, **exit 0** |
+| `del:chr20:37400000-37510000` (slice starts 37,499,851; *near* side uncovered) | **exit 1**, 0 files -- a false refusal of the same shape from the other side | `Tiling 258 synthetic reads ... (cov=60.7)`, **exit 0** |
+| `del:chr20:30000000-30010000 --region chr20:38400000-38440000` (N5's route) | **exit 1** | **exit 1**, now naming both sides: `(chr20:29999999, chr20:30010000)` |
+| `fusion` with side A at chr20:30.00 Mb, side B at 38.42 Mb (N5's route) | **exit 1** | **exit 1** |
+
+`del:chr20:38412500-38422500 --seed 1` is byte-identical to `ad9881e`'s output
+(`R1.fq.gz` `8cf7964f`, `R2.fq.gz` `1bd652f8`, `truth.vcf` `5a73bfd8`,
+`replaced_reads.txt` `6bc6392a`) and byte-identical between two runs of the new
+binary (M7). `compute_tiling_count`, `floor_tiling_count` and
+`estimate_coverage_at` are byte-identical to `ad9881e` -- H5's
+`n = round(cov*v/(1-v)*breakpoints.len())` and M1/M2's scaling by `total_len`
+with `pool.frag_dist.mean` used directly are untouched; the change is only
+*which position* `cov` is read at when the first one has none.
+
+**A correction to what this entry claimed.** It said
+`test_simulate_event_keeps_pairs_straddling_footprint_edge` "would newly fail"
+under the both-sides check. Measured: it would not. Its pool holds pairs at
+[3800,4200), and `estimate_coverage_at` samples a **2 kb** window, so reference
+position 3000 measures `cov = 50`, not 0. The entry was reasoning about the
+exact base rather than the window the function actually uses. The test passes
+unchanged here, and it is the single-locus rule above that keeps the shape it
+encodes legitimate.
+
+**Two tests were corrected, not weakened**, both for the same reason: their
+synthetic pools held no donor reads at all for one fusion partner, which is the
+shape the new rule refuses and which a real extraction never produces.
+`test_simulate_event_fusion_is_additive` now holds 100 pairs around each
+partner instead of only gene A's; its three assertions (nothing suppressed, all
+originals kept, chimeric pairs produced) are unchanged.
+`test_cross_chromosome_fusion_ignores_the_other_chromosomes_depth` (M9) now
+contrasts **1** chr2 pair against **100** instead of none against 100; its
+assertion -- that the chr1 breakpoint tiles the same number of chimeric pairs
+either way -- is unchanged, and the contrast still fails loudly if chr2's depth
+leaks into chr1's window.
 
 ## Low severity
 
@@ -1515,7 +1569,7 @@ left as is.
 - Coordinate conventions are mixed: `del/dup/inv` take VCF POS/END meaning, `snp` is 1-based, `--region` is 1-based inclusive. `del:chr1:0-100` is rejected with "coordinates must be >= 1" although the documented convention is 0-based.
 - `del:LDLR:4-8` parses as coordinates on a chromosome named "LDLR". An unknown fusion suffix (`:inverted`, `:rev`) silently gives a forward fusion.
 - VCF input ignores FILTER and GT; 0/0 and non-PASS records are simulated.
-- Coverage is estimated once, ±1 kb around the first breakpoint, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile. (Now tracked and fixed as [N5](#n5--an-empty-donor-pool-is-simulated-from-anyway), which also corrects "constant-Q20": the *profile* measures Q0, the *emitted* reads are Q20. `n.max(2)` no longer applies at zero coverage at all -- the event is refused --
+- Coverage is estimated once, ±1 kb around the first covered breakpoint side, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile. (Now tracked and fixed as [N5](#n5--an-empty-donor-pool-is-simulated-from-anyway), which also corrects "constant-Q20": the *profile* measures Q0, the *emitted* reads are Q20. `n.max(2)` no longer applies at zero coverage at all -- the event is refused --
 and where the coverage is real but the request rounds below 2 it still applies,
 now with a warning naming the realized-vs-recorded fraction.)
 - The CIGAR walk is duplicated four times in `loh.rs` plus once in `validate.rs`. `generate_read` and `generate_read_from_seq` are ~70 near-duplicate lines that have already diverged (root of L1).

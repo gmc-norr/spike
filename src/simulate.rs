@@ -200,24 +200,13 @@ fn simulate_event_with_copies(
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
         .unwrap_or((sv_chrom.clone(), sv_start));
-    let cov = estimate_coverage_at(pool, &first_bp_chrom, first_bp_ref, 2000);
-    if cov.is_nan() || cov <= 0.0 {
-        anyhow::bail!(
-            "event {}:{}-{} has no donor coverage at its first breakpoint {}:{}: the \
-             pool holds {} read pair(s) but none of them cover that position. The \
-             tiling count is coverage x VAF, so spike would invent the reads it \
-             plants and still write a truth VCF beside them. Check that the event \
-             lies in a covered region of the BAM -- a --region window elsewhere, or \
-             a fusion partner that carries the whole pool, fills the pool without \
-             covering the event.",
-            sv_chrom,
-            sv_start,
-            sv_end,
-            first_bp_chrom,
-            first_bp_ref,
-            pool.pairs.len(),
-        );
-    }
+    let cov = donor_coverage_for_tiling(
+        event,
+        haplotype,
+        pool,
+        (&sv_chrom, sv_start, sv_end),
+        (&first_bp_chrom, first_bp_ref),
+    )?;
 
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
@@ -385,6 +374,118 @@ fn classify_pair_relation(pair: &ReadPair, sv_start: u64, sv_end: u64) -> PairRe
     } else {
         PairRelation::Overlapping
     }
+}
+
+/// Every reference position the haplotype's junctions join: for each
+/// breakpoint, the last base before the cut and the first base after it.
+///
+/// A cut into novel sequence (the inserted bases of an INS) has no reference
+/// base on that side and contributes nothing -- there is no donor position to
+/// ask about.
+fn breakpoint_sides(haplotype: &VariantHaplotype) -> Vec<(String, u64)> {
+    haplotype
+        .breakpoints()
+        .iter()
+        .flat_map(|&bp| [bp.saturating_sub(1), bp])
+        .filter_map(|hap_pos| haplotype.hap_to_ref(hap_pos))
+        .collect()
+}
+
+/// The donor coverage the tiling count is scaled by, or an error if spike has
+/// no donor reads to build this event from (N5, N12).
+///
+/// The tiling count is `coverage x VAF`, so where the coverage is 0 spike
+/// would write a truth VCF beside reads it invented rather than simulated.
+/// Which positions have to carry coverage depends on how many places the
+/// donor pool was drawn from -- that is, what `extract_pool_for_event`
+/// searched on this event's behalf:
+///
+/// - A **fusion** is extracted from two loci, one per partner, and every
+///   fragment it plants spans the junction between them. A partner with no
+///   donor reads makes half of every planted read invention, so **every**
+///   breakpoint side must be covered. Testing all of them is also what makes
+///   the verdict independent of which partner the event names first: keying
+///   on the first breakpoint alone accepted one naming order and refused the
+///   other (N12).
+/// - Every other event is extracted from **one** locus and tiled across its
+///   whole haplotype, so what it needs is donor depth somewhere around it.
+///   One breakpoint side with nothing over it is a thin spot, or the far side
+///   of an event that straddles the edge of a sliced or panel BAM -- ordinary
+///   input, pinned by
+///   `test_simulate_event_keeps_pairs_straddling_footprint_edge`. It is
+///   refused only when **no** side of any of its breakpoints is covered,
+///   which is the case N5 measured: the event nowhere near the reads.
+///
+/// The coverage returned is the first breakpoint's, exactly as before, unless
+/// that side is the uncovered one -- which until now was refused outright, so
+/// no run that already works changes its arithmetic (M7). In that case it is
+/// the first covered side instead: the only depth the event has been measured
+/// against, and scaling by the 0 would plant nothing at all.
+fn donor_coverage_for_tiling(
+    event: &SimEvent,
+    haplotype: &VariantHaplotype,
+    pool: &ReadPool,
+    event_span: (&str, u64, u64),
+    fallback_bp: (&str, u64),
+) -> Result<f64> {
+    let mut sides = breakpoint_sides(haplotype);
+    if sides.is_empty() {
+        // No junction (a SNP, or a haplotype of one segment): the event's own
+        // start is the only position the tiling count can be scaled at.
+        sides.push((fallback_bp.0.to_string(), fallback_bp.1));
+    }
+
+    let covs: Vec<f64> = sides
+        .iter()
+        .map(|(chrom, pos)| estimate_coverage_at(pool, chrom, *pos, 2000))
+        .collect();
+    let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
+
+    let is_fusion = matches!(event, SimEvent::Fusion { .. });
+    let refuse = if is_fusion {
+        !covs.iter().all(|&c| covered(c))
+    } else {
+        !covs.iter().any(|&c| covered(c))
+    };
+
+    if !refuse {
+        return Ok(covs
+            .iter()
+            .copied()
+            .find(|&c| covered(c))
+            .expect("a kept event has at least one covered breakpoint side"));
+    }
+
+    // Two junctions a base apart (a small variant's) name the same position
+    // twice; the message lists each one once, in haplotype order.
+    let mut positions: Vec<String> = Vec::new();
+    for ((chrom, pos), _) in sides.iter().zip(&covs).filter(|(_, &c)| !covered(c)) {
+        let label = format!("{}:{}", chrom, pos);
+        if !positions.contains(&label) {
+            positions.push(label);
+        }
+    }
+    let positions = positions.join(", ");
+    let scope = if is_fusion {
+        "on one side of its junction -- every read spike plants for a fusion spans \
+         the junction, so each partner needs donor reads of its own"
+    } else {
+        "at any of its breakpoints"
+    };
+    anyhow::bail!(
+        "event {}:{}-{} has no donor coverage {} ({}): the pool holds {} read \
+         pair(s) but none of them cover that. The tiling count is coverage x VAF, \
+         so spike would invent the reads it plants and still write a truth VCF \
+         beside them. Check that the event lies in a covered region of the BAM -- \
+         a --region window elsewhere, or a fusion partner that carries the whole \
+         pool, fills the pool without covering the event.",
+        event_span.0,
+        event_span.1,
+        event_span.2,
+        scope,
+        positions,
+        pool.pairs.len(),
+    );
 }
 
 /// Compute the number of fragments to tile across a haplotype.
@@ -1482,6 +1583,109 @@ mod tests {
     }
 
     #[test]
+    fn test_simulate_event_refuses_fusion_whose_other_partner_is_uncovered() {
+        // A fusion is extracted from two loci and every read spike plants
+        // spans the junction between them, so a partner with no donor reads
+        // means half of every planted read is invented (N5's symptom). The
+        // guard must see it whichever partner the event names first, so run
+        // the same two loci both ways round and require the same verdict.
+        let covered = 10000u64;
+        let uncovered = 20000u64;
+        let pool = make_covering_pool(8000, 11000, 100);
+
+        let run = |bp_a: u64, bp_b: u64| -> Result<SplicedOutput> {
+            let mut hap = make_haplotype(vec![
+                HaplotypeSegment {
+                    sequence: vec![b'A'; 1000],
+                    origin: Some(SegmentOrigin {
+                        chrom: "chr1".to_string(),
+                        ref_start: bp_a - 1000,
+                        ref_end: bp_a,
+                        is_reverse: false,
+                    }),
+                    hap_offset: 0,
+                },
+                HaplotypeSegment {
+                    sequence: vec![b'C'; 1000],
+                    origin: Some(SegmentOrigin {
+                        chrom: "chr1".to_string(),
+                        ref_start: bp_b,
+                        ref_end: bp_b + 1000,
+                        is_reverse: false,
+                    }),
+                    hap_offset: 1000,
+                },
+            ]);
+            let event = SimEvent::Fusion {
+                chrom_a: "chr1".to_string(),
+                bp_a,
+                gene_a: "GENE_A".to_string(),
+                chrom_b: "chr1".to_string(),
+                bp_b,
+                gene_b: "GENE_B".to_string(),
+                join: FusionJoin::Forward,
+                allele_fraction: Some(0.2),
+            };
+            let mut rng = StdRng::seed_from_u64(99);
+            simulate_event(
+                1, &event, &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.2, &mut rng,
+            )
+        };
+
+        for (a, b, order) in [
+            (covered, uncovered, "covered partner first"),
+            (uncovered, covered, "uncovered partner first"),
+        ] {
+            let msg = match run(a, b) {
+                Ok(out) => panic!(
+                    "{}: a fusion partner with no donor coverage must be refused, \
+                     but spike tiled {} chimeric pair(s)",
+                    order,
+                    out.chimeric_pairs.len()
+                ),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                msg.contains("no donor coverage"),
+                "{}: error should name the missing coverage; got: {}",
+                order,
+                msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_simulate_event_keeps_del_whose_far_breakpoint_side_is_uncovered() {
+        // A DEL that straddles the edge of a sliced or panel BAM has donor
+        // reads on one side of its junction and none on the other. That is
+        // ordinary input -- the haplotype is tiled across its whole footprint,
+        // so the reads spike plants still sit on measured depth -- and it must
+        // not be refused, from whichever side the covered reads come.
+        let far_side_only = make_covering_pool(3000, 5000, 200);
+        let near_side_only = make_covering_pool(0, 2000, 200);
+
+        for (pool, side) in [(&far_side_only, "far"), (&near_side_only, "near")] {
+            let mut hap = del_haplotype(1000, 2000);
+            let mut rng = StdRng::seed_from_u64(42);
+            let out = simulate_event(
+                1, &del_event(1000, 3000), pool, &mut hap, &make_config(),
+                &mock_synth_gen(150), 0.2, &mut rng,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "a DEL covered only on its {} side must still be simulated: {}",
+                    side, e
+                )
+            });
+            assert!(
+                !out.chimeric_pairs.is_empty(),
+                "a DEL covered only on its {} side should still be tiled",
+                side
+            );
+        }
+    }
+
+    #[test]
     fn test_simulate_event_fusion_is_additive() {
         // Fusion: chr1:10000 >> chr1:20000 (same chromosome for simplicity).
         // Haplotype: left flank [9000,10000) | right flank [20000,21000).
@@ -1508,8 +1712,17 @@ mod tests {
             },
         ]);
 
-        // Pool: 100 pairs near the breakpoint region.
-        let pool = make_covering_pool(8000, 11000, 100);
+        // Pool: 100 pairs near each partner's breakpoint. A fusion is
+        // extracted from both loci, so both carry donor reads; a pool holding
+        // only gene A's is the shape `donor_coverage_for_tiling` refuses.
+        let mut pairs = make_covering_pool(8000, 11000, 100).pairs;
+        pairs.extend(make_covering_pool(19000, 22000, 100).pairs.into_iter().map(
+            |mut p| {
+                p.name = format!("b_{}", p.name);
+                p
+            },
+        ));
+        let pool = extract::build_read_pool(pairs, FragmentDist::from_stats(400.0, 80.0));
         let config = make_config();
         let gen = mock_synth_gen(150);
         let mut rng = StdRng::seed_from_u64(99);
@@ -1675,8 +1888,14 @@ mod tests {
             .len()
         };
 
+        // Gene B always carries some donor reads -- a fusion partner with
+        // none is refused outright (N12) -- so the contrast is 1 chr2 pair
+        // against 100. If chr2's depth leaked into chr1's breakpoint window,
+        // the 100 would tile far more junction pairs than the 1.
         let pairs_a = side("chr1", "a");
-        let near_side_only = run(pairs_a.clone());
+        let mut thin_far_side = pairs_a.clone();
+        thin_far_side.push(make_pair_on("chr2", "b_only", 9800, 10200));
+        let near_side_only = run(thin_far_side);
         let mut both_sides = pairs_a;
         both_sides.extend(side("chr2", "b"));
         let with_far_side = run(both_sides);
