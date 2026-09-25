@@ -75,7 +75,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N12 | Medium | **Fixed** (found while closing N10). N5's donor-coverage refusal measured the **first** breakpoint only, so the same fusion was refused or accepted depending on which partner was named first. Now every breakpoint side is measured, scoped to the loci the pool was extracted from: both sides for a fusion, at least one for a single-locus event | `simulate.rs:196-220` (at `ad9881e`); `simulate.rs:203-210, 379-495` (now) |
 | N11 | Low | **Fixed** (found by the whole-branch review). Two `--help` strings contradicted the code (`--allele-fraction (0.0-1.0)` where 0 is refused; `--flank` silent about its 2000 minimum), and spike's refusals were scattered across nine README locations with four not documented at all | `main.rs:93, 120-123` (at `39d9773`) |
 | N13 | Critical | **Fixed** (found by the verification review of the fix wave). `cigar_indel_vote`'s deletion **dead zone**: a `D` operation shifted 1..=`indel_len` bases from the junction swallows one of the two reference bases the vote was anchored on, so the read entered **neither** count. `INDEL_POS_PAD = 10` promised a tolerance the code did not deliver, and the same physical 2 bp deletion spelled one repeat unit off left-alignment read **0.04** where the left-aligned spelling read **0.38** -- at `SIM_VAF=0.10` the wrong spelling PASSes and the right one FAILs | `validate.rs:971-1023` (at `99f1a8e`) |
-| N14 | High | **Not fixed** (found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
+| N14 | High | **Fixed** (`3c6937d`; found by the verification review). `ALLELE_FREQ_TOLERANCE = 0.15` is **absolute**, so `allele_freq` PASSes at an observed 0.00 for every `SIM_VAF < 0.15` -- and `--allele-fraction` accepts `(0.0, 1.0]`, so low-VAF truth sets are legal and are a spike-in simulator's main use case. `ad9881e` routed the three new indel/MNV rules through the same grader, widening a pre-existing substitution hole to four variant classes | `validate.rs:751, 795-826` |
 | N15 | Medium | **Not fixed** (found by the verification review). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Not fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
@@ -1316,6 +1316,26 @@ out of `n` reads against the requested fraction `p`, with an error rate
 - Real data: `validate` on spike runs at VAF 0.02 / 0.05 / 0.1 / 0.2 / 0.5 at
   one SNV site gives pass or not-evaluable, never fail-on-mismatch at
   evaluable depth. On the unspiked BAM it never passes.
+
+**Result: supported** (`3c6937d`).
+- **Unit tests:** the grid criteria hold in all evaluable cells, and 4 of the
+  54 cells are pinned as evaluable. Each of the rule's four parts reddens a
+  test when removed.
+- **Real data:** `snp:chr20:38600002:G:A`, HG002 35x, seed 1, `validate` on
+  the spiked `sim.bam` and on the untouched BAM with the same truth VCF.
+
+| `SIM_VAF` | spiked `sim.bam` | untouched BAM |
+| --- | --- | --- |
+| 0.02 | too shallow (44 reads; needs ~480) | too shallow |
+| 0.05 | too shallow (42 reads; needs ~164) | too shallow |
+| 0.10 | too shallow (40 reads; needs ~81) | too shallow |
+| 0.20 | **PASS** (0.13) | FAIL (0.00) |
+| 0.50 | **PASS** (0.45) | FAIL (0.00) |
+
+Before the fix, the untouched BAM passed at every `SIM_VAF` below 0.15 (the
+table above). Now nothing passes without evidence. At 35x, `validate` can
+grade a SNV's fraction from about VAF 0.19 upward; lower VAFs need the depth
+the message names.
 
 ### N15 · Two rules for the same physical mark, 250 lines apart
 
