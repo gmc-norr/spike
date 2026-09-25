@@ -61,7 +61,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
-| N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`) |
+| N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it. The pool-size guard alone left the same symptom reachable through a second door (aggregate pool vs. coverage at the breakpoint); now closed where the coverage is measured | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`); `simulate.rs:203-220, 418-420, 461-486` (now) |
 | N6 | Medium | **Not fixed** (found during the fix run). Four of `BamStats`'s five fields are read nowhere but its own log line, and one of them, `mean_coverage`, is wrong by ~7000x -- every real BAM prints `est_coverage=0.0x` | `bam_stats.rs:6-17, 258-275`; `main.rs:375` |
 | N7 | Medium | **Not fixed** (found during the fix run). A quality profile with 0/1208 usable base-conditioned bins is used without a warning | `synth.rs:92, 199-222` |
 | N8 | Medium | **Not fixed** (found during the fix run). No `validate` check covers INS, and an uncovered event is now a *failed* result, so any truth VCF holding an INS can never report all-PASS | `validate.rs:133-180` |
@@ -574,19 +574,75 @@ only thing left that could notice, and it did not.
   pairs and gives byte-identical output before and after (`R1.fq.gz`
   `8cf7964f`, `R2.fq.gz` `1bd652f8`, `truth.vcf` `5a73bfd8`,
   `replaced_reads.txt` `6bc6392a`).
-- **`n.max(2)` (`simulate.rs:409, 429`) is half subsumed, not subsumed.** The
-  catastrophic half is closed: no pool can now reach `compute_tiling_count`
-  without 30 measured pairs behind it, so the 2 fragments can no longer be
-  built from an untrained quality model and a default fragment distribution.
-  The residual is narrower and is *not* fixed: a pool that clears the floor on
-  its flanks can still estimate coverage 0 at the breakpoint itself
-  (`estimate_coverage_at`, a 2 kb window), and `n.max(2)` then emits 2
-  synthetic pairs whose realised VAF means nothing. Those 2 pairs at least
-  carry qualities and fragment lengths measured from this library. Leaving the
-  floor in place is deliberate: `test_tiling_count_minimum` pins it, and it is
-  the right behaviour for a genuinely thin but non-empty region. A fix would
-  have to decide what a VAF means where there is no local depth to take a
-  fraction of, which is a separate question from this one.
+- **The residual `n.max(2)` half, now also fixed.** The pool-size guard is an
+  *aggregate*: `extract_pool_for_event` sums `all_pairs` over every extraction
+  window and checks the total, while the tiling count is scaled by coverage at
+  the **first breakpoint** (`estimate_coverage_at`, a 2 kb window). So a pool
+  can clear 30 pairs and still measure coverage 0 where it matters, and
+  `n.max(2)` emits 2 invented pairs beside a truth VCF at exit 0 -- N5's
+  headline symptom, reached through a second door. Two routes measured on the
+  chr20 37.5-41.5 Mb HG002 slice at branch HEAD `39d9773`:
+
+  - `del:chr20:30000000-30010000 --region chr20:38400000-38440000 --seed 1`:
+    0 pairs from the event window, **6117** from the region window, guard
+    passes on 6117, `Tiling 2 synthetic reads ... (cov=0.0, vaf=0.50)`,
+    7 files and **exit 0**.
+  - `fusion:GENEA:exon1:GENEB:exon2;af=0.2` with side A at chr20:30.00 Mb (no
+    coverage) and side B at chr20:38.42 Mb: 0 pairs from A, **3023** from B,
+    `Tiling 2 synthetic reads ... (cov=0.0, vaf=0.20, bp_only=true)`,
+    **exit 0**. M8's window split makes the `--region` door cheaper to hit.
+
+  **Fixed** by moving the question to where the coverage is measured:
+  `compute_tiling_count` returns 0 for a non-positive (or NaN) coverage instead
+  of falling through to the floor, and `simulate_event_with_copies` refuses the
+  event right after `estimate_coverage_at`. Measured: both commands above now
+  exit **1** with `event chr20:30000000-30010000 has no donor coverage at its
+  first breakpoint chr20:29999999: the pool holds 6117 read pair(s) but none of
+  them cover that position. ...` and leave `--output` empty -- **7 files and
+  exit 0 before, 0 files and exit 1 after**.
+
+- **The floor's other half: it understated the planted fraction.** At
+  low-but-nonzero coverage the requested count rounds below 2 and the floor
+  raises it, so the reads planted carry a *higher* fraction than `SIM_VAF`
+  records -- the direction that flatters a caller. Measured on a 1%-subsampled
+  copy of the same slice (`samtools view -s 1.01`) at branch HEAD `39d9773`,
+  `del:chr20:38412500-38422500 --allele-fraction 0.05 --seed 1`: pool **56**
+  pairs (clears the 30 guard), `cov=0.7`, mean fragment 442.7, so the formula
+  asks for `round(0.7 x 0.05 x (4000 - 442.7) / 442.7) = round(0.28) = 0`
+  fragments; the floor emitted **2**, suppression removed **1** original, and
+  `truth.vcf` recorded `SIM_VAF=0.050`. Exit 0, no warning.
+
+  **The rule now:** the floor of 2 stands wherever the coverage is *real*,
+  because a haplotype shorter than one fragment asks for 0 however good the
+  coverage is and planting nothing would leave a truth VCF with no reads behind
+  it -- that is the case `test_tiling_count_minimum` pins, and it is kept. What
+  changes is that the floor no longer applies silently, and no longer applies
+  at all when the coverage is zero:
+
+  - coverage 0 (or NaN): the event is refused, exit non-zero, nothing written.
+  - coverage > 0 and the request rounds below 2: emit 2, and warn with the
+    request, the emission and the `SIM_VAF` the truth VCF will carry.
+
+  Measured after: the same 1%-subsample command still exits 0 and still plants
+  the event, now preceded by `WARN spike::simulate] coverage 0.7x at VAF 0.050
+  asks for 0 tiled fragment(s); spike emits the 2 it needs to plant the event at
+  all, so the realized allele fraction will be above the 0.050 recorded as
+  SIM_VAF in the truth VCF`.
+
+  H5 and M1/M2 are untouched by this: the additive formula
+  `n = round(cov x v / (1 - v) x breakpoints.len())` and the interior formula's
+  scaling by `total_len` with `pool.frag_dist.mean` used directly are the same
+  expressions as before -- only the `.max(2)` tail moved into a named helper.
+  Re-verified by `test_tiling_count_breakpoint_only_gives_requested_fraction`,
+  `test_tiling_count_dup_breakpoint_only` and
+  `test_tiling_uses_actual_fragment_length_for_short_inserts`, all still green.
+
+  `test_simulate_event_keeps_pairs_straddling_footprint_edge` was corrected, not
+  weakened: its pool was 500 pairs at `[3800,4200)` and nothing else, so the
+  breakpoint at `chr1:999` had coverage 0 and the new guard refused it. It now
+  also holds 500 `in_` pairs over the breakpoint, and asserts that no `edge_`
+  pair is among the suppressed names -- the same invariant, on a pool that can
+  actually be simulated from.
 
 ### N6 · `BamStats` carries four dead fields, one of which spike prints wrong
 
@@ -1135,7 +1191,9 @@ left as is.
 - Coordinate conventions are mixed: `del/dup/inv` take VCF POS/END meaning, `snp` is 1-based, `--region` is 1-based inclusive. `del:chr1:0-100` is rejected with "coordinates must be >= 1" although the documented convention is 0-based.
 - `del:LDLR:4-8` parses as coordinates on a chromosome named "LDLR". An unknown fusion suffix (`:inverted`, `:rev`) silently gives a forward fusion.
 - VCF input ignores FILTER and GT; 0/0 and non-PASS records are simulated.
-- Coverage is estimated once, ±1 kb around the first breakpoint, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile. (Now tracked and fixed as [N5](#n5--an-empty-donor-pool-is-simulated-from-anyway), which also corrects "constant-Q20": the *profile* measures Q0, the *emitted* reads are Q20. `n.max(2)` survives in the narrower breakpoint-only case N5 describes.)
+- Coverage is estimated once, ±1 kb around the first breakpoint, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile. (Now tracked and fixed as [N5](#n5--an-empty-donor-pool-is-simulated-from-anyway), which also corrects "constant-Q20": the *profile* measures Q0, the *emitted* reads are Q20. `n.max(2)` no longer applies at zero coverage at all -- the event is refused --
+and where the coverage is real but the request rounds below 2 it still applies,
+now with a warning naming the realized-vs-recorded fraction.)
 - The CIGAR walk is duplicated four times in `loh.rs` plus once in `validate.rs`. `generate_read` and `generate_read_from_seq` are ~70 near-duplicate lines that have already diverged (root of L1).
 - Quality profile stores every observed quality four times and sorts them unnecessarily; a histogram per bin would do. `SharedReference::load` doubles peak memory via the FIFO cache.
 - gVCF sample column is always 9 despite a comment saying it reads the header. Pileup het caller has no base-quality filter and counts overlapping mates twice. A plain-text gVCF is re-read in full per event.

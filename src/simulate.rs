@@ -199,8 +199,25 @@ fn simulate_event_with_copies(
     let (first_bp_chrom, first_bp_ref) = bp_positions
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
-        .unwrap_or((sv_chrom, sv_start));
+        .unwrap_or((sv_chrom.clone(), sv_start));
     let cov = estimate_coverage_at(pool, &first_bp_chrom, first_bp_ref, 2000);
+    if cov.is_nan() || cov <= 0.0 {
+        anyhow::bail!(
+            "event {}:{}-{} has no donor coverage at its first breakpoint {}:{}: the \
+             pool holds {} read pair(s) but none of them cover that position. The \
+             tiling count is coverage x VAF, so spike would invent the reads it \
+             plants and still write a truth VCF beside them. Check that the event \
+             lies in a covered region of the BAM -- a --region window elsewhere, or \
+             a fusion partner that carries the whole pool, fills the pool without \
+             covering the event.",
+            sv_chrom,
+            sv_start,
+            sv_end,
+            first_bp_chrom,
+            first_bp_ref,
+            pool.pairs.len(),
+        );
+    }
 
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
@@ -391,6 +408,17 @@ fn compute_tiling_count(
         return 0;
     }
 
+    // Every count below is coverage x VAF, so at zero coverage the formula
+    // asks for nothing and only the floor of 2 is left -- two pairs invented
+    // out of a constant quality profile, beside a truth VCF that claims a
+    // real variant. The pool-size guard in `main.rs` cannot see this: it
+    // sums every extraction window, and a `--region` window (or a fusion's
+    // other side) can fill the pool without covering the event. Refuse here
+    // instead, where the coverage is actually measured.
+    if coverage.is_nan() || coverage <= 0.0 {
+        return 0;
+    }
+
     let breakpoints = haplotype.breakpoints();
 
     if breakpoint_only && !breakpoints.is_empty() {
@@ -406,7 +434,7 @@ fn compute_tiling_count(
         }
         let v = vaf.min(MAX_ADDITIVE_VAF);
         let n = (coverage * v / (1.0 - v) * breakpoints.len() as f64).round() as usize;
-        return n.max(2); // at least 2 chimeric reads
+        return floor_tiling_count(n, coverage, v);
     }
 
     // Fragment starts are uniform over the starts whose fragment overlaps
@@ -426,7 +454,36 @@ fn compute_tiling_count(
     };
 
     let n = ((coverage * vaf * effective_len) / mean_frag).round() as usize;
-    n.max(2) // at least 2 chimeric reads
+    floor_tiling_count(n, coverage, vaf)
+}
+
+/// Smallest number of tiled fragments spike will plant an event with.
+const MIN_TILED_FRAGMENTS: usize = 2;
+
+/// Apply the [`MIN_TILED_FRAGMENTS`] floor, and say when it changes the answer.
+///
+/// The floor is right for a thin-but-covered region: a haplotype shorter than
+/// one fragment asks for 0 however real the coverage is, and planting nothing
+/// would leave a truth VCF with no reads behind it. But when the floor raises
+/// the count, the realized allele fraction is above the one `SIM_VAF` records
+/// -- at low coverage by several times over, in the direction that flatters a
+/// caller. Callers only reach here with `coverage > 0`, so this is never the
+/// zero-coverage case, which `compute_tiling_count` refuses outright.
+fn floor_tiling_count(requested: usize, coverage: f64, vaf: f64) -> usize {
+    if requested >= MIN_TILED_FRAGMENTS {
+        return requested;
+    }
+    log::warn!(
+        "coverage {:.1}x at VAF {:.3} asks for {} tiled fragment(s); spike emits the \
+         {} it needs to plant the event at all, so the realized allele fraction will \
+         be above the {:.3} recorded as SIM_VAF in the truth VCF",
+        coverage,
+        vaf,
+        requested,
+        MIN_TILED_FRAGMENTS,
+        vaf
+    );
+    MIN_TILED_FRAGMENTS
 }
 
 /// Tile synthetic reads across the variant haplotype.
@@ -821,6 +878,18 @@ mod tests {
         let hap = make_haplotype(vec![ref_segment(0, 100)]);
         let count = compute_tiling_count(&hap, 0.1, 0.1, 400.0, false);
         assert_eq!(count, 2); // min of 2
+    }
+
+    #[test]
+    fn test_tiling_count_zero_coverage_is_zero() {
+        // No coverage at the breakpoint means there is nothing to scale
+        // against, so the floor of 2 would invent reads rather than simulate
+        // them. Both branches must return 0 and let the caller refuse.
+        let hap = make_haplotype(vec![ref_segment(0, 4000)]);
+        assert_eq!(compute_tiling_count(&hap, 0.0, 0.5, 400.0, false), 0);
+
+        let additive = make_haplotype(vec![ref_segment(0, 2000), ref_segment(5000, 2000)]);
+        assert_eq!(compute_tiling_count(&additive, 0.0, 0.2, 400.0, true), 0);
     }
 
     #[test]
@@ -1379,6 +1448,40 @@ mod tests {
     }
 
     #[test]
+    fn test_simulate_event_refuses_pool_with_no_coverage_at_breakpoint() {
+        // A --region window elsewhere (or a fusion partner that carries the
+        // whole pool) can fill the pool past MIN_DONOR_PAIRS while leaving the
+        // event itself uncovered. The tiling count is coverage x VAF, so it
+        // collapses to the floor of 2 invented pairs beside a truth VCF.
+        let mut hap = del_haplotype(1000, 2000);
+        // 200 pairs, none of them anywhere near the deletion at chr1:1000-3000.
+        let pool = make_covering_pool(500_000, 540_000, 200);
+        let config = make_config();
+        let gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let event = SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 1000,
+            del_end: 3000,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        };
+
+        let result = simulate_event(1, &event, &pool, &mut hap, &config, &gen, 0.5, &mut rng);
+        let msg = match result {
+            Ok(_) => panic!("a pool with no coverage at the breakpoint must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("no donor coverage"),
+            "error should name the missing coverage; got: {}",
+            msg
+        );
+    }
+
+    #[test]
     fn test_simulate_event_fusion_is_additive() {
         // Fusion: chr1:10000 >> chr1:20000 (same chromosome for simplicity).
         // Haplotype: left flank [9000,10000) | right flank [20000,21000).
@@ -1628,9 +1731,12 @@ mod tests {
         // that stick out of the footprint must not be suppressed either;
         // otherwise depth dips at the footprint edge.
         // DEL [1000,3000) with 1 kb flanks: footprint [0,4000).
-        let pairs: Vec<ReadPair> = (0..500)
+        // The `in_` pairs only give the breakpoint the donor coverage the
+        // tiling count is scaled by; the assertion is about the `edge_` ones.
+        let mut pairs: Vec<ReadPair> = (0..500)
             .map(|i| make_pair(&format!("edge_{}", i), 3800, 4200))
             .collect();
+        pairs.extend((0..500).map(|i| make_pair(&format!("in_{}", i), 800, 1200)));
         let pool = make_pool(pairs);
         let mut hap = del_haplotype(1000, 2000);
         let mut rng = StdRng::seed_from_u64(42);
@@ -1641,7 +1747,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(out.suppressed_count, 0);
+        assert!(
+            out.suppressed_names.iter().all(|n| n.starts_with("in_")),
+            "a pair straddling the footprint edge must not be suppressed; got {:?}",
+            out.suppressed_names
+                .iter()
+                .filter(|n| n.starts_with("edge_"))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

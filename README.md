@@ -922,6 +922,39 @@ Without that check a starved window is silent. spike logs `Built read pool: 0 pa
 
 30 is the observation count the quality model itself requires before it will sample from a bin, and a pool of *n* pairs puts *n* observations in each cycle-only bin (level 4 above), so it is the smallest pool at which any level of the model is trained to its own threshold. It is a floor on "measured from this library at all", not a coverage requirement: the 30 kb window of `del:chr20:38412500-38422500` yields 4559 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
 
+### No donor coverage at the breakpoint
+
+The 30-pair floor above counts the pool as a whole, summed over every window
+the event was extracted from. That is not the same question the tiling count
+asks: the number of synthetic fragments is `coverage x VAF`, and `coverage` is
+measured in a 2 kb window around the *first breakpoint* only. A pool can clear
+30 pairs and still measure coverage 0 there -- `--region` pointing somewhere
+the event is not, or a fusion whose other partner carries the whole pool. The
+tiling count then collapses to its floor of 2, and spike used to write those 2
+invented pairs and a truth VCF beside them and exit **0**.
+
+A breakpoint with no donor coverage is now refused the same way a starved pool
+is: the run exits non-zero and writes nothing.
+
+```
+Error: event chr20:30000000-30010000 has no donor coverage at its first breakpoint
+chr20:29999999: the pool holds 6117 read pair(s) but none of them cover that
+position. ...
+```
+
+When the coverage is real but thin, the floor still applies -- a haplotype
+shorter than one fragment asks for 0 fragments however good the coverage is,
+and planting nothing would leave a truth VCF with no reads behind it. But the
+floor then plants *more* support than `--allele-fraction` asked for, while
+`SIM_VAF` in the truth VCF still records the request, so spike warns with both
+numbers:
+
+```
+WARN spike::simulate] coverage 0.7x at VAF 0.050 asks for 0 tiled fragment(s); spike
+emits the 2 it needs to plant the event at all, so the realized allele fraction will
+be above the 0.050 recorded as SIM_VAF in the truth VCF
+```
+
 ### Missing or unusable donor base qualities
 
 SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). The two containers encode `*` differently and spike sees both — BAM keeps a per-base array with every byte `0xFF`, while noodles normalises a CRAM record's all-`0xFF` buffer to an *empty* one before spike ever sees it. A record with either shape, or carrying a raw quality above Q93 (the SAM maximum — a malformed record), is dropped during extraction: it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped records are counted and logged as a warning (spike logs to stderr), e.g.:
