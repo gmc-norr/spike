@@ -79,6 +79,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule was tried and refuted, see the N15 result). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
+| N18 | Medium | **Not fixed; being measured** (found while measuring N15). 9.6% of real HG002 het indels fail `allele_freq` at 0.5 against 2.2% of SNVs; indel fractions average 0.41 | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
 
 ## High severity
 
@@ -1778,6 +1779,77 @@ message, a document or a test assertion -- none changes a verdict.*
   listed them all in its own parenthesis. Measured, a fusion whose whole pool
   is elsewhere: `... has no donor coverage on one side of its junction ...
   (chr1:9999, chr1:20000)`. It now says "on 2 sides of its junction".
+
+### N18 · `validate` under-counts small-indel carriers
+
+*Found while measuring N15. Plan first, locked before any code or result.*
+
+**Observed.** The test set is the untouched HG002 35x BAM, graded against
+6,663 GIAB v4.2.1 het indels on chr20 at `SIM_VAF=0.5` (N15's baseline,
+`3e3f658`).
+- **Indels:** the carry fraction averages **0.414** (median 0.424) over the
+  6,658 sites with 10 or more pairs, and **638 (9.6%)** fail `allele_freq`.
+- **SNVs, for comparison:** in chr20:38-40 Mb (N16, 1,957 sites, nearly all
+  SNVs) the average is **0.482** (median 0.490), and **2.2%** fail.
+
+#### N18 plan (locked before any code or result)
+
+**Hypothesis H1.** Near a read's end, an aligner writes an indel as
+mismatches or a soft clip rather than a gap, because a gap costs more than a
+few mismatches there. Such a read carries the alt allele. But if its
+alignment still covers the anchor base and the base past REF, `validate`
+counts it as `Spans`. A reference read has no such problem, so the fraction
+is pulled toward the reference. The same happens to a read that ends inside
+the repeat the indel sits in: it cannot show the extra or missing unit, and
+it aligns as the reference.
+
+**What would kill it.** If only reads that reach well past the site on both
+sides are counted, H1 says the indel fraction rises toward 0.5, while an SNV
+fraction barely moves. If the indel fraction stays low among such reads,
+the under-count has another cause.
+
+**How it is measured** (`scripts/n18_indel_flank.py`, committed before it is
+run):
+- **The site's region.** For a deletion, the deleted bases; for an
+  insertion, the empty junction. Either is widened left and right for as long
+  as the reference repeats the deleted or inserted unit, so the region covers
+  the whole repeat the indel can slide along.
+- **A read qualifies at flank F** when its aligned reference span, clips
+  excluded, reaches at least F bases past the region on each side, on top of
+  the anchor bases. For an SNV the region is the base itself.
+- **Counting** is `validate`'s own, re-implemented: the pad rule (N13) for an
+  indel, the base at POS for an SNV, one vote per fragment and none for mates
+  that disagree (N16), MAPQ >= 20, and the same record filters. The grade is
+  N14's binomial rule at an expected 0.5.
+- **F = 0, 5, 10, 20, 30**, over all 6,663 indel sites. The **control** is
+  the 1,696 SNVs of N16's chr20:38-40 Mb set, with the same F.
+- **The ruler is checked first.** At F = 0 the script must match `validate`
+  itself on at least 99% of sites: the indel carries and spans of the
+  `3e3f658` debug log, the indel verdicts of that run, and the SNV observed
+  fractions of N16's run. If it does not, nothing else is read until the
+  script is fixed.
+- **One known small bias:** at a fixed read length an insertion carrier
+  spans fewer reference bases than a reference read, and a deletion carrier
+  more. So the flank filter keeps slightly fewer insertion carriers, by about
+  L / 150 for an L-bp insertion.
+
+**Metrics, at each F:**
+- The **out-of-range rate**: among sites N14's rule can grade (not too
+  shallow), the share that fail.
+- The **mean fraction** over sites with 10 or more counted fragments.
+- The fragments kept.
+
+**Pass criteria:**
+- **H1 supported:** at F = 20 the indel out-of-range rate is **<= 4.0%**, and
+  the indel mean fraction rises by **>= 0.04** over F = 0. Meanwhile the SNV
+  control's out-of-range rate moves by **< 1.0 percentage point** and its
+  mean fraction by **< 0.02**.
+- **H1 refuted:** at F = 20 the indel out-of-range rate is still **>= 8.0%**.
+- **In between:** read ends explain part of it, and the rest has another
+  cause.
+
+A fix -- what `validate` should count -- comes after this, with a plan of its
+own.
 
 ## Low severity
 
