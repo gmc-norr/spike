@@ -4,6 +4,7 @@
 //! (SVs, fusions, SNPs, indels).
 
 mod bam_stats;
+mod census;
 mod exon;
 mod extract;
 mod fastq;
@@ -506,6 +507,9 @@ fn main() -> Result<()> {
     // plant when the additive cap or the two-fragment floor moved it off the
     // request, `None` when the request stands. The truth VCF records it.
     let mut adjusted_afs: Vec<Option<f64>> = Vec::with_capacity(events.len());
+    // Per event, in the same order: the share of the reads over it spike
+    // could not edit (CR4). The truth VCF records it as SIM_RESIST.
+    let mut resistant: Vec<Option<f64>> = Vec::with_capacity(events.len());
 
     let mut event_stats: Vec<EventStat> = Vec::new();
     // M14: pairs whose stored quality is unusable never reach a pool, so they
@@ -527,6 +531,31 @@ fn main() -> Result<()> {
             &extraction_region,
             &mut unusable_qual_names,
         )?;
+
+        // CR4: the reads over the event the pool does not hold survive it
+        // untouched. Unusable-quality pairs are not among them: merge.sh
+        // removes those by name.
+        let editable: std::collections::HashSet<String> = pool
+            .pairs
+            .iter()
+            .map(|p| p.name.clone())
+            .chain(unusable_qual_names.iter().cloned())
+            .collect();
+        let event_census = census::count_resistant(
+            &config.bam_path,
+            &config.ref_path,
+            &census::census_spans(event),
+            &editable,
+        )?;
+        log::info!(
+            "  Reads over the event spike cannot edit: {} of {} ({:.3})",
+            event_census.resistant,
+            event_census.counted,
+            event_census.fraction(),
+        );
+        if let Some(warning) = census::warning(&event_label(event), &event_census) {
+            log::warn!("{}", warning);
+        }
 
         // Build quality profile and synth generator.
         let quality_profile =
@@ -570,9 +599,11 @@ fn main() -> Result<()> {
             suppressed: output.suppressed_count,
             dropped_unusable_qual,
             uncovered_breakpoint_sides: output.uncovered_breakpoint_sides.clone(),
+            census: event_census,
         });
 
         adjusted_afs.push(output.adjusted_vaf);
+        resistant.push(Some(event_census.fraction()));
         event_outputs.push(output);
     }
 
@@ -600,6 +631,7 @@ fn main() -> Result<()> {
     truth::write_truth_vcf(
         &events,
         &adjusted_afs,
+        &resistant,
         config.allele_fraction, // default AF for events without per-event override
         &truth_path.to_string_lossy(),
         &args.reference,
@@ -1267,6 +1299,9 @@ struct EventStat {
     /// BAM -- but the tiled fragments that land there were scaled by depth
     /// measured somewhere else, so the run README says which sides they are.
     uncovered_breakpoint_sides: Vec<String>,
+    /// The reads over this event and how many of them spike could not edit
+    /// (CR4). `truth.vcf` records the share as `SIM_RESIST`.
+    census: census::Census,
 }
 
 /// Smallest donor pool spike will simulate one event from.
@@ -1791,19 +1826,19 @@ fn write_readme(
     writeln!(
         md,
         "| # | Event | Requested VAF | Simulated VAF | Kept reads | Chimeric reads | \
-         Suppressed reads | Dropped (unusable quality) |"
+         Suppressed reads | Dropped (unusable quality) | Resistant reads |"
     )?;
     writeln!(
         md,
         "|---|-------|---------------|---------------|-----------|----------------|\
-         -----------------|---------------------------|"
+         -----------------|---------------------------|-----------------|"
     )?;
     for (i, event) in events.iter().enumerate() {
         let label = event_label(event);
         let stat = event_stats.get(i);
         writeln!(
             md,
-            "| {} | {} | {:.3} | {:.3} | {} | {} | {} | {} |",
+            "| {} | {} | {:.3} | {:.3} | {} | {} | {} | {} | {} |",
             i + 1,
             label,
             stat.map_or(0.0, |s| s.vaf),
@@ -1812,9 +1847,38 @@ fn write_readme(
             stat.map_or(0, |s| s.chimeric),
             stat.map_or(0, |s| s.suppressed),
             stat.map_or(0, |s| s.dropped_unusable_qual),
+            stat.map_or("-".to_string(), |s| format!(
+                "{} of {} ({:.0}%)",
+                s.census.resistant,
+                s.census.counted,
+                s.census.fraction() * 100.0
+            )),
         )?;
     }
     writeln!(md)?;
+    // Only for an event above the warning threshold, like the log's warning.
+    let resistant: Vec<String> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, event)| {
+            let stat = event_stats.get(i)?;
+            (stat.census.fraction() > census::WARN_ABOVE).then(|| {
+                format!("{} ({:.0}%)", event_label(event), stat.census.fraction() * 100.0)
+            })
+        })
+        .collect();
+    if !resistant.is_empty() {
+        writeln!(
+            md,
+            "**Reads spike could not edit:** {}. The resistant column counts the \
+             primary, non-duplicate reads over each event that are not in its donor pool: \
+             below `--min-mapq`, not a proper pair, or a mate that fails a filter. They \
+             stay in the merged BAM as they are, so these events are weaker than requested \
+             by about that share. `truth.vcf` records it per event as `SIM_RESIST`.",
+            resistant.join("; ")
+        )?;
+        writeln!(md)?;
+    }
     // Only when the two columns differ somewhere: on an ordinary run they are
     // the same number on every row and an unconditional paragraph would train
     // the reader to skip it.
@@ -3518,6 +3582,7 @@ done"#,
             suppressed: 500,
             dropped_unusable_qual: 457,
             uncovered_breakpoint_sides: vec!["chr20:38409999".to_string()],
+            census: census::Census::default(),
         }];
         write_readme(
             dir.to_str().unwrap(),
@@ -3570,6 +3635,7 @@ done"#,
             suppressed: 66,
             dropped_unusable_qual: 0,
             uncovered_breakpoint_sides: vec!["chr20:37397999".to_string()],
+            census: census::Census::default(),
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
@@ -3604,6 +3670,7 @@ done"#,
             suppressed: 500,
             dropped_unusable_qual: 0,
             uncovered_breakpoint_sides: Vec::new(),
+            census: census::Census::default(),
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
@@ -3618,6 +3685,49 @@ done"#,
             "a fully covered run must not carry the warning:\n{}",
             md
         );
+    }
+
+    #[test]
+    fn test_run_readme_prints_the_resistant_reads_per_event() {
+        // CR4: the reads spike could not edit, per event, beside what it did.
+        // The paragraph only appears when an event is above the threshold.
+        let dir =
+            std::env::temp_dir().join(format!("spike_readme_resist_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![
+            del("chr20", 38_412_500, 38_422_500),
+            del("chr20", 39_000_000, 39_010_000),
+        ];
+        let stat = |counted, resistant| EventStat {
+            vaf: 1.0,
+            adjusted_vaf: None,
+            kept: 0,
+            chimeric: 300,
+            suppressed: 500,
+            dropped_unusable_qual: 0,
+            uncovered_breakpoint_sides: Vec::new(),
+            census: census::Census { counted, resistant },
+        };
+        let stats = vec![stat(100, 50), stat(200, 4)];
+        write_readme(
+            dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+            &events, &stats, 800, 10_000, 0,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(md.contains("| Resistant reads |"), "no column:\n{}", md);
+        assert!(md.contains("| 50 of 100 (50%) |"), "first row:\n{}", md);
+        assert!(md.contains("| 4 of 200 (2%) |"), "second row:\n{}", md);
+        let paragraph = md
+            .lines()
+            .find(|l| l.starts_with("**Reads spike could not edit:**"))
+            .unwrap_or_else(|| panic!("no paragraph for the event above 10%:\n{}", md));
+        assert!(paragraph.contains("chr20:38412501"), "{}", paragraph);
+        assert!(!paragraph.contains("chr20:39000001"), "{}", paragraph);
     }
 
     #[test]
@@ -3650,6 +3760,7 @@ done"#,
                 suppressed: 1,
                 dropped_unusable_qual: 0,
                 uncovered_breakpoint_sides: Vec::new(),
+                census: census::Census::default(),
             },
             // Neither mechanism touched this one, so both numbers are the
             // request -- truth.vcf writes SIM_VAF=SIM_REQ_VAF=0.500 for it.
@@ -3661,6 +3772,7 @@ done"#,
                 suppressed: 500,
                 dropped_unusable_qual: 0,
                 uncovered_breakpoint_sides: Vec::new(),
+                census: census::Census::default(),
             },
         ];
         write_readme(

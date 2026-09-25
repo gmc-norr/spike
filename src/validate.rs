@@ -2269,7 +2269,7 @@ fn reads_with_inserted_sequence(
 
 /// What `for_each_alignment` hands each record to: its read name, 0-based
 /// alignment start, CIGAR operations and bases.
-type AlignmentVisitor<'a> =
+pub(crate) type AlignmentVisitor<'a> =
     dyn FnMut(&[u8], u64, &[noodles::sam::alignment::record::cigar::Op], &[u8]) + 'a;
 
 /// Walk every usable, named alignment overlapping 0-based `[start, end)`,
@@ -2279,7 +2279,7 @@ type AlignmentVisitor<'a> =
 /// The BAM and the CRAM reader hand out different record types, so the scans
 /// above each carry their own copy of this query; a check that needs nothing
 /// from a record but its name, CIGAR and bases can share one.
-fn for_each_alignment(
+pub(crate) fn for_each_alignment(
     bam_path: &str,
     ref_path: &str,
     chrom: &str,
@@ -2296,7 +2296,7 @@ fn for_each_alignment(
         let repository = crate::extract::build_fasta_repository(ref_path)?;
         let (mut reader, header) =
             crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
-                .context("failed to open CRAM for the indel check")?;
+                .context("failed to open CRAM for a read scan")?;
         let query = reader.query(&header, &region)?;
         // `query` has already rejected an unknown contig, so this is `Some`.
         let queried_reference_sequence_id =
@@ -2331,7 +2331,7 @@ fn for_each_alignment(
     } else {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
             .build_from_path(bam_path)
-            .context("failed to open BAM for the indel check")?;
+            .context("failed to open BAM for a read scan")?;
         let header = reader.read_header()?;
         let query = reader.query(&header, &region)?;
 
