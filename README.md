@@ -425,6 +425,24 @@ spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
   --json           Output JSON instead of text table
 ```
 
+The three `[global]` checks — `insert_size`, `dup_rate` and `mean_mapq` — are
+computed from one sample of the reads in the truth events' own windows (event
++/- `--flank`), read with the same indexed query the per-event checks use, not
+from the head of the file: the first 100k records of a whole-genome BAM are
+chr1's telomere, mean MAPQ 10.0, which fails a check the rest of the file
+passes. The sample is capped at 200,000 records, shared out over the events so
+one long event cannot spend it. `spike validate` therefore needs the BAM's
+`.bai` / the CRAM's `.crai`, which its per-event checks already required.
+
+A global check whose sample cannot answer it **fails** rather than passing on a
+default: a file whose duplicates were never marked reports `dup_rate` as
+`no dup flags` (no record carries the flag, so 0% would be an assumption, not a
+measurement — mark duplicates if you want the rate evaluated), and a window
+holding no properly-paired record reports `insert_size` as `no pairs`. Both
+also log a `WARN` line naming the reason. A truth VCF with no events leaves no
+window to sample, so all three global checks fail rather than reporting
+whole-file statistics for a run that validated nothing.
+
 ### Controlling the read extraction region
 
 By default, spike extracts reads from a region around each event (event +/- `--flank`). Override this for full-gene coverage:

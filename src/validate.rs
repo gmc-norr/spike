@@ -112,15 +112,26 @@ pub fn run() -> Result<()> {
         log::info!("Checked: {}", label);
     }
 
-    // Global checks.
-    let ref_path = Some(args.ref_path.as_str());
-    results.push(check_outcome(
-        "global",
-        "insert_size",
-        check_insert_size(&args.bam_path, ref_path),
-    ));
-    results.push(check_outcome("global", "dup_rate", check_dup_rate(&args.bam_path, ref_path)));
-    results.push(check_outcome("global", "mean_mapq", check_mapq(&args.bam_path, ref_path)));
+    // Global checks. All three read one sample, taken from the truth events'
+    // own regions rather than from the head of the file (L15).
+    match sample_event_regions(&args.bam_path, &args.ref_path, &truth_events, args.flank_bp) {
+        Ok(sample) => {
+            results.push(check_insert_size(&sample));
+            results.push(check_dup_rate(&sample));
+            results.push(check_mapq(&sample));
+        }
+        Err(e) => {
+            // A sample that could not be taken is three failed checks, not
+            // three checks that quietly pass on a default (M10, M11).
+            for check_name in ["insert_size", "dup_rate", "mean_mapq"] {
+                results.push(check_outcome(
+                    "global",
+                    check_name,
+                    Err(anyhow::anyhow!("{:#}", e)),
+                ));
+            }
+        }
+    }
 
     // Print results.
     print_results(&results, args.json_output)?;
@@ -632,58 +643,267 @@ fn check_allele_freq(
     }
 }
 
-/// Check global insert size distribution.
-fn check_insert_size(bam_path: &str, ref_path: Option<&str>) -> Result<CheckResult> {
-    let stats = crate::bam_stats::compute_stats(bam_path, 50_000, ref_path)?;
+// ---------------------------------------------------------------------------
+// Global checks
+// ---------------------------------------------------------------------------
 
-    let mean = stats.insert_mean;
-    let stddev = stats.insert_stddev;
+/// Records to sample for the global checks, over all event regions together.
+const GLOBAL_SAMPLE_MAX: u64 = 200_000;
+
+/// The smallest per-event share of that budget, so a truth VCF with many
+/// events still reads enough of each one.
+const GLOBAL_SAMPLE_MIN_PER_REGION: u64 = 1_000;
+
+/// What the three global checks are computed from: primary, mapped records
+/// sampled from the truth events' own regions.
+#[derive(Default)]
+struct GlobalSample {
+    /// Records sampled.
+    total: u64,
+    /// ...of which carry the duplicate flag.
+    dups: u64,
+    /// Sum of their mapping qualities.
+    mapq_sum: u64,
+    /// Template lengths of the properly-paired, non-duplicate records.
+    insert_sizes: Vec<f64>,
+}
+
+impl GlobalSample {
+    /// Add one record. Unmapped, secondary and supplementary records are the
+    /// caller's to skip.
+    fn add(
+        &mut self,
+        flags: noodles::sam::alignment::record::Flags,
+        mapq: u8,
+        template_length: i32,
+    ) {
+        self.total += 1;
+        self.mapq_sum += mapq as u64;
+        if flags.is_duplicate() {
+            self.dups += 1;
+        }
+        // The same filter `bam_stats` uses: a duplicate's or a QC-failed
+        // record's template length is not an insert-size observation.
+        if !flags.is_duplicate()
+            && !flags.is_qc_fail()
+            && flags.is_properly_segmented()
+            && !flags.is_mate_unmapped()
+            && template_length > 0
+        {
+            self.insert_sizes.push(template_length as f64);
+        }
+    }
+
+    /// Mean and standard deviation of the sampled insert sizes, or `None`
+    /// when nothing properly paired was sampled.
+    fn insert_stats(&self) -> Option<(f64, f64)> {
+        if self.insert_sizes.is_empty() {
+            return None;
+        }
+        let mean = self.insert_sizes.iter().sum::<f64>() / self.insert_sizes.len() as f64;
+        let variance = self
+            .insert_sizes
+            .iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f64>()
+            / self.insert_sizes.len() as f64;
+        Some((mean, variance.sqrt()))
+    }
+}
+
+/// Sample records for the global checks from every truth event's own window
+/// (event +/- `flank_bp`).
+///
+/// The head of a file is not a sample of it: on whole-genome HG002 the first
+/// 100k records are chr1's telomere, mean MAPQ 10.0, which fails a check the
+/// rest of the file passes (L15). The event windows are both representative of
+/// the reads `validate` is judging and cheap to read, because they are indexed
+/// queries like every other check here rather than a walk from the top.
+fn sample_event_regions(
+    bam_path: &str,
+    ref_path: &str,
+    events: &[TruthEvent],
+    flank_bp: u64,
+) -> Result<GlobalSample> {
+    if events.is_empty() {
+        bail!("truth VCF holds no events, so there is no region to sample");
+    }
+
+    // Spread the budget over the events, so one long event cannot spend it.
+    let per_region = (GLOBAL_SAMPLE_MAX / events.len() as u64).max(GLOBAL_SAMPLE_MIN_PER_REGION);
+
+    let mut sample = GlobalSample::default();
+    for event in events {
+        if sample.total >= GLOBAL_SAMPLE_MAX {
+            break;
+        }
+        let start = event.start.saturating_sub(flank_bp);
+        let end = event.end + flank_bp;
+        sample_region(
+            bam_path,
+            ref_path,
+            &event.chrom,
+            start,
+            end,
+            per_region,
+            &mut sample,
+        )?;
+    }
+
+    Ok(sample)
+}
+
+/// Add up to `max_records` of one region's primary alignments to `sample`.
+fn sample_region(
+    bam_path: &str,
+    ref_path: &str,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    max_records: u64,
+    sample: &mut GlobalSample,
+) -> Result<()> {
+    let start_pos = crate::extract::safe_noodles_position(start + 1);
+    let end_pos = crate::extract::safe_noodles_position(end);
+    let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
+    let mut taken: u64 = 0;
+
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for the global sample")?;
+        let query = reader.query(&header, &region)?;
+        // `query` has already rejected an unknown contig, so this is `Some`.
+        let queried_reference_sequence_id =
+            header.reference_sequences().get_index_of(chrom.as_bytes());
+
+        for rec_result in query {
+            let cram_record = rec_result?;
+            let buf = cram_record.try_into_alignment_record(&header)?;
+            // A multi-contig container is decoded whole and `Query` filters on
+            // coordinates alone, so another contig's reads would enter the
+            // sample (L2, N4). The BAM arm needs no such guard.
+            if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
+                continue;
+            }
+            let flags = buf.flags();
+            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
+                continue;
+            }
+            let mq: u8 = buf.mapping_quality().map(u8::from).unwrap_or(0);
+            sample.add(flags, mq, buf.template_length());
+            taken += 1;
+            if taken >= max_records {
+                break;
+            }
+        }
+    } else {
+        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+            .build_from_path(bam_path)
+            .context("failed to open BAM for the global sample")?;
+        let header = reader.read_header()?;
+        let query = reader.query(&header, &region)?;
+
+        for rec_result in query {
+            let record = rec_result?;
+            let flags = record.flags();
+            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
+                continue;
+            }
+            let mq: u8 = record.mapping_quality().map(u8::from).unwrap_or(0);
+            sample.add(flags, mq, record.template_length());
+            taken += 1;
+            if taken >= max_records {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// A global check its sample cannot answer: a failed result, never a silent
+/// pass (M10).
+fn not_evaluable(check_name: &str, expected: &str, observed: &str, why: &str) -> CheckResult {
+    log::warn!("{} check is not evaluable: {}", check_name, why);
+    CheckResult {
+        event_label: "[global]".to_string(),
+        check_name: check_name.to_string(),
+        expected: expected.to_string(),
+        observed: observed.to_string(),
+        pass: false,
+    }
+}
+
+/// Check the insert size distribution of the sampled records.
+fn check_insert_size(sample: &GlobalSample) -> CheckResult {
+    let expected = "mean 50-1000, sd 5-300";
+    let Some((mean, stddev)) = sample.insert_stats() else {
+        return not_evaluable(
+            "insert_size",
+            expected,
+            "no pairs",
+            "no properly-paired record in the event regions",
+        );
+    };
 
     // Reasonable Illumina ranges.
     let pass = (50.0..=1000.0).contains(&mean) && (5.0..=300.0).contains(&stddev);
 
-    Ok(CheckResult {
+    CheckResult {
         event_label: "[global]".to_string(),
         check_name: "insert_size".to_string(),
-        expected: "mean 50-1000, sd 5-300".to_string(),
+        expected: expected.to_string(),
         observed: format!("{:.0}+/-{:.0}", mean, stddev),
         pass,
-    })
+    }
 }
 
-/// Check global duplicate rate.
-fn check_dup_rate(bam_path: &str, ref_path: Option<&str>) -> Result<CheckResult> {
-    let (total, dups) = count_dup_reads(bam_path, ref_path)?;
+/// Check the duplicate rate of the sampled records.
+fn check_dup_rate(sample: &GlobalSample) -> CheckResult {
+    if sample.total == 0 {
+        return not_evaluable("dup_rate", "<50%", "no reads", "no record sampled");
+    }
+    if sample.dups == 0 {
+        // A file with no duplicate flags is not a file without duplicates:
+        // nothing marked them, so 0% would be a default, not a measurement.
+        return not_evaluable(
+            "dup_rate",
+            "<50%",
+            "no dup flags",
+            "no sampled record carries the duplicate flag -- mark duplicates to evaluate it",
+        );
+    }
 
-    let rate = if total > 0 {
-        dups as f64 / total as f64
-    } else {
-        0.0
-    };
-
+    let rate = sample.dups as f64 / sample.total as f64;
     let pass = rate < 0.50;
 
-    Ok(CheckResult {
+    CheckResult {
         event_label: "[global]".to_string(),
         check_name: "dup_rate".to_string(),
         expected: "<50%".to_string(),
         observed: format!("{:.1}%", rate * 100.0),
         pass,
-    })
+    }
 }
 
-/// Check global mean mapping quality.
-fn check_mapq(bam_path: &str, ref_path: Option<&str>) -> Result<CheckResult> {
-    let mean_mapq = compute_mean_mapq(bam_path, ref_path)?;
+/// Check the mean mapping quality of the sampled records.
+fn check_mapq(sample: &GlobalSample) -> CheckResult {
+    if sample.total == 0 {
+        return not_evaluable("mean_mapq", ">20", "no reads", "no record sampled");
+    }
+
+    let mean_mapq = sample.mapq_sum as f64 / sample.total as f64;
     let pass = mean_mapq > 20.0;
 
-    Ok(CheckResult {
+    CheckResult {
         event_label: "[global]".to_string(),
         check_name: "mean_mapq".to_string(),
         expected: ">20".to_string(),
         observed: format!("{:.1}", mean_mapq),
         pass,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,117 +1353,6 @@ fn walk_cigar_pileup(
     }
 }
 
-/// Count total primary reads and duplicate-flagged reads (sampling first 200k).
-fn count_dup_reads(bam_path: &str, ref_path: Option<&str>) -> Result<(u64, u64)> {
-    let mut total: u64 = 0;
-    let mut dups: u64 = 0;
-    let max_sample = 200_000u64;
-
-    if crate::extract::is_cram(bam_path) {
-        let rp = ref_path.ok_or_else(|| anyhow::anyhow!("CRAM requires --reference"))?;
-        let repository = crate::extract::build_fasta_repository(rp)?;
-        let mut reader = noodles::cram::io::reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(bam_path)
-            .context("failed to open CRAM for dup counting")?;
-        let header = reader.read_header()?;
-
-        for result in reader.records(&header) {
-            let cram_record = result?;
-            let buf = cram_record.try_into_alignment_record(&header)?;
-            let flags = buf.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
-                continue;
-            }
-            total += 1;
-            if flags.is_duplicate() {
-                dups += 1;
-            }
-            if total >= max_sample {
-                break;
-            }
-        }
-    } else {
-        let mut reader = noodles::bam::io::reader::Builder
-            .build_from_path(bam_path)
-            .context("failed to open BAM for dup counting")?;
-        let _header = reader.read_header()?;
-
-        for result in reader.records() {
-            let record = result?;
-            let flags = record.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
-                continue;
-            }
-            total += 1;
-            if flags.is_duplicate() {
-                dups += 1;
-            }
-            if total >= max_sample {
-                break;
-            }
-        }
-    }
-
-    Ok((total, dups))
-}
-
-/// Compute mean MAPQ across all primary alignments (sampling first 100k).
-fn compute_mean_mapq(bam_path: &str, ref_path: Option<&str>) -> Result<f64> {
-    let mut total_mapq: u64 = 0;
-    let mut count: u64 = 0;
-    let max_sample = 100_000u64;
-
-    if crate::extract::is_cram(bam_path) {
-        let rp = ref_path.ok_or_else(|| anyhow::anyhow!("CRAM requires --reference"))?;
-        let repository = crate::extract::build_fasta_repository(rp)?;
-        let mut reader = noodles::cram::io::reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(bam_path)
-            .context("failed to open CRAM for MAPQ")?;
-        let header = reader.read_header()?;
-
-        for result in reader.records(&header) {
-            let cram_record = result?;
-            let buf = cram_record.try_into_alignment_record(&header)?;
-            let flags = buf.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
-                continue;
-            }
-            let mq: u8 = buf.mapping_quality().map(u8::from).unwrap_or(0);
-            total_mapq += mq as u64;
-            count += 1;
-            if count >= max_sample {
-                break;
-            }
-        }
-    } else {
-        let mut reader = noodles::bam::io::reader::Builder
-            .build_from_path(bam_path)
-            .context("failed to open BAM for MAPQ")?;
-        let _header = reader.read_header()?;
-
-        for result in reader.records() {
-            let record = result?;
-            let flags = record.flags();
-            if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
-                continue;
-            }
-            let mq: u8 = record.mapping_quality().map(u8::from).unwrap_or(0);
-            total_mapq += mq as u64;
-            count += 1;
-            if count >= max_sample {
-                break;
-            }
-        }
-    }
-
-    if count == 0 {
-        return Ok(0.0);
-    }
-    Ok(total_mapq as f64 / count as f64)
-}
-
 // ---------------------------------------------------------------------------
 // VCF INFO helpers (local copies from vcf_input.rs)
 // ---------------------------------------------------------------------------
@@ -1668,5 +1777,220 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             "only chrA reads may carry an allele in a chrA pileup"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- L15: the global checks read the event regions, not the file's head ---
+
+    /// A one-contig CRAM shaped like a whole-genome BAM: a head nobody asked
+    /// about, and an event window far from it. 15 pairs at chrA:101-1800 carry
+    /// MAPQ 0 (a telomere's worth of multi-mapping reads) and 3 pairs inside
+    /// chrA:10001-10500 carry MAPQ 60, so the mean MAPQ of all 36 records is
+    /// exactly 10.0 -- the number REVIEW.md measured on whole-genome HG002 --
+    /// while the event's own window reads 60. No record carries the duplicate
+    /// flag. Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
+    fn head_and_event_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        use std::num::NonZeroUsize;
+
+        const CONTIG_LEN: usize = 20_000;
+        const READ_LEN: usize = 100;
+
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_validate_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let seq: Vec<u8> = (0..CONTIG_LEN).map(|i| b"ACGT"[i % 4]).collect();
+        let mut fasta = String::from(">chrA\n");
+        let offset = fasta.len();
+        for chunk in seq.chunks(60) {
+            fasta.push_str(std::str::from_utf8(chunk).unwrap());
+            fasta.push('\n');
+        }
+        let fasta_path = dir.join("one_contig.fa");
+        std::fs::write(&fasta_path, &fasta).unwrap();
+        std::fs::write(
+            dir.join("one_contig.fa.fai"),
+            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
+        )
+        .unwrap();
+
+        let header = noodles::sam::Header::builder()
+            .add_reference_sequence(
+                "chrA",
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
+            )
+            .build();
+
+        // One pair = two records, read1 forward (0x63) and read2 reverse
+        // (0x93), both properly segmented, 300 bp apart.
+        let record = |name: &str, start: usize, first: bool, mapq: u8| {
+            let (pos, mate_pos) = if first {
+                (start, start + 200)
+            } else {
+                (start + 200, start)
+            };
+            let span = 200 + READ_LEN;
+            noodles::cram::Record::builder()
+                .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
+                    0x63u16
+                } else {
+                    0x93u16
+                }))
+                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
+                .set_reference_sequence_id(0)
+                .set_read_length(READ_LEN)
+                .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                .set_name(name)
+                .set_next_fragment_reference_sequence_id(0)
+                .set_next_mate_alignment_start(noodles::core::Position::new(mate_pos).unwrap())
+                .set_template_size(if first { span as i32 } else { -(span as i32) })
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
+                )
+                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
+                    seq[pos - 1..pos - 1 + READ_LEN].to_vec(),
+                ))
+                .set_quality_scores(noodles::sam::alignment::record_buf::QualityScores::from(
+                    vec![40u8; READ_LEN],
+                ))
+                .build()
+        };
+
+        let cram_path = dir.join("head_and_event.cram");
+        let repository =
+            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
+        {
+            let mut writer = noodles::cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(repository)
+                .build_from_path(&cram_path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            for i in 0..15usize {
+                let name = format!("head_pair{}", i);
+                let start = 101 + i * 100;
+                writer
+                    .write_record(&header, record(&name, start, true, 0))
+                    .unwrap();
+                writer
+                    .write_record(&header, record(&name, start, false, 0))
+                    .unwrap();
+            }
+            for i in 0..3usize {
+                let name = format!("event_pair{}", i);
+                let start = 10_001 + i * 100;
+                writer
+                    .write_record(&header, record(&name, start, true, 60))
+                    .unwrap();
+                writer
+                    .write_record(&header, record(&name, start, false, 60))
+                    .unwrap();
+            }
+            writer.try_finish(&header).unwrap();
+        }
+
+        let index = noodles::cram::index(&cram_path).unwrap();
+        let mut index_writer = noodles::cram::crai::io::Writer::new(
+            std::fs::File::create(dir.join("head_and_event.cram.crai")).unwrap(),
+        );
+        index_writer.write_index(&index).unwrap();
+        index_writer.finish().unwrap();
+
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// A het DEL truth event over [start, end).
+    fn del_event(chrom: &str, start: u64, end: u64) -> TruthEvent {
+        TruthEvent {
+            chrom: chrom.to_string(),
+            start,
+            end,
+            sv_type: "DEL".to_string(),
+            expected_vaf: 0.5,
+            gene: "unknown".to_string(),
+            partner: Some((chrom.to_string(), end)),
+            ref_allele: None,
+            alt_allele: None,
+        }
+    }
+
+    #[test]
+    fn test_global_sample_reads_the_event_region_not_the_head_of_the_file() {
+        // The file's first 30 records are the head's MAPQ 0 pairs and only 6
+        // lie in the event's window, so a sample taken from the top of the
+        // file reads 10.0 and FAILs the >20 check on a file whose event
+        // region is MAPQ 60 throughout (L15).
+        let (dir, fasta, cram) = head_and_event_cram("global_sample");
+        let event = del_event("chrA", 10_000, 10_200);
+
+        let sample =
+            sample_event_regions(&cram, &fasta, std::slice::from_ref(&event), 5_000).unwrap();
+        let result = check_mapq(&sample);
+
+        assert_eq!(
+            result.observed, "60.0",
+            "mean MAPQ must come from the event's own region"
+        );
+        assert!(result.pass, "MAPQ 60 must pass the >20 check");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_dup_rate_without_duplicate_flags_is_not_evaluable() {
+        // A file with no duplicate flags is not a file without duplicates:
+        // nothing marked them, so there is no rate to report and none to
+        // pass on (M10).
+        let sample = GlobalSample {
+            total: 10_000,
+            dups: 0,
+            mapq_sum: 600_000,
+            insert_sizes: vec![300.0; 10_000],
+        };
+
+        let result = check_dup_rate(&sample);
+
+        assert_eq!(result.observed, "no dup flags");
+        assert!(!result.pass, "an unevaluable duplicate rate may not pass");
+    }
+
+    #[test]
+    fn test_dup_rate_is_measured_when_records_carry_duplicate_flags() {
+        // The other half of the rule: a marked file still gets a number.
+        let sample = GlobalSample {
+            total: 1_000,
+            dups: 71,
+            mapq_sum: 60_000,
+            insert_sizes: vec![300.0; 1_000],
+        };
+
+        let result = check_dup_rate(&sample);
+
+        assert_eq!(result.observed, "7.1%");
+        assert!(result.pass, "7.1% is under the 50% limit");
+    }
+
+    #[test]
+    fn test_insert_size_without_paired_records_is_not_evaluable() {
+        // The fallback this check used to inherit from `bam_stats` was
+        // 350 +/- 50, which passes: a default reported as a measurement.
+        let sample = GlobalSample {
+            total: 100,
+            dups: 0,
+            mapq_sum: 6_000,
+            insert_sizes: Vec::new(),
+        };
+
+        let result = check_insert_size(&sample);
+
+        assert_eq!(result.observed, "no pairs");
+        assert!(!result.pass, "an unevaluable insert size may not pass");
     }
 }
