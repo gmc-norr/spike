@@ -529,7 +529,7 @@ the review's reproduction script (`scripts/review_sv_model.py`) on a synthetic
 probe, a het DUP of `chrT:10000-28000` over a donor whose interior section is
 18.75x PASSed at an observed **1.32** against an expected **1.50** while that
 interior read **81.09x** -- 4.32x, where a locally proportional CN2->CN3
-predicts 28.13x (`CR2` in `REVIEW.md`). Nor does the check see a read its own
+predicts 28.13x (`CR2` in `REVIEW.md` for the depth, `CR9` for the check passing). Nor does the check see a read its own
 MAPQ filter rejects: on the same probes, with half the donor pairs at MAPQ 0, a
 deletion requested at AF=1 kept **37.5x** of its reads inside the deletion and
 still PASSed at an observed **0.00**, because `--min-mapq` (default 20) hides
@@ -538,7 +538,10 @@ exactly the reads that survived (`CR4`).
 `split_reads` establishes that at least **two** distinct read names, pooled
 over the two breakpoints, sit within 500 bp of one breakpoint and carry an
 `SA:Z` entry naming the partner's contig at a position within 500 bp of the
-other. That is the whole of it. The SA parser reads an entry's first two
+other. Pooled is the operative word: the two reads may both sit at the *same*
+breakpoint, with nothing seen at the other, and the check still passes -- its
+own `expected` string (`>=2 joining chr:pos`) reads as though each end must
+contribute, and it does not. That is the whole of it. The SA parser reads an entry's first two
 fields -- contig and position -- and stops: the strand, CIGAR, MAPQ and NM
 fields of the same entry are never looked at. So the check does not verify that
 the two segments are on opposite strands, which for an INV is the one thing
@@ -1521,8 +1524,9 @@ event is `sim_del_8`, a DEL the background already carries which re-alignment
 flipped from FN to TP.
 
 Precision against this truth set is not a clinical precision. Truvari scores
-Delly's whole callset against spike's truth VCF, which holds the **added events
-only**, so a call matching a real variant of the background sample is counted
+Delly's PASS calls -- the script passes `--passonly`, so non-PASS records are
+dropped from both sides -- against spike's truth VCF, which holds the **added
+events only**, so a call matching a real variant of the background sample is counted
 FP for being absent from a truth set that never described the background.
 Recall is the column that means something here — how many planted events the
 caller recovered — and even that is read against the background row rather than
@@ -1530,7 +1534,10 @@ against zero, for the reason given above. The converse is no safer: a locus at
 which the caller made no call has not been shown to be variant-free. The run
 measures what this caller recovered from this background, not what is in it.
 
-Genotype accuracy is not measured at all. A call matches a truth record on
-position, size and reciprocal overlap (`-r 500 -p 0.5 -P 0.5 -s 500
---passonly`), and the fields the script reads back out of Truvari's summary are
-`TP-base`, `FP`, `FN`, recall, precision and F1 — no genotype is compared.
+Genotype accuracy is not measured at all. Matching is whatever Truvari makes of
+the flags the script passes it — `--passonly -r 500 -p 0.5 -P 0.5 -s 500`
+(`scripts/validate_pipeline.sh`) — and the script neither pins a Truvari version
+nor records the one it ran, so read those flags against the Truvari you have
+installed rather than against this paragraph. What the script itself does is
+fixed: it reads back `TP-base`, `FP`, `FN`, recall, precision and F1 from
+Truvari's `summary.json`, and no genotype is compared.
