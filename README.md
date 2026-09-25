@@ -564,9 +564,10 @@ reads are counted: every primary, non-duplicate, non-QC-fail read whatever its
 MAPQ, where `coverage_ratio` counts only reads at `--min-mapq` (default 20) or
 above. Both rows are always printed -- including at `--min-mapq 0`, where they
 are identical by construction -- because a report whose shape depended on a
-flag would hide the comparison the row exists to make. On a probe CRAM whose
-deletion window holds nothing but MAPQ 0 reads, at half the flank depth, the
-two rows read:
+flag would hide the comparison the row exists to make. On the one-contig chrA
+CRAM this repo's own unit tests write -- `mapq_hidden_deletion_cram` in
+`src/validate.rs`, not one of the review probes -- whose deletion window holds
+nothing but MAPQ 0 reads at half the flank depth, the two rows read:
 
 ```
 Event                               Check              Expected                  Observed        Status
@@ -633,17 +634,18 @@ very ratio with no floor at all, as `coverage_any_mapq`.
 `coverage_any_mapq` establishes that the same ratio, counted over **every
 primary, non-duplicate, non-QC-fail read regardless of MAPQ**, is within 0.30 of
 the same expectation. That is strictly more than `coverage_ratio` sees: on the
-probe CRAM above, a deletion window the floored row reads as **0.00** reads
-**0.50** here, because the reads that survived the edit are the reads `--min-mapq` throws
-away. What the row cannot do is tell **"spike could not edit these reads"** from
-**"this locus is hard"**. A real locus of low mappability reads thin in the donor
-pool and thick at any MAPQ whether or not the library is uneven, and this row
-sees only the second half of that: it counts the depth that is there, never why
-it is there. So a failing row is a reason to read the locus's mappability and
-the run's own `SIM_RESIST` census, not by itself evidence that the spike-in is
-wrong -- which is why the row is advisory and out of the exit status unless
-`--strict` is given. It also inherits `coverage_ratio`'s own limit: one mean over
-the whole span, hiding a local error the rest of the span cancels.
+unit-test fixture above, a deletion window the floored row reads as **0.00**
+reads **0.50** here, because the reads that survived the edit are the reads
+`--min-mapq` throws away. What the row cannot do is tell **"spike could not
+edit these reads"** from **"this locus is hard"**. A real locus of low
+mappability reads thin in the donor pool and thick at any MAPQ whether or not
+the library is uneven, and this row sees only the second half of that: it counts
+the depth that is there, never why it is there. So a failing row is a reason to
+read the locus's mappability and the run's own `SIM_RESIST` census, not by
+itself evidence that the spike-in is wrong -- which is why the row is advisory
+and out of the exit status unless `--strict` is given. It also inherits
+`coverage_ratio`'s own limit: one mean over the whole span, hiding a local error
+the rest of the span cancels.
 
 `split_reads` establishes that at least **two** distinct read names, pooled
 over the two breakpoints, sit within 500 bp of one breakpoint and carry an

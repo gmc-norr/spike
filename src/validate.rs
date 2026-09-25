@@ -261,9 +261,13 @@ fn failure_message(results: &[CheckResult], strict: bool) -> Option<String> {
     Some(format!("{}/{} validation checks failed", n_fail, n_total))
 }
 
+/// The depth-ratio row's name: event depth over flanking depth, at the run's
+/// own `--min-mapq`.
+const COVERAGE_RATIO: &str = "coverage_ratio";
+
 /// The advisory coverage row's name: `coverage_ratio` recomputed with no MAPQ
 /// floor. 17 characters, so it fits the Check column's 18 without moving a
-/// thing.
+/// thing; `test_the_any_mapq_row_does_not_move_the_status_column` pins that.
 const COVERAGE_ANY_MAPQ: &str = "coverage_any_mapq";
 
 /// Run every check that applies to one truth event, pushing one result per
@@ -286,10 +290,9 @@ fn check_event(
             event,
             args.flank_bp,
             args.min_mapq,
-            "coverage_ratio",
-            false,
+            COVERAGE_RATIO,
         );
-        results.push(check_outcome(&label, "coverage_ratio", r, false));
+        results.push(check_outcome(&label, COVERAGE_RATIO, r, false));
 
         // The same check, same window, no MAPQ floor. `coverage_ratio` cannot
         // see a read its own `--min-mapq` rejects, and those are exactly the
@@ -306,7 +309,6 @@ fn check_event(
             args.flank_bp,
             0,
             COVERAGE_ANY_MAPQ,
-            true,
         );
         results.push(check_outcome(&label, COVERAGE_ANY_MAPQ, r, true));
     }
@@ -726,6 +728,13 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
 /// flank-averaging rule, the expected ratio and its tolerance -- is shared by
 /// construction rather than by agreement, so the two rows can only ever differ
 /// in the reads the floor admits.
+///
+/// The row's advisory standing is deliberately **not** a parameter here.
+/// [`check_outcome`] stamps it on every row it wraps -- the row this function
+/// returns and the "check runs" row an errored check leaves alike -- so one
+/// flag at the call site governs both. A second copy threaded through here
+/// could only ever agree with it or be silently overwritten by it, and nothing
+/// would notice which (F1).
 fn check_coverage_ratio(
     bam_path: &str,
     ref_path: &str,
@@ -733,7 +742,6 @@ fn check_coverage_ratio(
     flank_bp: u64,
     min_mapq: u8,
     check_name: &str,
-    advisory: bool,
 ) -> Result<CheckResult> {
     let label = format_event_label(event);
 
@@ -782,7 +790,6 @@ fn check_coverage_ratio(
     Ok(coverage_ratio_result(
         label,
         check_name,
-        advisory,
         &event.sv_type,
         event.expected_vaf,
         event_depth,
@@ -792,14 +799,15 @@ fn check_coverage_ratio(
 
 /// Judge an event's depth against its flanks, as the row `check_name`.
 ///
-/// The name and the `advisory` standing are the caller's, because the same
-/// judgement serves the two coverage rows (see [`check_coverage_ratio`]); the
-/// expectations and the tolerance below are not, because the two rows compare
-/// their depths against exactly the same thing.
+/// The name is the caller's, because the same judgement serves the two
+/// coverage rows (see [`check_coverage_ratio`]); the expectations and the
+/// tolerance below are not, because the two rows compare their depths against
+/// exactly the same thing. The rows are built non-advisory and every
+/// production caller reaches them through [`check_outcome`], which is the one
+/// place that flag is set (F1).
 fn coverage_ratio_result(
     label: String,
     check_name: &str,
-    advisory: bool,
     sv_type: &str,
     expected_vaf: f64,
     event_depth: f64,
@@ -812,7 +820,7 @@ fn coverage_ratio_result(
             expected: "N/A".to_string(),
             observed: "no flanking coverage".to_string(),
             pass: false, // can't evaluate: don't report it as a pass
-            advisory,
+            advisory: false, // stamped by check_outcome
         };
     }
 
@@ -845,7 +853,7 @@ fn coverage_ratio_result(
         expected: expected_str,
         observed: format!("{:.2}", ratio),
         pass,
-        advisory,
+        advisory: false, // stamped by check_outcome
     }
 }
 
@@ -3043,7 +3051,21 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
 
     #[test]
     fn test_coverage_ratio_without_flank_coverage_fails() {
-        let r = coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 0.0, 0.0);
+        let r = coverage_ratio_result("DEL".to_string(), "coverage_ratio", "DEL", 0.5, 0.0, 0.0);
+        assert!(!r.pass, "an unevaluable coverage check must not pass");
+    }
+
+    #[test]
+    fn test_an_unevaluable_coverage_row_keeps_the_name_it_was_given() {
+        // The `flank_depth < 1.0` branch builds a row of its own, so it has to
+        // carry the caller's name like the graded one does. A DEL whose flanks
+        // are under 1x otherwise prints two rows both called `coverage_ratio`,
+        // with different `pass` values, in the table and in `--json`, where a
+        // consumer selecting by check name takes whichever it hits first (F2).
+        let r = coverage_ratio_result("DEL".to_string(), COVERAGE_ANY_MAPQ, "DEL", 1.0, 0.0, 0.0);
+
+        assert_eq!(r.check_name, "coverage_any_mapq");
+        assert_eq!(r.observed, "no flanking coverage");
         assert!(!r.pass, "an unevaluable coverage check must not pass");
     }
 
@@ -3051,15 +3073,15 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
     fn test_coverage_ratio_has_no_verdict_for_a_type_without_an_expected_ratio() {
         // Only DEL and DUP reach this check. Any other type has no expected
         // ratio, so an untouched region must not pass it by default (NF6).
-        let r = coverage_ratio_result("INV".to_string(), "coverage_ratio", false, "INV", 0.5, 35.0, 35.0);
+        let r = coverage_ratio_result("INV".to_string(), "coverage_ratio", "INV", 0.5, 35.0, 35.0);
         assert!(!r.pass, "observed {}, expected {}", r.observed, r.expected);
         assert_eq!(r.expected, "N/A");
     }
 
     #[test]
     fn test_coverage_ratio_tells_deletion_from_untouched() {
-        assert!(coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 17.5, 35.0).pass);
-        assert!(!coverage_ratio_result("DEL".to_string(), "coverage_ratio", false, "DEL", 0.5, 35.0, 35.0).pass);
+        assert!(coverage_ratio_result("DEL".to_string(), "coverage_ratio", "DEL", 0.5, 17.5, 35.0).pass);
+        assert!(!coverage_ratio_result("DEL".to_string(), "coverage_ratio", "DEL", 0.5, 35.0, 35.0).pass);
     }
 
     #[test]
@@ -3350,42 +3372,10 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
     /// while the event's own window reads 60. No record carries the duplicate
     /// flag. Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
     fn head_and_event_cram(tag: &str) -> (std::path::PathBuf, String, String) {
-        use std::num::NonZeroUsize;
-
-        const CONTIG_LEN: usize = 20_000;
-        const READ_LEN: usize = 100;
-
-        let dir = std::env::temp_dir().join(format!(
-            "spike_test_validate_{}_{}",
-            tag,
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let seq: Vec<u8> = (0..CONTIG_LEN).map(|i| b"ACGT"[i % 4]).collect();
-        let mut fasta = String::from(">chrA\n");
-        let offset = fasta.len();
-        for chunk in seq.chunks(60) {
-            fasta.push_str(std::str::from_utf8(chunk).unwrap());
-            fasta.push('\n');
-        }
-        let fasta_path = dir.join("one_contig.fa");
-        std::fs::write(&fasta_path, &fasta).unwrap();
-        std::fs::write(
-            dir.join("one_contig.fa.fai"),
-            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
-        )
-        .unwrap();
-
-        let header = noodles::sam::Header::builder()
-            .add_reference_sequence(
-                "chrA",
-                noodles::sam::header::record::value::Map::<
-                    noodles::sam::header::record::value::map::ReferenceSequence,
-                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
-            )
-            .build();
+        let seq = cycling_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "one_contig", &seq);
+        let header = one_contig_header(seq.len());
 
         // One pair = two records, read1 forward (0x63) and read2 reverse
         // (0x93), both properly segmented, 300 bp apart.
@@ -3395,7 +3385,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             } else {
                 (start + 200, start)
             };
-            let span = 200 + READ_LEN;
+            let span = 200 + TEST_READ_LEN;
             noodles::cram::Record::builder()
                 .set_bam_flags(noodles::sam::alignment::record::Flags::from(if first {
                     0x63u16
@@ -3404,7 +3394,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
                 }))
                 .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
                 .set_reference_sequence_id(0)
-                .set_read_length(READ_LEN)
+                .set_read_length(TEST_READ_LEN)
                 .set_alignment_start(noodles::core::Position::new(pos).unwrap())
                 .set_name(name)
                 .set_next_fragment_reference_sequence_id(0)
@@ -3414,52 +3404,30 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
                     noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
                 )
                 .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
-                    seq[pos - 1..pos - 1 + READ_LEN].to_vec(),
+                    seq[pos - 1..pos - 1 + TEST_READ_LEN].to_vec(),
                 ))
                 .set_quality_scores(noodles::sam::alignment::record_buf::QualityScores::from(
-                    vec![40u8; READ_LEN],
+                    vec![40u8; TEST_READ_LEN],
                 ))
                 .build()
         };
 
-        let cram_path = dir.join("head_and_event.cram");
-        let repository =
-            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
-        {
-            let mut writer = noodles::cram::io::writer::Builder::default()
-                .set_reference_sequence_repository(repository)
-                .build_from_path(&cram_path)
-                .unwrap();
-            writer.write_header(&header).unwrap();
-            for i in 0..15usize {
-                let name = format!("head_pair{}", i);
-                let start = 101 + i * 100;
-                writer
-                    .write_record(&header, record(&name, start, true, 0))
-                    .unwrap();
-                writer
-                    .write_record(&header, record(&name, start, false, 0))
-                    .unwrap();
-            }
-            for i in 0..3usize {
-                let name = format!("event_pair{}", i);
-                let start = 10_001 + i * 100;
-                writer
-                    .write_record(&header, record(&name, start, true, 60))
-                    .unwrap();
-                writer
-                    .write_record(&header, record(&name, start, false, 60))
-                    .unwrap();
-            }
-            writer.try_finish(&header).unwrap();
+        // 15 pairs of MAPQ 0 at the contig head, then 3 pairs of MAPQ 60 over
+        // the event.
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        for i in 0..15usize {
+            let name = format!("head_pair{}", i);
+            let start = 101 + i * 100;
+            records.push(record(&name, start, true, 0));
+            records.push(record(&name, start, false, 0));
         }
-
-        let index = noodles::cram::index(&cram_path).unwrap();
-        let mut index_writer = noodles::cram::crai::io::Writer::new(
-            std::fs::File::create(dir.join("head_and_event.cram.crai")).unwrap(),
-        );
-        index_writer.write_index(&index).unwrap();
-        index_writer.finish().unwrap();
+        for i in 0..3usize {
+            let name = format!("event_pair{}", i);
+            let start = 10_001 + i * 100;
+            records.push(record(&name, start, true, 60));
+            records.push(record(&name, start, false, 60));
+        }
+        let cram_path = write_indexed_cram(&dir, "head_and_event", &fasta_path, &header, &records);
 
         (
             dir,
@@ -4265,6 +4233,95 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         (0..20_000).map(|i| b"ACGT"[i % 4]).collect()
     }
 
+    // The four helpers below are the scaffolding every CRAM fixture in this
+    // module needs and none of them is about: a scratch directory, the FASTA
+    // and its `.fai`, the one-contig header, and the writer plus its `.crai`.
+    // Only the read plan and the record builder differ between fixtures, so
+    // only those stay written out (F3).
+
+    /// A scratch directory of its own for one fixture, named after `tag` and
+    /// this process, emptied first. The caller removes it.
+    fn fixture_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "spike_test_validate_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Write `seq` as a one-contig chrA FASTA at `dir/<basename>.fa`, with the
+    /// `.fai` the CRAM reader needs beside it. Returns the FASTA's path.
+    fn write_one_contig_fasta(
+        dir: &std::path::Path,
+        basename: &str,
+        seq: &[u8],
+    ) -> std::path::PathBuf {
+        let mut fasta = String::from(">chrA\n");
+        let offset = fasta.len();
+        for chunk in seq.chunks(60) {
+            fasta.push_str(std::str::from_utf8(chunk).unwrap());
+            fasta.push('\n');
+        }
+        let fasta_path = dir.join(format!("{}.fa", basename));
+        std::fs::write(&fasta_path, &fasta).unwrap();
+        std::fs::write(
+            dir.join(format!("{}.fa.fai", basename)),
+            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
+        )
+        .unwrap();
+        fasta_path
+    }
+
+    /// A SAM header naming chrA alone, `len` bases long.
+    fn one_contig_header(len: usize) -> noodles::sam::Header {
+        noodles::sam::Header::builder()
+            .add_reference_sequence(
+                "chrA",
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(std::num::NonZeroUsize::try_from(len).unwrap()),
+            )
+            .build()
+    }
+
+    /// Write `records` as `dir/<basename>.cram` against `fasta_path`, with its
+    /// `.crai` beside it, and return the CRAM's path. The index is written
+    /// from the CRAM itself, so a fixture cannot end up indexed as something
+    /// it did not write.
+    fn write_indexed_cram(
+        dir: &std::path::Path,
+        basename: &str,
+        fasta_path: &std::path::Path,
+        header: &noodles::sam::Header,
+        records: &[noodles::cram::Record],
+    ) -> std::path::PathBuf {
+        let cram_path = dir.join(format!("{}.cram", basename));
+        let repository =
+            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
+        {
+            let mut writer = noodles::cram::io::writer::Builder::default()
+                .set_reference_sequence_repository(repository)
+                .build_from_path(&cram_path)
+                .unwrap();
+            writer.write_header(header).unwrap();
+            for rec in records {
+                writer.write_record(header, rec.clone()).unwrap();
+            }
+            writer.try_finish(header).unwrap();
+        }
+
+        let index = noodles::cram::index(&cram_path).unwrap();
+        let mut index_writer = noodles::cram::crai::io::Writer::new(
+            std::fs::File::create(dir.join(format!("{}.cram.crai", basename))).unwrap(),
+        );
+        index_writer.write_index(&index).unwrap();
+        index_writer.finish().unwrap();
+        cram_path
+    }
+
     /// Write `pairs` -- `(name, read1, read2)` -- onto chrA as an indexed CRAM
     /// in a scratch directory of its own. Returns `(dir, fasta_path,
     /// cram_path)`; the caller removes `dir`.
@@ -4275,38 +4332,10 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
     ) -> (std::path::PathBuf, String, String) {
         use noodles::sam::alignment::record::cigar::Op;
         use noodles::sam::alignment::record_buf::{Cigar, QualityScores, Sequence};
-        use std::num::NonZeroUsize;
 
-        let dir = std::env::temp_dir().join(format!(
-            "spike_test_validate_{}_{}",
-            tag,
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let mut fasta = String::from(">chrA\n");
-        let offset = fasta.len();
-        for chunk in seq.chunks(60) {
-            fasta.push_str(std::str::from_utf8(chunk).unwrap());
-            fasta.push('\n');
-        }
-        let fasta_path = dir.join("small_variant.fa");
-        std::fs::write(&fasta_path, &fasta).unwrap();
-        std::fs::write(
-            dir.join("small_variant.fa.fai"),
-            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
-        )
-        .unwrap();
-
-        let header = noodles::sam::Header::builder()
-            .add_reference_sequence(
-                "chrA",
-                noodles::sam::header::record::value::Map::<
-                    noodles::sam::header::record::value::map::ReferenceSequence,
-                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
-            )
-            .build();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "small_variant", seq);
+        let header = one_contig_header(seq.len());
 
         // The CIGAR and the read bases are given explicitly: a small indel's
         // allele fraction is read off the CIGAR, so the fixture has to carry
@@ -4362,27 +4391,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             records.push(record(name, read2, read1, false));
         }
 
-        let cram_path = dir.join("small_variant.cram");
-        let repository =
-            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
-        {
-            let mut writer = noodles::cram::io::writer::Builder::default()
-                .set_reference_sequence_repository(repository)
-                .build_from_path(&cram_path)
-                .unwrap();
-            writer.write_header(&header).unwrap();
-            for rec in &records {
-                writer.write_record(&header, rec.clone()).unwrap();
-            }
-            writer.try_finish(&header).unwrap();
-        }
-
-        let index = noodles::cram::index(&cram_path).unwrap();
-        let mut index_writer = noodles::cram::crai::io::Writer::new(
-            std::fs::File::create(dir.join("small_variant.cram.crai")).unwrap(),
-        );
-        index_writer.write_index(&index).unwrap();
-        index_writer.finish().unwrap();
+        let cram_path = write_indexed_cram(&dir, "small_variant", &fasta_path, &header, &records);
 
         (
             dir,
@@ -5169,6 +5178,40 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
     }
 
     #[test]
+    fn test_the_any_mapq_row_does_not_move_the_status_column() {
+        // The Check column is `{:<18}`, which *grows* past a longer name
+        // rather than truncating it: measured, a 19-character name puts Status
+        // at offset 98 where every other row has it at 97, with nothing else
+        // to notice. `coverage_any_mapq` is 17, so it neither moves the column
+        // nor eats its padding; this is what says so (F4).
+        let report = text_report(
+            &[
+                row("coverage_ratio", true, false),
+                row(COVERAGE_ANY_MAPQ, true, true),
+            ],
+            false,
+        );
+        let status_at = |name: &str| {
+            let line = line_for(&report, name);
+            line.find("PASS")
+                .unwrap_or_else(|| panic!("no status on {:?}", line))
+        };
+
+        assert_eq!(
+            status_at("coverage_any_mapq"),
+            status_at("coverage_ratio"),
+            "the any-MAPQ row must not move the Status column:\n{}",
+            report
+        );
+        assert!(
+            COVERAGE_ANY_MAPQ.len() < 18,
+            "the name must still fit the 18-wide Check column with a pad left; \
+             it is {} characters",
+            COVERAGE_ANY_MAPQ.len()
+        );
+    }
+
+    #[test]
     fn test_the_advisory_summary_says_when_strict_counts_them() {
         let results = vec![row("resistant", false, true)];
 
@@ -5333,45 +5376,16 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
     ///
     /// Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
     fn mapq_hidden_deletion_cram(tag: &str) -> (std::path::PathBuf, String, String) {
-        use std::num::NonZeroUsize;
-
         let seq = cycling_contig();
-        let dir = std::env::temp_dir().join(format!(
-            "spike_test_validate_{}_{}",
-            tag,
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let mut fasta = String::from(">chrA\n");
-        let offset = fasta.len();
-        for chunk in seq.chunks(60) {
-            fasta.push_str(std::str::from_utf8(chunk).unwrap());
-            fasta.push('\n');
-        }
-        let fasta_path = dir.join("mapq_hidden.fa");
-        std::fs::write(&fasta_path, &fasta).unwrap();
-        std::fs::write(
-            dir.join("mapq_hidden.fa.fai"),
-            format!("chrA\t{}\t{}\t60\t61\n", seq.len(), offset),
-        )
-        .unwrap();
-
-        let header = noodles::sam::Header::builder()
-            .add_reference_sequence(
-                "chrA",
-                noodles::sam::header::record::value::Map::<
-                    noodles::sam::header::record::value::map::ReferenceSequence,
-                >::new(NonZeroUsize::try_from(seq.len()).unwrap()),
-            )
-            .build();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "mapq_hidden", &seq);
+        let header = one_contig_header(seq.len());
 
         // 20 reads at MAPQ 60 over a 1000 bp flank is depth 2.0; 10 inside a
         // 1000 bp window is depth 1.0. Every read lies wholly inside the
         // window it is meant to cover, so no depth leaks across a boundary.
         let mut plan: Vec<(usize, u8)> = Vec::new();
-        for (flank_start, _) in [(9_000usize, ()), (11_100, ()), (13_000, ()), (15_100, ())] {
+        for flank_start in [9_000usize, 11_100, 13_000, 15_100] {
             for i in 0..20usize {
                 plan.push((flank_start + i * 40, 60));
             }
@@ -5404,29 +5418,12 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
                 .build()
         };
 
-        let cram_path = dir.join("mapq_hidden.cram");
-        let repository =
-            crate::extract::build_fasta_repository(fasta_path.to_str().unwrap()).unwrap();
-        {
-            let mut writer = noodles::cram::io::writer::Builder::default()
-                .set_reference_sequence_repository(repository)
-                .build_from_path(&cram_path)
-                .unwrap();
-            writer.write_header(&header).unwrap();
-            for (i, &(start0, mapq)) in plan.iter().enumerate() {
-                writer
-                    .write_record(&header, record(&format!("read{}", i), start0, mapq))
-                    .unwrap();
-            }
-            writer.try_finish(&header).unwrap();
-        }
-
-        let index = noodles::cram::index(&cram_path).unwrap();
-        let mut index_writer = noodles::cram::crai::io::Writer::new(
-            std::fs::File::create(dir.join("mapq_hidden.cram.crai")).unwrap(),
-        );
-        index_writer.write_index(&index).unwrap();
-        index_writer.finish().unwrap();
+        let records: Vec<noodles::cram::Record> = plan
+            .iter()
+            .enumerate()
+            .map(|(i, &(start0, mapq))| record(&format!("read{}", i), start0, mapq))
+            .collect();
+        let cram_path = write_indexed_cram(&dir, "mapq_hidden", &fasta_path, &header, &records);
 
         (
             dir,
