@@ -14,7 +14,7 @@ use crate::haplotype::VariantHaplotype;
 use crate::loh;
 use crate::reference::SharedReference;
 use crate::synth::{copy_rate, SynthReadGenerator};
-use crate::types::{ReadPair, ReadPool, SimConfig, SimEvent, SplicedOutput};
+use crate::types::{DepthFold, ReadPair, ReadPool, SimConfig, SimEvent, SplicedOutput};
 
 /// Classification of how a read pair relates to SV boundaries.
 #[derive(Debug, PartialEq)]
@@ -210,6 +210,10 @@ fn simulate_event_with_copies(
         (&first_bp_chrom, first_bp_ref),
     )?;
 
+    // CR2: measured only. The tiling below still scales every fragment by
+    // `cov`; this says how far the donor's own depth is from it.
+    let depth_fold = depth_fold(haplotype, pool, cov);
+
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
     // to avoid inflating flank coverage.
@@ -274,6 +278,7 @@ fn simulate_event_with_copies(
         suppressed_names: suppressed,
         uncovered_breakpoint_sides,
         adjusted_vaf,
+        depth_fold,
     })
 }
 
@@ -908,6 +913,42 @@ fn tile_haplotype_reads(
     }
 
     (pairs, plan.adjusted_vaf)
+}
+
+/// The largest fold between the donor's depth in any bin this haplotype's
+/// fragments are drawn from and `cov`, the depth they are all scaled by (CR2).
+///
+/// Each reference interval a segment is drawn from is cut into
+/// `max(1, round(len / 1000))` equal bins, and each bin's depth is measured
+/// the way `cov` is: [`estimate_coverage_at`] on the same pool, the bin as its
+/// window. Measuring only; nothing here changes what is tiled.
+fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthFold {
+    const BIN: u64 = 1000;
+    let mut worst = DepthFold {
+        fold: 1.0,
+        scaled_by: cov,
+        worst_bin: String::new(),
+        worst_depth: cov,
+    };
+    for origin in haplotype.segments.iter().filter_map(|seg| seg.origin.as_ref()) {
+        let len = origin.ref_end.saturating_sub(origin.ref_start);
+        if len == 0 {
+            continue;
+        }
+        let n_bins = ((len as f64 / BIN as f64).round() as u64).max(1);
+        for b in 0..n_bins {
+            let start = origin.ref_start + len * b / n_bins;
+            let end = origin.ref_start + len * (b + 1) / n_bins;
+            let depth = estimate_coverage_at(pool, &origin.chrom, (start + end) / 2, end - start);
+            let fold = ((depth + 1.0) / (cov + 1.0)).max((cov + 1.0) / (depth + 1.0));
+            if fold > worst.fold {
+                worst.fold = fold;
+                worst.worst_bin = format!("{}:{}-{}", origin.chrom, start, end);
+                worst.worst_depth = depth;
+            }
+        }
+    }
+    worst
 }
 
 /// Estimate fragment depth at a reference position on `chrom`.
@@ -1844,6 +1885,53 @@ mod tests {
 
         // At minimum, the pool should have reads — some will be junction-crossing
         assert!(pairs.len() > 10, "Should produce substantial number of reads");
+    }
+
+    /// Pairs of 400 bp starting every 10 bp over [9000, 17000): a fragment
+    /// depth of exactly 40. Inside `thin` only every fourth start is kept,
+    /// so a position whose covering starts all lie there reads 10.
+    fn depth_pool(thin: Option<(u64, u64)>) -> ReadPool {
+        let pairs = (9_000u64..17_000)
+            .step_by(10)
+            .filter(|&s| match thin {
+                Some((a, b)) if s >= a && s < b => s % 40 == 0,
+                _ => true,
+            })
+            .map(|s| make_pair(&format!("d{}", s), s, s + 400))
+            .collect();
+        ReadPool {
+            pairs,
+            frag_dist: FragmentDist::from_stats(400.0, 80.0),
+        }
+    }
+
+    #[test]
+    fn test_depth_fold_is_one_over_an_even_donor() {
+        let hap = tandem_dup_haplotype(11_000, 15_000, 1_000);
+        let fold = depth_fold(&hap, &depth_pool(None), 40.0);
+        assert!((fold.fold - 1.0).abs() < 1e-9, "{:?}", fold);
+        assert_eq!(fold.scaled_by, 40.0);
+    }
+
+    #[test]
+    fn test_depth_fold_finds_the_thin_bin() {
+        // CR2: the tiling scales every fragment by one depth. Where the donor
+        // runs at a quarter of it the fold is (40+1)/(10+1), and the bin
+        // wholly inside the thin stretch is the one named.
+        let hap = tandem_dup_haplotype(11_000, 15_000, 1_000);
+        let fold = depth_fold(&hap, &depth_pool(Some((12_000, 14_000))), 40.0);
+        assert!((fold.fold - 41.0 / 11.0).abs() < 1e-9, "{:?}", fold);
+        assert_eq!(fold.worst_bin, "chr1:13000-14000");
+        assert!((fold.worst_depth - 10.0).abs() < 1e-9, "{:?}", fold);
+    }
+
+    #[test]
+    fn test_depth_fold_counts_a_donor_deeper_than_the_scaling_depth() {
+        // The fold is symmetric: a donor at four times the scaling depth is
+        // as far off as one at a quarter of it.
+        let hap = tandem_dup_haplotype(11_000, 15_000, 1_000);
+        let fold = depth_fold(&hap, &depth_pool(None), 10.0);
+        assert!((fold.fold - 41.0 / 11.0).abs() < 1e-9, "{:?}", fold);
     }
 
     #[test]
@@ -2942,6 +3030,7 @@ mod tests {
             suppressed_names: suppressed.iter().map(|n| n.to_string()).collect(),
             uncovered_breakpoint_sides: Vec::new(),
             adjusted_vaf: None,
+            depth_fold: DepthFold::default(),
         }
     }
 

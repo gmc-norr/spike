@@ -510,6 +510,9 @@ fn main() -> Result<()> {
     // Per event, in the same order: the share of the reads over it spike
     // could not edit (CR4). The truth VCF records it as SIM_RESIST.
     let mut resistant: Vec<Option<f64>> = Vec::with_capacity(events.len());
+    // Per event, in the same order: how far the donor's depth departs from
+    // the one depth its fragments are scaled by (CR2): SIM_DEPTH_FOLD.
+    let mut depth_folds: Vec<Option<f64>> = Vec::with_capacity(events.len());
 
     let mut event_stats: Vec<EventStat> = Vec::new();
     // M14: pairs whose stored quality is unusable never reach a pool, so they
@@ -600,10 +603,17 @@ fn main() -> Result<()> {
             dropped_unusable_qual,
             uncovered_breakpoint_sides: output.uncovered_breakpoint_sides.clone(),
             census: event_census,
+            depth_fold: output.depth_fold.clone(),
         });
+
+        if let Some(warning) = census::depth_fold_warning(&event_label(event), &output.depth_fold)
+        {
+            log::warn!("{}", warning);
+        }
 
         adjusted_afs.push(output.adjusted_vaf);
         resistant.push(Some(event_census.fraction()));
+        depth_folds.push(Some(output.depth_fold.fold));
         event_outputs.push(output);
     }
 
@@ -632,6 +642,7 @@ fn main() -> Result<()> {
         &events,
         &adjusted_afs,
         &resistant,
+        &depth_folds,
         config.allele_fraction, // default AF for events without per-event override
         &truth_path.to_string_lossy(),
         &args.reference,
@@ -1302,6 +1313,10 @@ struct EventStat {
     /// The reads over this event and how many of them spike could not edit
     /// (CR4). `truth.vcf` records the share as `SIM_RESIST`.
     census: census::Census,
+    /// How far the donor's depth, where this event's fragments were drawn,
+    /// departs from the one depth they were scaled by (CR2). `truth.vcf`
+    /// records the fold as `SIM_DEPTH_FOLD`.
+    depth_fold: types::DepthFold,
 }
 
 /// Smallest donor pool spike will simulate one event from.
@@ -1826,19 +1841,19 @@ fn write_readme(
     writeln!(
         md,
         "| # | Event | Requested VAF | Simulated VAF | Kept reads | Chimeric reads | \
-         Suppressed reads | Dropped (unusable quality) | Resistant reads |"
+         Suppressed reads | Dropped (unusable quality) | Resistant reads | Depth fold |"
     )?;
     writeln!(
         md,
         "|---|-------|---------------|---------------|-----------|----------------|\
-         -----------------|---------------------------|-----------------|"
+         -----------------|---------------------------|-----------------|------------|"
     )?;
     for (i, event) in events.iter().enumerate() {
         let label = event_label(event);
         let stat = event_stats.get(i);
         writeln!(
             md,
-            "| {} | {} | {:.3} | {:.3} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {:.2} |",
             i + 1,
             label,
             stat.map_or(0.0, |s| s.vaf),
@@ -1853,6 +1868,7 @@ fn write_readme(
                 s.census.counted,
                 s.census.fraction() * 100.0
             )),
+            stat.map_or(0.0, |s| s.depth_fold.fold),
         )?;
     }
     writeln!(md)?;
@@ -1876,6 +1892,37 @@ fn write_readme(
              stay in the merged BAM as they are, so these events are weaker than requested \
              by about that share. `truth.vcf` records it per event as `SIM_RESIST`.",
             resistant.join("; ")
+        )?;
+        writeln!(md)?;
+    }
+    // Only for an event above the warning threshold, like the log's warning.
+    let off: Vec<String> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, event)| {
+            let fold = &event_stats.get(i)?.depth_fold;
+            (fold.fold > census::DEPTH_FOLD_WARN_ABOVE).then(|| {
+                format!(
+                    "{} ({:.1}x over {} against {:.1}x, {:.2}-fold)",
+                    event_label(event),
+                    fold.worst_depth,
+                    fold.worst_bin,
+                    fold.scaled_by,
+                    fold.fold
+                )
+            })
+        })
+        .collect();
+    if !off.is_empty() {
+        writeln!(
+            md,
+            "**Donor depth off the scaling depth:** {}. spike scales every fragment an \
+             event tiles by one depth, measured at one of its breakpoints. The depth fold \
+             column is the largest fold between that and the donor's own depth in any ~1 kb \
+             bin the fragments are drawn from; where the two differ, the event's depth there \
+             is off by about that fold. `truth.vcf` records it per event as \
+             `SIM_DEPTH_FOLD`.",
+            off.join("; ")
         )?;
         writeln!(md)?;
     }
@@ -3583,6 +3630,7 @@ done"#,
             dropped_unusable_qual: 457,
             uncovered_breakpoint_sides: vec!["chr20:38409999".to_string()],
             census: census::Census::default(),
+            depth_fold: types::DepthFold::default(),
         }];
         write_readme(
             dir.to_str().unwrap(),
@@ -3636,6 +3684,7 @@ done"#,
             dropped_unusable_qual: 0,
             uncovered_breakpoint_sides: vec!["chr20:37397999".to_string()],
             census: census::Census::default(),
+            depth_fold: types::DepthFold::default(),
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
@@ -3671,6 +3720,7 @@ done"#,
             dropped_unusable_qual: 0,
             uncovered_breakpoint_sides: Vec::new(),
             census: census::Census::default(),
+            depth_fold: types::DepthFold::default(),
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
@@ -3709,6 +3759,7 @@ done"#,
             dropped_unusable_qual: 0,
             uncovered_breakpoint_sides: Vec::new(),
             census: census::Census { counted, resistant },
+            depth_fold: types::DepthFold::default(),
         };
         let stats = vec![stat(100, 50), stat(200, 4)];
         write_readme(
@@ -3727,6 +3778,55 @@ done"#,
             .find(|l| l.starts_with("**Reads spike could not edit:**"))
             .unwrap_or_else(|| panic!("no paragraph for the event above 10%:\n{}", md));
         assert!(paragraph.contains("chr20:38412501"), "{}", paragraph);
+        assert!(!paragraph.contains("chr20:39000001"), "{}", paragraph);
+    }
+
+    #[test]
+    fn test_run_readme_prints_the_depth_fold_per_event() {
+        // CR2: the fold per event, and a paragraph naming only an event above
+        // 1.5, with the bin and the two depths.
+        let dir = std::env::temp_dir().join(format!("spike_readme_fold_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![
+            del("chr20", 38_412_500, 38_422_500),
+            del("chr20", 39_000_000, 39_010_000),
+        ];
+        let stat = |fold: f64, bin: &str, depth: f64| EventStat {
+            vaf: 0.5,
+            adjusted_vaf: None,
+            kept: 0,
+            chimeric: 300,
+            suppressed: 500,
+            dropped_unusable_qual: 0,
+            uncovered_breakpoint_sides: Vec::new(),
+            census: census::Census::default(),
+            depth_fold: types::DepthFold {
+                fold,
+                scaled_by: 40.0,
+                worst_bin: bin.to_string(),
+                worst_depth: depth,
+            },
+        };
+        let stats = vec![stat(3.73, "chr20:38410000-38411000", 10.0), stat(1.12, "", 40.0)];
+        write_readme(
+            dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+            &events, &stats, 600, 10_000, 0,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(md.contains("| Depth fold |"), "no column:\n{}", md);
+        assert!(md.contains("| 3.73 |"), "first row:\n{}", md);
+        assert!(md.contains("| 1.12 |"), "second row:\n{}", md);
+        let paragraph = md
+            .lines()
+            .find(|l| l.starts_with("**Donor depth off the scaling depth:**"))
+            .unwrap_or_else(|| panic!("no paragraph for the event above 1.5:\n{}", md));
+        assert!(paragraph.contains("chr20:38410000-38411000"), "{}", paragraph);
+        assert!(paragraph.contains("10.0x"), "{}", paragraph);
         assert!(!paragraph.contains("chr20:39000001"), "{}", paragraph);
     }
 
@@ -3761,6 +3861,7 @@ done"#,
                 dropped_unusable_qual: 0,
                 uncovered_breakpoint_sides: Vec::new(),
                 census: census::Census::default(),
+                depth_fold: types::DepthFold::default(),
             },
             // Neither mechanism touched this one, so both numbers are the
             // request -- truth.vcf writes SIM_VAF=SIM_REQ_VAF=0.500 for it.
@@ -3773,6 +3874,7 @@ done"#,
                 dropped_unusable_qual: 0,
                 uncovered_breakpoint_sides: Vec::new(),
                 census: census::Census::default(),
+                depth_fold: types::DepthFold::default(),
             },
         ];
         write_readme(

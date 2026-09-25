@@ -63,12 +63,14 @@ fn with_bnd_base(alt: &str, base: &str) -> String {
 /// fraction off the request, `None` when the request stands. `SIM_VAF` is
 /// what was simulated, so it is `v` where there is one and the request
 /// everywhere else. `resistant` holds each event's `SIM_RESIST`, the share
-/// of the reads over it spike could not edit (CR4); `None` writes `.`.
+/// of the reads over it spike could not edit (CR4), and `depth_folds` its
+/// `SIM_DEPTH_FOLD` (CR2); `None` writes `.` in either.
 #[allow(clippy::too_many_arguments)]
 pub fn write_truth_vcf(
     events: &[SimEvent],
     adjusted_afs: &[Option<f64>],
     resistant: &[Option<f64>],
+    depth_folds: &[Option<f64>],
     default_af: f64,
     output_path: &str,
     ref_path: &str,
@@ -89,6 +91,11 @@ pub fn write_truth_vcf(
         resistant.len(),
         events.len(),
         "write_truth_vcf: one resistant fraction per event, in the same order",
+    );
+    debug_assert_eq!(
+        depth_folds.len(),
+        events.len(),
+        "write_truth_vcf: one depth fold per event, in the same order",
     );
 
     let mut f = std::fs::File::create(output_path)
@@ -143,6 +150,13 @@ pub fn write_truth_vcf(
     )?;
     writeln!(
         f,
+        "##INFO=<ID=SIM_DEPTH_FOLD,Number=1,Type=Float,Description=\"Largest fold between \
+         the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from \
+         and the one depth they are all scaled by, measured at a breakpoint. Where the two \
+         differ, the event's depth there is off by about that fold\">"
+    )?;
+    writeln!(
+        f,
         "##INFO=<ID=SIM_GENE,Number=1,Type=String,Description=\"Affected gene\">"
     )?;
     writeln!(
@@ -192,6 +206,10 @@ pub fn write_truth_vcf(
             Some(r) => format!("{:.3}", r),
             None => ".".to_string(),
         };
+        let fold = match depth_folds.get(i).copied().flatten() {
+            Some(f) => format!("{:.2}", f),
+            None => ".".to_string(),
+        };
 
         match event {
             SimEvent::Deletion {
@@ -214,7 +232,7 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *del_start,
                     format!(
-                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
+                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *del_start),
                         del_end,
@@ -222,6 +240,7 @@ pub fn write_truth_vcf(
                         event_af,
                         requested_af,
                         resist,
+                        fold,
                         gene,
                         exons_str,
                         gt,
@@ -251,7 +270,7 @@ pub fn write_truth_vcf(
                         chrom.clone(),
                         pos,
                         format!(
-                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={}\tGT\t{}",
+                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                             id,
                             base,
                             with_bnd_base(&alt, &base),
@@ -259,6 +278,7 @@ pub fn write_truth_vcf(
                             event_af,
                             requested_af,
                             resist,
+                            fold,
                             gene,
                             gt,
                         ),
@@ -277,7 +297,7 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *dup_start,
                     format!(
-                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={}\tGT\t{}",
+                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *dup_start),
                         dup_end,
@@ -285,6 +305,7 @@ pub fn write_truth_vcf(
                         event_af,
                         requested_af,
                         resist,
+                        fold,
                         gene,
                         gt,
                     ),
@@ -302,7 +323,7 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *inv_start,
                     format!(
-                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={}\tGT\t{}",
+                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *inv_start),
                         inv_end,
@@ -310,6 +331,7 @@ pub fn write_truth_vcf(
                         event_af,
                         requested_af,
                         resist,
+                        fold,
                         gene,
                         gt,
                     ),
@@ -341,7 +363,7 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *pos,
                     format!(
-                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={}\tGT\t{}",
+                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         anchor,
                         alt,
@@ -349,6 +371,7 @@ pub fn write_truth_vcf(
                         event_af,
                         requested_af,
                         resist,
+                        fold,
                         gene,
                         gt,
                     ),
@@ -367,13 +390,14 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     pos + 1,
                     format!(
-                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_GENE={}\tGT\t{}",
+                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         String::from_utf8_lossy(ref_allele),
                         String::from_utf8_lossy(alt_allele),
                         event_af,
                         requested_af,
                         resist,
+                        fold,
                         gene,
                         gt,
                     ),
@@ -509,7 +533,7 @@ mod tests {
             del("chr1", 2, 5),
         ];
         let path = std::env::temp_dir().join(format!("spike_truth_sorted_{}.vcf", std::process::id()));
-        write_truth_vcf(&events, &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None; 4], &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -598,7 +622,7 @@ mod tests {
             .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
         // One entry per event, as `write_truth_vcf` now asserts: this helper
         // builds exactly one.
-        write_truth_vcf(&events, &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None], &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -640,7 +664,7 @@ mod tests {
     /// the tiling actually planted (`None` when the request stands). `tag`
     /// keeps concurrently running callers off each other's temporary file.
     fn af_truth_text(tag: &str, af: f64, simulated: Option<f64>) -> String {
-        af_truth_text_with(tag, af, &[simulated], &[None])
+        af_truth_text_with(tag, af, &[simulated], &[None], &[None])
     }
 
     /// `af_truth_text` with the `adjusted_afs` slice given explicitly, so a
@@ -650,6 +674,7 @@ mod tests {
         af: f64,
         adjusted: &[Option<f64>],
         resistant: &[Option<f64>],
+        depth_folds: &[Option<f64>],
     ) -> String {
         let reference = SharedReference::from_sequences(
             [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
@@ -669,6 +694,7 @@ mod tests {
             &events,
             adjusted,
             resistant,
+            depth_folds,
             0.5,
             path.to_str().unwrap(),
             "ref.fa",
@@ -753,20 +779,20 @@ mod tests {
         // The records read `adjusted_afs` with `.get(i)`, so a short slice
         // would silently write the request as `SIM_VAF` for every event past
         // its end -- the defect the field exists to fix, back and quiet.
-        af_truth_text_with("short", 0.5, &[], &[None]);
+        af_truth_text_with("short", 0.5, &[], &[None], &[None]);
     }
 
     #[test]
     fn test_truth_records_the_resistant_fraction() {
         // CR4: the share of the reads over the event that spike could not
         // edit goes beside the fractions it did simulate.
-        let info = only_info(&af_truth_text_with("resist", 1.0, &[None], &[Some(0.5)]));
+        let info = only_info(&af_truth_text_with("resist", 1.0, &[None], &[Some(0.5)], &[None]));
         assert!(
             info.contains("SIM_REQ_VAF=1.000;SIM_RESIST=0.500;"),
             "SIM_RESIST must follow SIM_REQ_VAF, got {}",
             info
         );
-        let text = af_truth_text_with("resist_header", 0.5, &[None], &[Some(0.0)]);
+        let text = af_truth_text_with("resist_header", 0.5, &[None], &[Some(0.0)], &[None]);
         assert!(
             text.contains("##INFO=<ID=SIM_RESIST,Number=1,Type=Float,"),
             "SIM_RESIST must be declared, header was:\n{}",
@@ -777,13 +803,39 @@ mod tests {
 
     #[test]
     fn test_truth_writes_a_missing_resistant_fraction_as_a_dot() {
-        let info = only_info(&af_truth_text_with("resist_none", 0.5, &[None], &[None]));
+        let info = only_info(&af_truth_text_with("resist_none", 0.5, &[None], &[None], &[None]));
         assert!(info.contains("SIM_RESIST=.;"), "got {}", info);
     }
 
     #[test]
     #[should_panic(expected = "one resistant fraction per event, in the same order")]
     fn test_truth_refuses_a_resistant_slice_that_does_not_match_the_events() {
-        af_truth_text_with("resist_short", 0.5, &[None], &[]);
+        af_truth_text_with("resist_short", 0.5, &[None], &[], &[None]);
+    }
+
+    #[test]
+    fn test_truth_records_the_depth_fold() {
+        // CR2: how far the donor's depth, where the fragments were drawn,
+        // departs from the one depth they were scaled by.
+        let text = af_truth_text_with("fold", 0.5, &[None], &[Some(0.01)], &[Some(3.8795)]);
+        let info = only_info(&text);
+        assert!(
+            info.contains("SIM_RESIST=0.010;SIM_DEPTH_FOLD=3.88;"),
+            "SIM_DEPTH_FOLD must follow SIM_RESIST, to 2 decimals, got {}",
+            info
+        );
+        assert!(
+            text.contains("##INFO=<ID=SIM_DEPTH_FOLD,Number=1,Type=Float,"),
+            "SIM_DEPTH_FOLD must be declared, header was:\n{}",
+            text
+        );
+        let none = only_info(&af_truth_text_with("fold_none", 0.5, &[None], &[None], &[None]));
+        assert!(none.contains("SIM_DEPTH_FOLD=.;"), "got {}", none);
+    }
+
+    #[test]
+    #[should_panic(expected = "one depth fold per event, in the same order")]
+    fn test_truth_refuses_a_depth_fold_slice_that_does_not_match_the_events() {
+        af_truth_text_with("fold_short", 0.5, &[None], &[None], &[]);
     }
 }

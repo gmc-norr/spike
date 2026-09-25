@@ -10,7 +10,7 @@
 use anyhow::Result;
 use std::collections::HashSet;
 
-use crate::types::SimEvent;
+use crate::types::{DepthFold, SimEvent};
 
 /// Above this resistant share spike warns: the reads it cannot touch are
 /// more than a tenth of the event's depth, so what it realises is off the
@@ -108,6 +108,25 @@ pub fn count_resistant(
     Ok(census)
 }
 
+/// Above this depth fold spike warns (CR2): for a het DUP a bin at a third
+/// less than the scaling depth comes out about a third too deep. Locked in the
+/// CR2 plan before any fold was measured.
+pub const DEPTH_FOLD_WARN_ABOVE: f64 = 1.5;
+
+/// The warning for an event whose depth fold is above [`DEPTH_FOLD_WARN_ABOVE`].
+pub fn depth_fold_warning(label: &str, fold: &DepthFold) -> Option<String> {
+    if fold.fold <= DEPTH_FOLD_WARN_ABOVE {
+        return None;
+    }
+    Some(format!(
+        "{}: the donor's depth over {} is {:.1}x, but every fragment this event tiles is \
+         scaled by the {:.1}x measured at one of its breakpoints ({:.2}-fold). Where the \
+         donor's depth differs from that, the event's depth there is wrong by about that \
+         much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).",
+        label, fold.worst_bin, fold.worst_depth, fold.scaled_by, fold.fold,
+    ))
+}
+
 /// The warning for an event whose resistant share is above [`WARN_ABOVE`].
 pub fn warning(label: &str, census: &Census) -> Option<String> {
     if census.fraction() <= WARN_ABOVE {
@@ -199,6 +218,29 @@ mod tests {
     fn test_census_fraction_is_the_resistant_share() {
         assert_eq!(Census { counted: 0, resistant: 0 }.fraction(), 0.0);
         assert_eq!(Census { counted: 10, resistant: 5 }.fraction(), 0.5);
+    }
+
+    #[test]
+    fn test_depth_fold_warns_only_above_the_threshold() {
+        let at = |fold| {
+            depth_fold_warning(
+                "DUP chrT:10001-28000",
+                &DepthFold {
+                    fold,
+                    scaled_by: 100.0,
+                    worst_bin: "chrT:20000-21000".to_string(),
+                    worst_depth: 25.0,
+                },
+            )
+        };
+        assert_eq!(at(1.5), None, "1.5 is not above 1.5");
+        assert_eq!(at(1.0), None);
+        let w = at(3.88).expect("3.88 is above 1.5");
+        assert!(w.contains("DUP chrT:10001-28000"), "{}", w);
+        assert!(w.contains("chrT:20000-21000"), "{}", w);
+        assert!(w.contains("25.0x"), "{}", w);
+        assert!(w.contains("100.0x"), "{}", w);
+        assert!(w.contains("SIM_DEPTH_FOLD"), "{}", w);
     }
 
     #[test]

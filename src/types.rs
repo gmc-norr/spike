@@ -250,4 +250,23 @@ pub struct SplicedOutput {
     /// least one side is covered, so this is the part of its footprint whose
     /// synthetic reads have no donor depth behind them.
     pub uncovered_breakpoint_sides: Vec<String>,
+    /// How far the donor's depth, where this event's fragments are drawn,
+    /// departs from the one depth they are all scaled by (CR2).
+    pub depth_fold: DepthFold,
+}
+
+/// The largest fold between the donor's depth in a bin an event's fragments
+/// are drawn from and the one depth the tiling scales them all by (CR2). The
+/// truth VCF records `fold` as `SIM_DEPTH_FOLD`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DepthFold {
+    /// `max((D+1)/(C+1), (C+1)/(D+1))` over the bins; the +1 keeps an empty
+    /// bin finite.
+    pub fold: f64,
+    /// `C`: the depth every fragment is scaled by.
+    pub scaled_by: f64,
+    /// The bin with the largest fold, `chrom:start-end` (0-based, half-open).
+    pub worst_bin: String,
+    /// `D` in that bin.
+    pub worst_depth: f64,
 }
