@@ -2948,6 +2948,50 @@ that interior **81.09x** -- a **4.32x** rise where a locally proportional CN2->C
 **28.13x**. The 75x section becomes 110.92x against an expected 112.5x, so the error is
 confined to the mismatched section.
 
+#### Plan: CR2 option B, the depth-fold census (locked before any code or measurement)
+
+The user chose option B as **measure and warn**, as for CR4. The depth model does not change.
+
+**Claim.** For every event spike can measure how far the donor's depth, where the event's
+synthetic fragments are drawn, departs from the one depth they are all scaled by; write that
+into the truth VCF; and warn when it is large, without changing anything it emits.
+
+**Metric.** `C` is the depth the tiling is scaled by (`donor_coverage_for_tiling`, as today).
+Every reference interval a haplotype segment is drawn from is cut into `max(1, round(len /
+1000))` equal bins, and each bin's donor depth `D_b` is measured with the same estimator and the
+same pool as `C` (`estimate_coverage_at`, window = the bin). A bin's fold is
+`max((D_b+1)/(C+1), (C+1)/(D_b+1))`; the +1 keeps an empty bin finite. The event's
+`SIM_DEPTH_FOLD` is the largest bin fold, and the worst bin is named in the log.
+
+**Output.** `SIM_DEPTH_FOLD=<fold to 2 decimals>` in each truth record's INFO (with a header
+line), a column in the run's `README.md`, and a `log::warn` when **fold > 1.5**. The threshold
+is set here, before any fold is seen: for a het DUP (v = 0.5) a bin at `C/1.5` comes out about a
+third too deep and one at `1.5·C` about a fifth too shallow, a large share of the CN2 -> CN3 step
+a depth caller reads.
+
+**Criteria.** Each is run and its output recorded in the result commit.
+- **C1, it fires on the known case.** The Codex script's `variable` BAM (an interior at a
+  quarter of the depth), `dup:chrT:10000-28000;af=0.5`: `SIM_DEPTH_FOLD` in **[3.5, 4.5]**
+  (75/18.75 = 4) and the warning is printed.
+- **C2, it is silent on a clean donor.** The `uniform` BAM, same event: `SIM_DEPTH_FOLD`
+  **at most 1.2**, and no warning.
+- **C3, it changes nothing else.** On both probes `R1.fq.gz`, `R2.fq.gz` and
+  `replaced_reads.txt` are byte-identical to the CR4 census binary's (`2b5b193`, md5
+  `fe5fa821…`), and `truth.vcf` differs only by the new header line and INFO field.
+- **C4, it is not noise on ordinary loci.** The same 40 spans as CR4's C4 (the list
+  `scripts/cr4_placements.py` draws, md5 `8f304862…`), each as a `dup:` event run on its own on
+  the 35x HG002 BAM at the default AF: the warning fires on **at most 8 of them (20%)**. An
+  event spike refuses is reported and left out; more than 4 refusals makes C4 inconclusive.
+
+**Outcome rules.** As for CR4: C1-C4 pass, keep. C1, C2 or C3 fails, revert the code. Only C4
+fails: keep `SIM_DEPTH_FOLD`, remove the warning, record the distribution, and leave a new
+threshold to a new plan on other chromosomes.
+
+Known limit, stated before measuring: `D_b` comes from the donor pool, which holds only reads
+at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is.
+The design note warns that such a dip may reappear on its own when the synthetic reads are
+aligned. The fold will count it anyway; C4 measures how often that matters on ordinary loci.
+
 ### CR3 -- synthetic haplotypes erase background indels
 
 **Claim.** `SampleCopies` stores one base per reference position, so an indel cannot be
