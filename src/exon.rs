@@ -58,7 +58,9 @@ impl GeneTarget {
 /// Expected format: tab-separated, at least 4 columns:
 ///   chrom  start  end  name  [gene]
 ///
-/// If 5th column (gene) is absent, gene is parsed from name (e.g. "LDLR_exon1" -> "LDLR").
+/// Column 5 is optional and holds the gene symbol, except where it holds a
+/// standard BED score (`.` or 0-1000), which is ignored. With no gene symbol
+/// there, the gene is parsed from the name (e.g. "LDLR_exon1" -> "LDLR").
 pub fn parse_exon_bed(path: &str) -> Result<Vec<GeneTarget>> {
     let content =
         std::fs::read_to_string(path).with_context(|| format!("failed to read BED: {}", path))?;
@@ -92,10 +94,12 @@ fn parse_exon_bed_str(content: &str) -> Result<Vec<GeneTarget>> {
             .with_context(|| format!("invalid end at line {}", line_no + 1))?;
         let name = fields[3].to_string();
 
-        let gene = if fields.len() >= 5 && !fields[4].is_empty() {
-            fields[4].to_string()
-        } else {
-            name.split('_').next().unwrap_or(&name).to_string()
+        // Standard BED puts the score in column 5 (and the strand in column 6);
+        // spike's own layout puts the gene symbol there instead. A score is
+        // never a gene symbol, so read it as one only when it is not (L14).
+        let gene = match fields.get(4) {
+            Some(g) if !g.is_empty() && !is_bed_score(g) => g.to_string(),
+            _ => name.split('_').next().unwrap_or(&name).to_string(),
         };
 
         gene_exons
@@ -128,6 +132,13 @@ fn parse_exon_bed_str(content: &str) -> Result<Vec<GeneTarget>> {
 
     targets.sort_by(|a, b| a.chrom.cmp(&b.chrom).then(a.gene_start.cmp(&b.gene_start)));
     Ok(targets)
+}
+
+/// True when a BED column 5 value is a score rather than spike's optional gene
+/// symbol: `.` or an integer 0-1000, the range the BED spec gives the score.
+/// No gene symbol takes either shape, so this never hides a real gene name.
+fn is_bed_score(value: &str) -> bool {
+    value == "." || value.parse::<u32>().is_ok_and(|score| score <= 1000)
 }
 
 /// Number a gene's exons 1..n in transcript order, and sort them by number.
@@ -1355,5 +1366,47 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
             SimEvent::Deletion { gene, .. } => assert_eq!(gene, "GENEA"),
             other => panic!("expected Deletion, got {:?}", other),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // BED column layout (L14)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_bed6_score_column_is_not_read_as_a_gene_name() {
+        // Standard BED6: column 5 is the score, column 6 the strand.
+        let bed = "chr1\t1000\t1100\tGENEA_exon1\t0\t+\n\
+                   chr1\t2000\t2100\tGENEA_exon2\t0\t+\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(genes.len(), 1);
+        assert_eq!(genes[0].gene, "GENEA");
+    }
+
+    #[test]
+    fn test_bed6_keeps_genes_apart_instead_of_merging_them_by_score() {
+        // Two genes both scoring 0 became one gene named "0".
+        let bed = "chr1\t1000\t1100\tGENEA_exon1\t0\t+\n\
+                   chr1\t5000\t5100\tGENEB_exon1\t0\t-\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        let mut names: Vec<&str> = genes.iter().map(|g| g.gene.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["GENEA", "GENEB"]);
+    }
+
+    #[test]
+    fn test_bed_score_of_dot_is_not_read_as_a_gene_name() {
+        let bed = "chr1\t1000\t1100\tGENEA_exon1\t.\t+\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(genes[0].gene, "GENEA");
+    }
+
+    #[test]
+    fn test_fifth_column_gene_symbol_still_wins_over_the_exon_name() {
+        // spike's own layout (data/ldlr_deletions/ldlr_exons_hg38.bed) names
+        // the gene in column 5; a name that does not begin with the symbol
+        // must still resolve to it.
+        let bed = "chr1\t1000\t1100\tNM_000527.5_exon1\tLDLR\n";
+        let genes = parse_exon_bed_str(bed).unwrap();
+        assert_eq!(genes[0].gene, "LDLR");
     }
 }

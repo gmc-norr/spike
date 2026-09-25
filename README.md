@@ -140,7 +140,16 @@ spike --bam sample.bam --reference GRCh38.fasta \
   -o output/
 ```
 
-The exon BED file should be tab-separated with at least 4 columns: `chrom start end name [gene]`. If the 5th column (gene) is absent, the gene is parsed from the name (e.g., `LDLR_exon1` -> `LDLR`).
+The exon BED file should be tab-separated with at least 4 columns. spike needs two things from it: a **gene symbol** and an **exon number**.
+
+| Column | Standard BED | What spike does with it |
+| --- | --- | --- |
+| 1-3 | `chrom start end` | the exon's interval (0-based, half-open) |
+| 4 | `name` | the exon name. The exon number is read from it (`LDLR_exon1` -> 1), and it is also where the gene symbol comes from when column 5 does not give one: the part before the first `_` (`LDLR_exon1` -> `LDLR`) |
+| 5 | `score` | read as the gene symbol, **unless** it is a BED score -- `.` or an integer 0-1000 -- in which case it is ignored and the gene comes from the name |
+| 6+ | `strand`, ... | ignored; the strand is inferred from the exon numbering (see below) |
+
+So both layouts work: spike's own `chrom start end LDLR_exon1 LDLR` (as in `data/ldlr_deletions/ldlr_exons_hg38.bed`), and a standard BED6 `chrom start end LDLR_exon1 0 +`, which before carried its score into the gene symbol and named every gene `0`. There is no format flag and no guessing beyond that one rule: a gene symbol is never `.` and never a bare number 0-1000, and a BED score is never anything else. If a gene still ends up under a name you did not expect, the event fails loudly with `gene 'LDLR' not found. Available: ...` listing what was parsed.
 
 Exon numbers are read from the names (`TP53_exon1` → exon 1), so they follow transcript order on both strands: on a minus-strand gene, exon 1 has the highest coordinates. The strand is inferred from this numbering. If no exon name of a gene carries a number, exons are numbered by genomic position (with a warning), which is backwards for minus-strand genes. Keep one transcript per gene: a gene whose exon numbers repeat, or where only some names carry a number, is rejected.
 
