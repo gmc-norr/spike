@@ -218,6 +218,19 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::SmallVar => {
+                // REF and ALT must differ, case-insensitively: alleles that
+                // are the same base but differ only in case (e.g. "A"/"a")
+                // would otherwise become a no-op "variant" written straight
+                // to the truth VCF. exon.rs's snp: spec already rejects
+                // this; the VCF ingest path did not check at all.
+                if record.ref_allele.eq_ignore_ascii_case(&record.alt) {
+                    bail!(
+                        "record {} has identical REF and ALT alleles: '{}'",
+                        record.id,
+                        record.ref_allele
+                    );
+                }
+
                 let af = extract_af(&record.info);
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
@@ -605,6 +618,26 @@ mod tests {
             }
             _ => panic!("expected SmallVariant"),
         }
+    }
+
+    #[test]
+    fn test_parse_snp_record_rejects_identical_alleles() {
+        // L9: exon.rs's snp: spec syntax already rejects REF == ALT, but the
+        // VCF ingest path had no such check at all, so a REF=A ALT=A record
+        // silently became a no-op "variant" in the truth VCF.
+        let vcf = "chr1\t100\ttest_snp\tA\tA\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        assert!(records_to_events(records).is_err());
+    }
+
+    #[test]
+    fn test_parse_snp_record_rejects_identical_alleles_different_case() {
+        // L9: REF and ALT that are the same base but differ only in case
+        // (e.g. soft-masked casing) must be caught too, not just an exact
+        // byte-for-byte match.
+        let vcf = "chr1\t100\ttest_snp\tA\ta\t.\t.\t.\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        assert!(records_to_events(records).is_err());
     }
 
     #[test]

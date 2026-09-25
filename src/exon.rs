@@ -607,6 +607,12 @@ fn parse_snp_spec(parts: &[&str]) -> Result<SimEvent> {
         }
     }
 
+    // Uppercase before comparing: REF and ALT that are the same base but
+    // differ only in case (e.g. "A" vs "a") must still be rejected as
+    // identical, not treated as a distinct variant.
+    let ref_allele: Vec<u8> = ref_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
+    let alt_allele: Vec<u8> = alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect();
+
     // REF and ALT must differ.
     if ref_allele == alt_allele {
         bail!("REF and ALT alleles are identical: '{}'", ref_str);
@@ -615,8 +621,8 @@ fn parse_snp_spec(parts: &[&str]) -> Result<SimEvent> {
     Ok(SimEvent::SmallVariant {
         chrom,
         pos,
-        ref_allele: ref_allele.iter().map(|b| b.to_ascii_uppercase()).collect(),
-        alt_allele: alt_allele.iter().map(|b| b.to_ascii_uppercase()).collect(),
+        ref_allele,
+        alt_allele,
         gene: "unknown".to_string(),
         allele_fraction: None,
     })
@@ -916,6 +922,16 @@ mod tests {
     fn test_parse_snp_same_alleles() {
         let genes = test_genes();
         assert!(parse_event_spec("snp:chr1:100:A:A", &genes).is_err());
+    }
+
+    #[test]
+    fn test_parse_snp_same_alleles_different_case() {
+        // L9: REF and ALT that are the same base but differ only in case
+        // (e.g. soft-mask casing typo'd into one side) must be rejected the
+        // same way "A:A" is. The old code compared REF/ALT before
+        // uppercasing, so "A:a" slipped past the identical-alleles check.
+        let genes = test_genes();
+        assert!(parse_event_spec("snp:chr1:100:A:a", &genes).is_err());
     }
 
     #[test]
