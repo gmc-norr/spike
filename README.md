@@ -557,9 +557,13 @@ carries that row's field, whatever the event's type. `resistant` reports the rec
 spike already warns at: `<=0.100` for the resistant share, `<=1.50` for the
 depth fold. A record carrying neither field -- an older spike's truth VCF --
 gets neither row, and that is not a failure; a field that is there and cannot be
-read is an advisory FAIL, because a census that cannot be read has not been
-checked. An advisory row is never a check *of* the event either: an event no
-check covers still reports `event_checked` FAIL beside its two advisory rows.
+read is an advisory FAIL (the row's Observed reads `bad: <value>`), because a
+census that cannot be read has not been checked. One value counts as absent
+rather than unreadable: `.`, VCF's own missing value, which spike writes itself
+whenever it has no number for that event -- grading it would make spike
+advisory-FAIL its own output. An advisory row is never a check *of* the event
+either: an event no check covers still reports `event_checked` FAIL beside its
+two advisory rows.
 
 Such a row prints as `PASS (advisory)` or `FAIL (advisory)` in the Status
 column, counts in the `Result:` line with every other row, and is summarised on

@@ -97,18 +97,37 @@ struct CheckResult {
 
 /// A check's result; a check that could not run is a failed result, so an
 /// unevaluable run never reports all-PASS.
-fn check_outcome(label: &str, check_name: &str, result: Result<CheckResult>) -> CheckResult {
-    result.unwrap_or_else(|e| {
-        log::warn!("{} check failed to run for {}: {:#}", check_name, label, e);
-        CheckResult {
-            event_label: label.to_string(),
-            check_name: check_name.to_string(),
-            expected: "check runs".to_string(),
-            observed: format!("error: {:#}", e),
-            pass: false,
-            advisory: false,
+///
+/// `advisory` is the standing of the check being wrapped, and it governs the
+/// row either way -- the result the check produced and the "check runs"
+/// failure it leaves when it could not run. An advisory check that errored
+/// must stay advisory: a non-advisory error row would enter the exit status
+/// (a run that exits 0 today would start exiting 1) and would satisfy
+/// `check_event`'s "a check applies" fallback on an event only advisory rows
+/// cover (M11). Every check that verifies something itself passes `false`.
+fn check_outcome(
+    label: &str,
+    check_name: &str,
+    result: Result<CheckResult>,
+    advisory: bool,
+) -> CheckResult {
+    match result {
+        Ok(mut outcome) => {
+            outcome.advisory = advisory;
+            outcome
         }
-    })
+        Err(e) => {
+            log::warn!("{} check failed to run for {}: {:#}", check_name, label, e);
+            CheckResult {
+                event_label: label.to_string(),
+                check_name: check_name.to_string(),
+                expected: "check runs".to_string(),
+                observed: format!("error: {:#}", e),
+                pass: false,
+                advisory,
+            }
+        }
+    }
 }
 
 /// Entry point for `spike validate`.
@@ -155,6 +174,7 @@ pub fn run() -> Result<()> {
                     GLOBAL_LABEL,
                     check_name,
                     Err(anyhow::anyhow!("{:#}", e)),
+                    false,
                 ));
             }
         }
@@ -198,8 +218,11 @@ fn push_census_rows(label: &str, event: &TruthEvent, results: &mut Vec<CheckResu
 /// from `warn_above` itself, so moving the constant spike warns at moves the
 /// printed expectation with it.
 ///
-/// A value that cannot be read is a failed row quoting what was there, never a
-/// dropped one: a truth VCF whose census is unreadable has not been checked.
+/// A value that cannot be read is a failed row, never a dropped one: a truth
+/// VCF whose census is unreadable has not been checked. Its `observed` reads
+/// `bad: <raw>` -- short on purpose, because the Observed column is 14
+/// characters wide and a longer prefix would truncate away the very value the
+/// reader needs to see.
 fn census_row(
     label: &str,
     check_name: &str,
@@ -209,7 +232,7 @@ fn census_row(
 ) -> CheckResult {
     let (observed, pass) = match raw.parse::<f64>() {
         Ok(value) => (format!("{:.*}", decimals, value), value <= warn_above),
-        Err(_) => (format!("unreadable: {:?}", raw), false),
+        Err(_) => (format!("bad: {}", raw), false),
     };
     CheckResult {
         event_label: label.to_string(),
@@ -259,27 +282,27 @@ fn check_event(
             args.flank_bp,
             args.min_mapq,
         );
-        results.push(check_outcome(&label, "coverage_ratio", r));
+        results.push(check_outcome(&label, "coverage_ratio", r, false));
     }
 
     // Split reads joining the two breakpoints (not INS: its inserted
     // sequence has no second reference breakpoint).
     if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
         let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-        results.push(check_outcome(&label, "split_reads", r));
+        results.push(check_outcome(&label, "split_reads", r, false));
     }
 
     // Reads carrying the inserted sequence (INS only: it is the one event
     // type with no second breakpoint and no reference span of its own).
     if event.sv_type == "INS" {
         let r = check_ins_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-        results.push(check_outcome(&label, "ins_reads", r));
+        results.push(check_outcome(&label, "ins_reads", r, false));
     }
 
     // Allele frequency (meaningful for SNPs/small variants).
     if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
         let r = check_allele_freq(&args.bam_path, &args.ref_path, event, nearby, args.min_mapq);
-        results.push(check_outcome(&label, "allele_freq", r));
+        results.push(check_outcome(&label, "allele_freq", r, false));
     }
 
     push_census_rows(&label, event, results);
@@ -318,8 +341,11 @@ fn parse_validate_args() -> Result<ValidateArgs> {
 /// The flags of one `spike validate` command line, so that the parsing can be
 /// tested without a process to run. `raw[0]` is the binary and `raw[1]` is
 /// `validate`; the rest are flags.
+///
+/// **Not fully testable: `--help` prints the usage and exits the process with
+/// status 0.** A test that passes `--help` here would end the test binary
+/// mid-run and be read as a pass. Test every other flag, never that one.
 fn parse_validate_args_from(raw: &[String]) -> Result<ValidateArgs> {
-
     if raw.len() < 3 {
         print_usage();
         bail!("missing required arguments");
@@ -439,6 +465,8 @@ fn print_usage() {
     eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
     eprintln!("exit 0 means every check ran and every check passed. An event type no");
     eprintln!("check covers (e.g. SVTYPE=CNV) is reported as `event_checked FAIL`.");
+    eprintln!("The advisory rows are reported but left out of the exit status unless");
+    eprintln!("--strict is given.");
 }
 
 // ---------------------------------------------------------------------------
@@ -2996,6 +3024,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             "DEL 20:100-200",
             "split_reads",
             Err(anyhow::anyhow!("reference sequence not found: 20")),
+            false,
         );
         assert!(!r.pass);
         assert_eq!(r.check_name, "split_reads");
@@ -5169,6 +5198,72 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert!(
             parse_validate_args_from(&argv(&["--strict=yes"])).is_err(),
             "--strict takes no value"
+        );
+    }
+
+    #[test]
+    fn test_an_advisory_check_that_cannot_run_stays_advisory() {
+        // F1: `check_outcome` is the only factory for the "check runs" row,
+        // and the advisory checks queued behind these two (coverage_ratio at
+        // any MAPQ, split reads per breakpoint, INS sequence identity) all
+        // read the BAM, so all of them will error through here. A
+        // non-advisory error row would put such a failure into the exit
+        // status by default, and would stand in for a check of the event.
+        let r = check_outcome(
+            "DEL chrA:100-200 (unknown)",
+            "coverage_ratio",
+            Err(anyhow::anyhow!("reference sequence not found: 20")),
+            true,
+        );
+
+        assert!(r.advisory, "an advisory check that errored is still advisory");
+        assert!(!r.pass, "a check that could not run is not a pass");
+        assert_eq!(r.expected, "check runs");
+        assert_eq!(
+            failure_message(&[r], false),
+            None,
+            "an errored advisory check stays out of the default exit status"
+        );
+    }
+
+    #[test]
+    fn test_the_table_shows_what_a_malformed_census_field_held() {
+        // F2: the Observed column is 14 characters, so the diagnostic has to
+        // fit in it -- a row reading `unreadable:...` tells the reader
+        // nothing. What the CheckResult holds is not enough; this pins the
+        // table.
+        let report = text_report(&census_rows("SIM_RESIST=lots"), false);
+        let line = line_for(&report, "resistant");
+
+        assert!(
+            line.contains("bad: lots"),
+            "the table must show the value it could not read; got {:?}",
+            line
+        );
+        assert!(
+            !line.contains("..."),
+            "the diagnostic must not be truncated away; got {:?}",
+            line
+        );
+        assert!(line.contains("FAIL (advisory)"), "got {:?}", line);
+    }
+
+    #[test]
+    fn test_a_report_of_only_advisory_rows_never_counts_out_of_zero() {
+        // F5: by default `failure_message` counts the non-advisory rows
+        // against the non-advisory total, which is zero here. The `n_fail ==
+        // 0` early return is what keeps `x/0` off the screen.
+        let results = vec![row("resistant", false, true)];
+
+        assert_eq!(
+            failure_message(&results, false),
+            None,
+            "nothing the default counts failed, so there is no message at all"
+        );
+        assert_eq!(
+            failure_message(&results, true).as_deref(),
+            Some("1/1 validation checks failed"),
+            "--strict counts the advisory row, against the advisory row"
         );
     }
 }
