@@ -335,7 +335,7 @@ impl QualityProfile {
             return cycle_quals[cycle][rng.gen_range(0..cycle_quals[cycle].len())];
         }
 
-        b'!' + 20 // last resort: Q20
+        b'!' + 20 // last resort: Q20, a fixed byte with no draw at all
     }
 }
 
@@ -403,9 +403,20 @@ impl<'a> SynthReadGenerator<'a> {
 
             if true_base == b'N' {
                 // An `N` is a no-call and reports Q2, not the profile's `q`
-                // (L18). `q` is still drawn, so an `N` costs the same single
-                // random draw as any other base, and the Markov chain carries
-                // the quality the read actually reports.
+                // (L18). `q` is still drawn, so the quality draw stays one per
+                // template base -- but the `p_err` draw below is skipped, so
+                // an `N` consumes strictly fewer random numbers than a called
+                // base and does not leave the stream unchanged.
+                //
+                // `prev_qual` is the quality the read *emitted* (the
+                // indel-deletion branch below stays put for the same reason:
+                // nothing was emitted), so the chain carries Q2 forward rather
+                // than the `q` it threw away. Measured at a short reference
+                // gap, that costs the bases after an `N` nothing: mean Q
+                // 35.62 either way. Real Illumina Q2 is far too rare for the
+                // after-Q2 transition bin to reach MIN_MARKOV_OBS (4
+                // observations across a whole learned profile), so sampling
+                // falls straight through to the non-Markov levels.
                 seq.push(b'N');
                 qual.push(N_QUAL);
                 prev_qual = Some(N_QUAL);
@@ -1751,6 +1762,66 @@ mod tests {
         for (c, &q) in read_qual.iter().enumerate().skip(rl - short_by) {
             assert_eq!(q, b'!' + 2, "padding `N` at cycle {} reported Q{}, not Q2", c, q - b'!');
         }
+    }
+
+    #[test]
+    fn test_quality_chain_carries_the_q2_an_n_reported() {
+        // `prev_qual` is the quality the read last *emitted*, so an `N` hands
+        // the Markov chain the Q2 it reported, not the profile draw it threw
+        // away (L18). Only a profile whose after-Q2 bin differs from its
+        // after-Q37 bin can tell the two rules apart -- the fixed-quality mock
+        // the other `N` tests use cannot see chain state at all.
+        let rl = 60usize;
+        // 100 donor pairs all-Q37 and 40 all-Q2, so the Q30+ transition bin
+        // holds only Q37 and the Q0-9 bin only Q2, both over MIN_MARKOV_OBS.
+        // The chain is then pinned by whichever mode a read is in.
+        let q37 = vec![b'!' + 37; rl];
+        let q2 = vec![b'!' + 2; rl];
+        let pairs: Vec<ReadPair> = (0..140u64)
+            .map(|i| {
+                let q = if i < 100 { q37.clone() } else { q2.clone() };
+                mock_read_pair(&format!("m_{}", i), q.clone(), q, i * 500)
+            })
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+
+        let n_cycle = 20usize;
+        let ref_start = 500u64;
+        let mut seq = scrambled_seq(1000, 71);
+        seq[ref_start as usize + n_cycle] = b'N';
+        let gen = mock_gen_with_profile(profile, seq, rl, 0.0);
+        let no_alleles = HashMap::new();
+
+        let mut high_mode = 0usize;
+        for s in 0..40u64 {
+            let mut rng = StdRng::seed_from_u64(s);
+            let (read_seq, read_qual) =
+                gen.generate_read("chr1", ref_start, &no_alleles, 1, false, &mut rng);
+            assert_eq!(read_seq[n_cycle], b'N', "seed {}: the reference `N` should land at cycle {}", s, n_cycle);
+
+            // Only a read that entered the `N` in the Q37 mode can separate
+            // "carry the Q2 we reported" from "carry the draw we discarded".
+            if read_qual[..n_cycle].iter().any(|&q| q != b'!' + 37) {
+                continue;
+            }
+            high_mode += 1;
+            assert_eq!(read_qual[n_cycle], b'!' + 2, "seed {}: the `N` itself", s);
+            for (c, &q) in read_qual.iter().enumerate().skip(n_cycle + 1) {
+                assert_eq!(
+                    q,
+                    b'!' + 2,
+                    "seed {}: cycle {} after the `N` was drawn from the after-Q37 bin (got Q{}), not the after-Q2 one",
+                    s,
+                    c,
+                    q - b'!'
+                );
+            }
+        }
+        assert!(
+            high_mode >= 10,
+            "only {} of 40 reads entered the `N` at Q37, so the assertions above prove nothing",
+            high_mode
+        );
     }
 
     #[test]
