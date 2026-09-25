@@ -1294,6 +1294,15 @@ out of `n` reads against the requested fraction `p`, with an error rate
    `Bin(n, p')`: `P(X <= x) >= 0.005` and `P(X >= x) >= 0.005`. Here `p'`
    is `p` clamped to `[0.001, 0.99]`, so a hom (`p = 1`) truth tolerates a
    few reference reads.
+
+   *Amended before any code or result:* the clamp fails a perfect hom run
+   once `n > 527`, because `0.99^n < 0.005` makes `x = n` look like "too
+   many alt reads". Instead,
+   `p' = p * (1 - 0.01) + (1 - p) * 0.001`: an alt read shows as the
+   reference 1% of the time (errors, mismapping), and a reference read shows
+   as the alt 0.1% of the time. At `p = 1` there is no "too many alt reads",
+   so the upper tail is not tested. Steps 2 and 3 use `p'`; so do the pass
+   criteria below, where a correct run is `x ~ Bin(n, p')`.
 4. `n = 0` and `n < MIN_PILEUP_DEPTH` keep their existing verdicts.
 
 **Pass criteria for the fix**, all computed exactly from the binomial:
