@@ -80,6 +80,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
 | N18 | Medium | **Fixed** (found while measuring N15; cause measured, margin confirmed on held-out chr21/chr22). 9.3% of real HG002 het indels fall outside `allele_freq`'s range at 0.5 against 0.77% of SNVs; indel fractions average 0.41. Cause: reads that stop inside or near the indel's repeat align as reference and vote `Spans` (see the N18 result) | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
+| N19 | Low | **Diagnosed** (found by N18's result). After N18, 3.73% of real het indels are out of range; isolated ones are at 1.29%, those with another GIAB variant within 25 bp at 16.3%, where one truth record does not describe the reads' haplotype. The fix is N15's read-bases rule | `validate.rs` `count_indel_reads` |
 
 ## High severity
 
@@ -2060,6 +2061,57 @@ matched `validate` at every site.
 
 Either, both or neither can hold. Nothing in `validate` changes in this
 entry.
+
+#### N19 result: neither planned cause; nearby truth records are
+
+Run as committed (`scripts/n19_indel_residual.py` at `fb7e41d`). The ruler
+matched `validate`'s own counts at **6,663 / 6,663** sites.
+
+| readout | measured |
+| --- | --- |
+| R1 unique (691 sites) | out of range 88 of 685 (**12.85%**); 85 too low, 3 too high |
+| R1 short repeat (3,006) | 115 of 2,983 (3.86%); 99 low, 16 high |
+| R1 long repeat (2,966) | 42 of 2,902 (**1.45%**); 28 low, 14 high |
+| R2 failing sites | 21.60% of 7,223 voting reads carry another gap (carriers 3.68%, spanning reads 25.35%) |
+| R2 passing sites | 1.62% of 201,447 (carriers 0.91%, spanning 2.30%) |
+| R3 MAPQ >= 20 | carrier share 0.477 (200,992 fragments) |
+| R3 MAPQ < 20 | carrier share 0.288 (527 fragments) |
+| R4 failing fractions | < 0.2: **187**; 0.2-0.35: 25; 0.65-0.8: 10; > 0.8: 23 |
+
+**Against the readout rules:**
+- **Repeat noise: not a main cause.** Long repeats fail *less* than unique
+  sequence (1.45% against 12.85%), so the 3x clause fails. The other-gap
+  clause holds (21.6% against 1.62%).
+- **The MAPQ filter: not a main cause.** It removes 527 fragments in all, and
+  they are carriers less often (0.288), not more.
+
+**What the failures are (looked at after the readouts; not planned).**
+Most failing sites have almost no carriers, and their spanning reads often
+carry another gap. At the four worst unique-sequence sites, GIAB describes
+one local change as **several records a few bases apart**, and the aligner
+writes the combined change differently:
+- **chr20:359952 `TTG>T` and chr20:359955 `C>CAT`.** Together they swap two
+  bases for two, so all 36 reads show mismatches and no gap. Both records
+  score 0 carriers.
+- **chr20:367246 `AC>A` and chr20:367250 `AAC>A`.** Together they are one
+  3 bp deletion, which 20 reads write as a single `D3` at 367245. Neither
+  record's own gap is there.
+
+Split by N15's pre-computed site lists, from the truth VCF alone (post hoc,
+not a planned readout):
+
+| sites | evaluable | out of range |
+| --- | --- | --- |
+| isolated: no other GIAB variant within 25 bp | 5,502 | 71 (**1.29%**) |
+| not isolated | 1,068 | 174 (**16.29%**) |
+
+**Conclusion.** For an indel whose truth record stands alone, `validate`
+after N18 grades within a few tenths of a point of the binomial rule's
+design, near the SNV rate. The residual is concentrated where another truth
+variant lies within 25 bp. There, one record does not describe the haplotype
+the reads carry, and no single-gap counting rule can match them. A read has
+to be compared with the truth *haplotype*, letter by letter. That is N15's
+named next step, which now has two jobs.
 
 ## Low severity
 
