@@ -175,7 +175,10 @@ pub fn sample_copies(
 ) -> Result<SampleCopies> {
     let from_gvcf = match gvcf_path {
         Some(gvcf) => {
-            let snps = load_snps_from_gvcf(gvcf, chrom, region_start, region_end)?;
+            let snps = load_snps_from_gvcf(gvcf, chrom, region_start, region_end)
+                .with_context(|| GvcfUnreadable {
+                    path: gvcf.to_string(),
+                })?;
             if snps.het.is_empty() {
                 log::info!("no het SNPs from gVCF, trying pileup fallback");
                 None
@@ -226,6 +229,26 @@ pub fn sample_copies(
     Ok(copies_from_snps(&snps.het, &snps.hom_alt, &read_alleles, rng))
 }
 
+/// The `--gvcf` could not be read. Unlike a region with no SNPs, this stops
+/// the run: going on would simulate the region without the sample's SNPs,
+/// and the output could not be told from a sample that has none (CR3).
+/// The caller finds it with `downcast_ref` to tell it from a pileup failure.
+#[derive(Debug)]
+pub struct GvcfUnreadable {
+    pub path: String,
+}
+
+impl std::fmt::Display for GvcfUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "could not read the --gvcf '{}'; spike stops rather than simulate without \
+             the sample's SNPs",
+            self.path
+        )
+    }
+}
+
 /// What a gVCF's chromosome names say about the one being asked for.
 #[derive(Debug, PartialEq)]
 enum ContigMatch {
@@ -242,17 +265,16 @@ enum ContigMatch {
 enum NextStep {
     /// The gVCF was read and had none here: the pileup calls them instead.
     Pileup,
-    /// The gVCF could not be read, so the region gets no copies at all.
-    SkipLoh,
+    /// The gVCF could not be read, so the run stops (CR3). It used to go on
+    /// with no copies for the region, suppressing its reads at random.
+    Stop,
 }
 
 impl NextStep {
     fn describe(self) -> &'static str {
         match self {
             NextStep::Pileup => "Falling back to pileup-based het SNP detection.",
-            NextStep::SkipLoh => {
-                "LOH is skipped for this region: original reads are suppressed at random."
-            }
+            NextStep::Stop => "The run stops here.",
         }
     }
 }
@@ -376,7 +398,7 @@ fn load_snps_from_gvcf(
             .with_context(|| {
                 format!(
                     "failed to run bcftools for gVCF reading (is bcftools in PATH?). {}",
-                    NextStep::SkipLoh.describe()
+                    NextStep::Stop.describe()
                 )
             })?;
 
@@ -410,7 +432,7 @@ fn load_snps_from_gvcf(
                 &match_contig(&contigs, None, chrom),
                 gvcf_path,
                 chrom,
-                NextStep::SkipLoh,
+                NextStep::Stop,
             ) {
                 log::warn!("{}", warning);
             }
@@ -419,7 +441,7 @@ fn load_snps_from_gvcf(
                 status,
                 gvcf_path,
                 bcftools_error.trim(),
-                NextStep::SkipLoh.describe(),
+                NextStep::Stop.describe(),
             );
         }
     } else {
@@ -1360,15 +1382,15 @@ mod tests {
     }
 
     #[test]
-    fn test_a_failed_gvcf_read_says_loh_is_skipped_not_pileup() {
+    fn test_a_failed_gvcf_read_says_the_run_stops_not_pileup() {
         let warning = contig_warning(
             &ContigMatch::Renamed("20".into()),
             "g.vcf.gz",
             "chr20",
-            NextStep::SkipLoh,
+            NextStep::Stop,
         )
         .unwrap();
-        assert!(warning.contains("LOH is skipped for this region"), "{}", warning);
+        assert!(warning.contains("The run stops here."), "{}", warning);
         assert!(!warning.contains("pileup"), "{}", warning);
     }
 
@@ -1442,10 +1464,10 @@ mod tests {
     }
 
     #[test]
-    fn test_a_gvcf_read_that_fails_says_loh_is_skipped() {
+    fn test_a_gvcf_read_that_fails_says_the_run_stops() {
         // Without bcftools the read fails at the spawn instead, and that
         // failure's own context ("failed to run bcftools ... (is bcftools in
-        // PATH?)") carries the same NextStep::SkipLoh sentence and no pileup
+        // PATH?)") carries the same NextStep::Stop sentence and no pileup
         // one -- so both assertions below hold and the test reports `ok` over
         // the wrong path, never reaching the `bcftools exited with status`
         // error it exists to pin. A false pass is worse than a failure.
@@ -1457,12 +1479,13 @@ mod tests {
 
         let err = load_snps_from_gvcf(path.to_str().unwrap(), "chr20", 0, 1000).unwrap_err();
         let message = format!("{}", err);
-        assert!(message.contains("LOH is skipped for this region"), "{}", message);
+        assert!(message.contains("bcftools exited with status"), "{}", message);
+        assert!(message.contains("The run stops here."), "{}", message);
         assert!(!message.contains("Falling back to pileup"), "{}", message);
     }
 
     #[test]
-    fn test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup() {
+    fn test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_stop_not_the_pileup() {
         // Without bcftools the read fails at the spawn, before the warning
         // this test is about: say so rather than report an empty vector.
         require_bcftools();
@@ -1475,7 +1498,8 @@ mod tests {
         let warnings = capture::warnings_matching(path.to_str().unwrap());
         assert_eq!(warnings.len(), 1, "{:?}", warnings);
         assert!(warnings[0].contains("names chromosome '20', not 'chr20'"), "{}", warnings[0]);
-        assert!(warnings[0].contains("LOH is skipped for this region"), "{}", warnings[0]);
+        assert!(warnings[0].contains("The run stops here."), "{}", warnings[0]);
+        assert!(!warnings[0].contains("pileup"), "{}", warnings[0]);
     }
 
     #[test]

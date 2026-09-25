@@ -45,7 +45,7 @@ pub fn simulate_event(
     vaf: f64,
     rng: &mut StdRng,
 ) -> Result<SplicedOutput> {
-    let copies = sample_copies_for_event(event, haplotype, config, synth_gen.reference(), rng);
+    let copies = sample_copies_for_event(event, haplotype, config, synth_gen.reference(), rng)?;
     simulate_event_with_copies(
         event_index, event, pool, haplotype, config, synth_gen, vaf, &copies, rng,
     )
@@ -53,14 +53,15 @@ pub fn simulate_event(
 
 /// Read the sample's two copies over each reference region the haplotype
 /// draws from: the whole footprint for single-region events, and each side
-/// for a fusion. A region whose SNPs can't be read gets none (with a warning).
+/// for a fusion. A `--gvcf` that can't be read is an error (CR3). A region
+/// whose SNPs can't be read otherwise (the pileup) gets none, with a warning.
 fn sample_copies_for_event(
     event: &SimEvent,
     haplotype: &VariantHaplotype,
     config: &SimConfig,
     reference: &SharedReference,
     rng: &mut StdRng,
-) -> Vec<(String, loh::SampleCopies)> {
+) -> Result<Vec<(String, loh::SampleCopies)>> {
     let regions: Vec<(String, u64, u64)> = match event {
         SimEvent::Fusion { .. } => haplotype
             .segments
@@ -76,22 +77,22 @@ fn sample_copies_for_event(
 
     let mut copies = Vec::with_capacity(regions.len());
     for (chrom, start, end) in regions {
-        let sample = reference
-            .fetch_sequence(&chrom, start, end)
-            .and_then(|ref_seq| {
-                loh::sample_copies(
-                    &config.bam_path,
-                    &chrom,
-                    start,
-                    end,
-                    &ref_seq,
-                    config.min_mapq,
-                    config.gvcf_path.as_deref(),
-                    Some(config.ref_path.as_str()),
-                    rng,
-                )
-            })
-            .unwrap_or_else(|e| {
+        let sample = match reference.fetch_sequence(&chrom, start, end).and_then(|ref_seq| {
+            loh::sample_copies(
+                &config.bam_path,
+                &chrom,
+                start,
+                end,
+                &ref_seq,
+                config.min_mapq,
+                config.gvcf_path.as_deref(),
+                Some(config.ref_path.as_str()),
+                rng,
+            )
+        }) {
+            Ok(sample) => sample,
+            Err(e) if e.downcast_ref::<loh::GvcfUnreadable>().is_some() => return Err(e),
+            Err(e) => {
                 log::warn!(
                     "could not read the sample's SNPs in {}:{}-{}: {}",
                     chrom,
@@ -100,10 +101,11 @@ fn sample_copies_for_event(
                     e
                 );
                 loh::SampleCopies::default()
-            });
+            }
+        };
         copies.push((chrom, sample));
     }
-    copies
+    Ok(copies)
 }
 
 /// [`simulate_event`] with the sample's two copies already read, per
@@ -1939,6 +1941,67 @@ mod tests {
             out.kept_originals.len() + out.chimeric_pairs.len() > 0,
             "simulate_event should produce output reads"
         );
+    }
+
+    fn cr3_deletion() -> SimEvent {
+        SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 1000,
+            del_end: 3000,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        }
+    }
+
+    #[test]
+    fn test_simulate_event_stops_on_a_gvcf_it_cannot_read() {
+        // CR3: an unreadable --gvcf used to log a warning and go on with no
+        // SNPs, so the output could not be told from a sample that has none.
+        let missing = std::env::temp_dir()
+            .join(format!("spike_cr3_missing_{}.vcf", std::process::id()));
+        let missing = missing.to_str().unwrap().to_string();
+        let mut config = make_config();
+        config.gvcf_path = Some(missing.clone());
+        let mut hap = del_haplotype(1000, 2000);
+        let pool = make_covering_pool(0, 5000, 200);
+        let gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let err = match simulate_event(
+            1, &cr3_deletion(), &pool, &mut hap, &config, &gen, 0.5, &mut rng,
+        ) {
+            Ok(_) => panic!("an unreadable --gvcf must stop the event, not warn"),
+            Err(e) => format!("{:#}", e),
+        };
+        assert!(err.contains(&missing), "the error must name the file: {}", err);
+    }
+
+    #[test]
+    fn test_simulate_event_with_a_readable_gvcf_still_warns_when_the_pileup_fails() {
+        // Only the gVCF read is fatal. A gVCF with no het SNPs here sends the
+        // region to the pileup, and a pileup failure stays the warning it is
+        // without --gvcf (make_config's BAM path is empty, so it fails).
+        let path = std::env::temp_dir()
+            .join(format!("spike_cr3_readable_{}.vcf", std::process::id()));
+        std::fs::write(
+            &path,
+            "##fileformat=VCFv4.2\n\
+             ##contig=<ID=chr1,length=100000>\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n",
+        )
+        .unwrap();
+        let mut config = make_config();
+        config.gvcf_path = Some(path.to_str().unwrap().to_string());
+        let mut hap = del_haplotype(1000, 2000);
+        let pool = make_covering_pool(0, 5000, 200);
+        let gen = mock_synth_gen(150);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let result =
+            simulate_event(1, &cr3_deletion(), &pool, &mut hap, &config, &gen, 0.5, &mut rng);
+        let _ = std::fs::remove_file(&path);
+        result.expect("a pileup failure behind a readable gVCF must not stop the event");
     }
 
     #[test]

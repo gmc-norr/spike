@@ -68,8 +68,8 @@ needs:
 
 - **bcftools** — required to run the suite, unconditionally, even though a
   run needs it only for `--gvcf` with a `.vcf.gz`. Two tests in `src/loh.rs`,
-  `loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup`
-  and `loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped`, read a
+  `loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_stop_not_the_pileup`
+  and `loh::tests::test_a_gvcf_read_that_fails_says_the_run_stops`, read a
   `.vcf.gz` the way spike does, through `bcftools view`. Without bcftools both
   fail, by name and on purpose: a missing test dependency is a broken
   environment, not a test to skip.
@@ -969,6 +969,7 @@ the message is the exact text spike prints, measured by running it.
 | No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
 | A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
+| A `--gvcf` that cannot be read — missing, not bgzipped, no index, or no `bcftools` for a `.vcf.gz` | `could not read the --gvcf 'bad.vcf.gz'; spike stops rather than simulate without the sample's SNPs`<br>`Caused by: bcftools exited with status exit status: 255 on gVCF 'bad.vcf.gz': Failed to open bad.vcf.gz: not compressed with bgzip. The run stops here.` | `loh.rs` / `simulate.rs` |
 | A read whose quality string does not match its sequence, or holds a byte outside `!`-`~` | `read <name>/1 has 150 quality byte(s) for 151 base(s); refusing to write invalid FASTQ` | `write_paired_fastq` |
 
 `--exon-bed` has a family of related refusals of its own — a duplicate exon
@@ -976,15 +977,18 @@ number under one gene, an exon range whose start is after its end, a malformed
 BED line — each naming the gene and the line; see
 [Gene/exon-based events](#geneexon-based-events).
 
-**Not a refusal:** a `--gvcf` that `bcftools` cannot read is a **warning with a
-stated fallback**, not an error. spike logs, for the region concerned,
-`could not read the sample's SNPs in chr20:38410500-38424500: bcftools exited
-with status exit status: 255 on gVCF 'bad.vcf.gz': Failed to open bad.vcf.gz:
-not compressed with bgzip. LOH is skipped for this region: original reads are
-suppressed at random.` and carries on at exit 0. The run is still a valid
-simulation — it just loses the haplotype phasing gVCF-based LOH would have
-given it, which the message says. See
-[The sample's SNPs from a gVCF](#the-samples-snps-from-a-gvcf).
+An unreadable `--gvcf` used to be a warning: spike suppressed that region's
+reads at random and exited 0, so the output could not be told from a sample
+with no SNPs there. It is a refusal now (CR3 in
+`CLINICAL_SV_DESIGN_NOTES.md`). Measured on the HG002 BAM with a plain-gzip
+`--gvcf`: exit 1, and the output directory is left empty.
+
+**Still not a refusal:** without `--gvcf`, spike reads the sample's SNPs by
+pileup from the BAM. If that read fails, spike logs `could not read the
+sample's SNPs in <region>: ...` and goes on with no SNPs for the region, as
+before. The same holds when a readable `--gvcf` has no het SNPs in the region
+and the pileup it falls back to fails. That gap is known and not yet closed.
+See [The sample's SNPs from a gVCF](#the-samples-snps-from-a-gvcf).
 
 ## Architecture
 
@@ -1206,7 +1210,7 @@ A second pass records each fragment's bases at the het SNPs only, so memory grow
 
 SNPs are loaded from a pre-called VCF (e.g., DeepVariant gVCF): het (`0/1`, `1/0`) and hom-alt (`1/1`) biallelic SNPs. A het SNP whose base a deletion on the other haplotype removes (a carried deletion allele, or ALT `*`) has no copy carrying REF, so it counts as hom-alt. A BAM pass then records which allele each read carries at the het SNPs. Phased genotypes (`0|1`, `1|0`, with an optional `PS` phase set) are used for phasing (below); a phased VCF such as a GIAB/T2T benchmark gives the most realistic result. If the gVCF has no het SNPs in the region, spike falls back to pileup.
 
-Whether the gVCF can hold SNPs for the chromosome at all is read from its own `##contig` names, not guessed from an empty result: `bcftools view -r chr20:...` on a file that calls that chromosome `20` prints nothing and exits 0, exactly like a region that genuinely has no SNPs. spike reads the header itself (plain or bgzipped, no index needed) and warns only when the names cannot match — the other convention (`20` for `chr20`) or no such chromosome at all. A region that simply has no SNPs in it is not warned about. Each message says what happens next: a fallback to pileup when the file was read, and — when it could not be read at all, e.g. an unindexed `.vcf.gz` that bcftools refuses, with bcftools' own reason quoted — that LOH is skipped for that region and its original reads are suppressed at random instead.
+Whether the gVCF can hold SNPs for the chromosome at all is read from its own `##contig` names, not guessed from an empty result: `bcftools view -r chr20:...` on a file that calls that chromosome `20` prints nothing and exits 0, exactly like a region that genuinely has no SNPs. spike reads the header itself (plain or bgzipped, no index needed) and warns only when the names cannot match — the other convention (`20` for `chr20`) or no such chromosome at all. A region that simply has no SNPs in it is not warned about. Each message says what happens next: a fallback to pileup when the file was read, and — when it could not be read at all, e.g. an unindexed `.vcf.gz` that bcftools refuses, with bcftools' own reason quoted — that the run stops. It used to go on with that region's original reads suppressed at random; see [What spike refuses](#what-spike-refuses).
 
 ### Phasing
 
