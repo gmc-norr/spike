@@ -535,6 +535,7 @@ fn main() -> Result<()> {
 
         event_stats.push(EventStat {
             vaf,
+            adjusted_vaf: output.adjusted_vaf,
             kept: output.kept_originals.len(),
             chimeric: output.chimeric_pairs.len(),
             suppressed: output.suppressed_count,
@@ -1208,7 +1209,16 @@ fn window_labels(chrom: &str, windows: &[(u64, u64)]) -> Vec<String> {
 
 /// One event's contribution to the run, for the log line and the run README.
 struct EventStat {
+    /// The fraction that was *requested* for this event (`af=`, or
+    /// `--allele-fraction`). `truth.vcf` records it as `SIM_REQ_VAF`.
     vaf: f64,
+    /// The fraction this event's fragments actually plant, when the additive
+    /// 0.95 cap or the two-fragment floor moved the count off `vaf`; `None`
+    /// when the request stands. `truth.vcf` records it as `SIM_VAF`, so the
+    /// run README prints it beside the request rather than the request
+    /// alone -- printing only the request made the two files disagree on a
+    /// capped or floored run.
+    adjusted_vaf: Option<f64>,
     kept: usize,
     chimeric: usize,
     suppressed: usize,
@@ -1737,25 +1747,29 @@ fn write_readme(
     writeln!(md)?;
     writeln!(md, "## Events")?;
     writeln!(md)?;
+    // Two VAF columns, the same pair truth.vcf records as SIM_REQ_VAF and
+    // SIM_VAF: printing the request alone made this table contradict the
+    // truth VCF written beside it on every capped or floored run.
     writeln!(
         md,
-        "| # | Event | VAF | Kept reads | Chimeric reads | Suppressed reads | \
-         Dropped (unusable quality) |"
+        "| # | Event | Requested VAF | Simulated VAF | Kept reads | Chimeric reads | \
+         Suppressed reads | Dropped (unusable quality) |"
     )?;
     writeln!(
         md,
-        "|---|-------|-----|-----------|----------------|-----------------|\
-         ---------------------------|"
+        "|---|-------|---------------|---------------|-----------|----------------|\
+         -----------------|---------------------------|"
     )?;
     for (i, event) in events.iter().enumerate() {
         let label = event_label(event);
         let stat = event_stats.get(i);
         writeln!(
             md,
-            "| {} | {} | {:.3} | {} | {} | {} | {} |",
+            "| {} | {} | {:.3} | {:.3} | {} | {} | {} | {} |",
             i + 1,
             label,
             stat.map_or(0.0, |s| s.vaf),
+            stat.map_or(0.0, |s| s.adjusted_vaf.unwrap_or(s.vaf)),
             stat.map_or(0, |s| s.kept),
             stat.map_or(0, |s| s.chimeric),
             stat.map_or(0, |s| s.suppressed),
@@ -1763,6 +1777,36 @@ fn write_readme(
         )?;
     }
     writeln!(md)?;
+    // Only when the two columns differ somewhere: on an ordinary run they are
+    // the same number on every row and an unconditional paragraph would train
+    // the reader to skip it.
+    let moved: Vec<String> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, event)| {
+            let stat = event_stats.get(i)?;
+            let simulated = stat.adjusted_vaf?;
+            Some(format!(
+                "{} ({:.3} requested, {:.3} simulated)",
+                event_label(event),
+                stat.vaf,
+                simulated
+            ))
+        })
+        .collect();
+    if !moved.is_empty() {
+        writeln!(
+            md,
+            "**Requested and simulated VAF differ:** {}. A request above the \
+             additive 0.95 cap is simulated at the cap; a request too thin to \
+             ask for two tiled fragments is simulated at what two of them \
+             plant. The simulated column is what the reads carry, and \
+             `truth.vcf` records the same two numbers per event as `SIM_VAF` \
+             (simulated) and `SIM_REQ_VAF` (requested).",
+            moved.join("; ")
+        )?;
+        writeln!(md)?;
+    }
     let dropped_total: usize = event_stats.iter().map(|s| s.dropped_unusable_qual).sum();
     writeln!(
         md,
@@ -3338,6 +3382,7 @@ done"#,
         let events = vec![del("chr20", 38_412_500, 38_422_500)];
         let stats = vec![EventStat {
             vaf: 0.5,
+            adjusted_vaf: None,
             kept: 4000,
             chimeric: 300,
             suppressed: 500,
@@ -3389,6 +3434,7 @@ done"#,
         let events = vec![del("chr20", 37_400_000, 37_510_000)];
         let stats = vec![EventStat {
             vaf: 0.5,
+            adjusted_vaf: None,
             kept: 3000,
             chimeric: 258,
             suppressed: 66,
@@ -3422,6 +3468,7 @@ done"#,
         let events = vec![del("chr20", 38_412_500, 38_422_500)];
         let stats = vec![EventStat {
             vaf: 0.5,
+            adjusted_vaf: None,
             kept: 4000,
             chimeric: 300,
             suppressed: 500,
@@ -3439,6 +3486,78 @@ done"#,
         assert!(
             !md.contains("no donor coverage"),
             "a fully covered run must not carry the warning:\n{}",
+            md
+        );
+    }
+
+    #[test]
+    fn test_run_readme_prints_the_simulated_fraction_beside_the_request() {
+        // `4f06842` made truth.vcf's SIM_VAF the fraction that was actually
+        // simulated and moved the request into SIM_REQ_VAF, but the run
+        // README's VAF column kept printing the request alone: a capped run's
+        // README said 0.990 where its own truth.vcf said SIM_VAF=0.950, and a
+        // floored one said 0.030 where truth.vcf said 0.058. Two files from
+        // the same run disagreed about what the reads carry.
+        let dir = std::env::temp_dir().join(format!(
+            "spike_readme_vaf_{}_{}",
+            std::process::id(),
+            "floored"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let events = vec![
+            del("chr20", 38_412_500, 38_422_500),
+            del("chr20", 39_000_000, 39_010_000),
+        ];
+        let stats = vec![
+            // The two-fragment floor planted 0.058 where 0.030 was asked for.
+            EventStat {
+                vaf: 0.03,
+                adjusted_vaf: Some(0.058),
+                kept: 53,
+                chimeric: 2,
+                suppressed: 1,
+                dropped_unusable_qual: 0,
+                uncovered_breakpoint_sides: Vec::new(),
+            },
+            // Neither mechanism touched this one, so both numbers are the
+            // request -- truth.vcf writes SIM_VAF=SIM_REQ_VAF=0.500 for it.
+            EventStat {
+                vaf: 0.5,
+                adjusted_vaf: None,
+                kept: 4000,
+                chimeric: 300,
+                suppressed: 500,
+                dropped_unusable_qual: 0,
+                uncovered_breakpoint_sides: Vec::new(),
+            },
+        ];
+        write_readme(
+            dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+            &events, &stats, 4355, 10_000, 0,
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            md.contains("| 0.030 | 0.058 |"),
+            "the floored event's row must carry the request and the fraction \
+             that was simulated, in that order, so it agrees with truth.vcf's \
+             SIM_REQ_VAF and SIM_VAF:\n{}",
+            md
+        );
+        assert!(
+            md.contains("| 0.500 | 0.500 |"),
+            "an event neither the cap nor the floor touched must show the \
+             request in both columns:\n{}",
+            md
+        );
+        assert!(
+            md.contains("| Requested VAF | Simulated VAF |"),
+            "the table must say which number is the request and which is what \
+             was simulated:\n{}",
             md
         );
     }

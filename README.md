@@ -676,7 +676,7 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
-| `README.md` | Run log: command, events table (including pairs dropped for unusable quality, per event and in total), read counts, next-step instructions |
+| `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- plus pairs dropped for unusable quality, per event and in total), read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
 
@@ -686,10 +686,14 @@ The truth VCF contains one record per simulated event with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
-- `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up
+- `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split
 - `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
+
+The run's own `README.md` prints the same two fractions per event, as the
+**Requested VAF** and **Simulated VAF** columns of its events table, so the two
+files never disagree about what the reads carry.
 
 ## CLI reference
 

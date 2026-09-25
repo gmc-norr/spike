@@ -105,7 +105,10 @@ pub fn write_truth_vcf(
         "##INFO=<ID=SIM_VAF,Number=1,Type=Float,Description=\"Allele fraction that was \
          simulated: the fraction of the depth the fragments spike planted make up. Below \
          SIM_REQ_VAF where the additive 0.95 cap applied and above it where the \
-         two-fragment floor did\">"
+         two-fragment floor did. On an additive event (a fusion or a DUP under \
+         --dup-model junction) it is the junction evidence -- the fraction the fragments \
+         across the breakpoint make up; a junction DUP also plants interior depth copies \
+         at SIM_REQ_VAF so a capped one's interior dosage is above this\">"
     )?;
     writeln!(
         f,
@@ -677,6 +680,19 @@ mod tests {
         assert!(
             sim_vaf.contains("SIM_REQ_VAF"),
             "SIM_VAF's description must point at the request, got {}",
+            sim_vaf
+        );
+        // "the fraction of the depth the fragments spike planted make up" is
+        // not the whole story for an additive event: a junction DUP at a
+        // capped af=0.99 plants 1900 junction fragments (0.950) *and* 249
+        // interior depth copies scaled by the uncapped 0.99, so its interior
+        // dosage realises about 0.996 while SIM_VAF records 0.950. The
+        // recorded number is the junction evidence, and the description has
+        // to say so.
+        assert!(
+            sim_vaf.contains("junction"),
+            "SIM_VAF's description must say that on an additive event the \
+             fraction is the junction evidence, got {}",
             sim_vaf
         );
     }
