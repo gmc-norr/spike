@@ -137,6 +137,13 @@ fn extract_read_pairs_bam(
     let pass1_names: Vec<String> = read1_map.keys().cloned().collect();
     let mut pass1_paired = 0usize;
     for name in pass1_names {
+        // Both arms of the tuple below are evaluated before the pattern is
+        // tested, so an unmatched read 1 would be removed from its map and
+        // lost to pass 2's widened query (CR8). Leave it where pass 2 can
+        // still pair it.
+        if !read2_map.contains_key(&name) {
+            continue;
+        }
         if let (Some(read1), Some(read2)) = (read1_map.remove(&name), read2_map.remove(&name)) {
             pairs.push(build_pair_from_partials(name, read1, read2, chrom));
             pass1_paired += 1;
@@ -386,6 +393,13 @@ fn extract_read_pairs_cram(
     let pass1_names: Vec<String> = read1_map.keys().cloned().collect();
     let mut pass1_paired = 0usize;
     for name in pass1_names {
+        // Both arms of the tuple below are evaluated before the pattern is
+        // tested, so an unmatched read 1 would be removed from its map and
+        // lost to pass 2's widened query (CR8). Leave it where pass 2 can
+        // still pair it.
+        if !read2_map.contains_key(&name) {
+            continue;
+        }
         if let (Some(read1), Some(read2)) = (read1_map.remove(&name), read2_map.remove(&name)) {
             pairs.push(build_pair_from_partials(name, read1, read2, chrom));
             pass1_paired += 1;
@@ -1280,6 +1294,217 @@ mod tests {
             names,
             vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
             "only chrA's pairs may reach the donor pool"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- CR8: mate recovery must keep the mate it already holds ---
+
+    /// Write a single-contig BAM in the shape of `write_two_contig_cram`'s
+    /// chrA half -- 100 bp proper pairs starting at 201, 401 and 601 (1-based),
+    /// each read 2 exactly 200 bp downstream of its read 1 -- plus its `.bai`.
+    ///
+    /// The index is written by hand because noodles' own BAM indexer sits
+    /// behind its `csi` feature, which spike does not enable. One bin is
+    /// enough: bin 0 spans the whole first level (512 Mb), so every query's
+    /// bin set contains it, and the single chunk reaching from the first
+    /// record to the end of the file lets `Query` see every record and drop
+    /// the ones outside the region by coordinate -- what it does with a
+    /// samtools-written index too. The linear index is left empty, which
+    /// makes the minimum offset 0 and keeps the whole chunk in play.
+    ///
+    /// Returns the BAM path.
+    fn write_three_pair_bam(dir: &std::path::Path) -> String {
+        use noodles::sam::alignment::io::Write as _;
+        use std::num::NonZeroUsize;
+
+        const CONTIG_LEN: usize = 2000;
+        const READ_LEN: usize = 100;
+
+        let header = noodles::sam::Header::builder()
+            .add_reference_sequence(
+                "chrA",
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(NonZeroUsize::try_from(CONTIG_LEN).unwrap()),
+            )
+            .build();
+
+        // One pair = two records, read 1 forward (0x63) and read 2 reverse
+        // (0x93), both properly segmented so extraction keeps them.
+        let record = |name: &str, start: usize, first: bool| {
+            let (pos, mate_pos) = if first {
+                (start, start + 200)
+            } else {
+                (start + 200, start)
+            };
+            let span = 200 + READ_LEN;
+            noodles::sam::alignment::RecordBuf::builder()
+                .set_name(name)
+                .set_flags(noodles::sam::alignment::record::Flags::from(if first {
+                    0x63u16
+                } else {
+                    0x93u16
+                }))
+                .set_reference_sequence_id(0)
+                .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
+                )
+                .set_mate_reference_sequence_id(0)
+                .set_mate_alignment_start(noodles::core::Position::new(mate_pos).unwrap())
+                .set_template_length(if first { span as i32 } else { -(span as i32) })
+                .set_sequence(noodles::sam::alignment::record_buf::Sequence::from(
+                    vec![b'A'; READ_LEN],
+                ))
+                .set_quality_scores(
+                    noodles::sam::alignment::record_buf::QualityScores::from(vec![40u8; READ_LEN]),
+                )
+                .build()
+        };
+
+        let bam_path = dir.join("three_pairs.bam");
+        {
+            let mut writer = noodles::bam::io::writer::Builder
+                .build_from_path(&bam_path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            // Written in coordinate order -- 201, 401, 401, 601, 601, 801 --
+            // as a queryable BAM must be.
+            for (i, start) in [201usize, 401, 601].iter().enumerate() {
+                let name = format!("chrA_pair{}", i);
+                writer
+                    .write_alignment_record(&header, &record(&name, *start, true))
+                    .unwrap();
+                writer
+                    .write_alignment_record(&header, &record(&name, *start, false))
+                    .unwrap();
+            }
+            writer.try_finish().unwrap();
+        }
+
+        let (first_record, end_of_file) = {
+            let mut reader =
+                noodles::bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
+            reader.read_header().unwrap();
+            let first_record = reader.get_ref().virtual_position();
+            let mut record = noodles::bam::Record::default();
+            while reader.read_record(&mut record).unwrap() != 0 {}
+            (first_record, reader.get_ref().virtual_position())
+        };
+
+        let mut bai: Vec<u8> = Vec::new();
+        bai.extend_from_slice(b"BAI\x01");
+        bai.extend_from_slice(&1u32.to_le_bytes()); // n_ref
+        bai.extend_from_slice(&1u32.to_le_bytes()); // n_bin
+        bai.extend_from_slice(&0u32.to_le_bytes()); // bin 0: the whole contig
+        bai.extend_from_slice(&1u32.to_le_bytes()); // n_chunk
+        bai.extend_from_slice(&u64::from(first_record).to_le_bytes());
+        bai.extend_from_slice(&u64::from(end_of_file).to_le_bytes());
+        bai.extend_from_slice(&0u32.to_le_bytes()); // n_intv: no linear index
+        std::fs::write(format!("{}.bai", bam_path.display()), bai).unwrap();
+
+        bam_path.to_str().unwrap().to_string()
+    }
+
+    /// The names of the pairs extraction returns, sorted.
+    fn extracted_names(extraction: &Extraction) -> Vec<String> {
+        let mut names: Vec<String> = extraction.pairs.iter().map(|p| p.name.clone()).collect();
+        names.sort();
+        names
+    }
+
+    /// A fresh directory for one test's fixtures.
+    fn fixture_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("spike_test_{}_{}", label, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // Both mate orders are tested on both containers because the two
+    // extraction paths carry the same pass-1 loop, and it is asymmetric: the
+    // loop walks read 1's map, so an orphan read 2 is left where pass 2 can
+    // still use it while an orphan read 1 was removed (CR8).
+    //
+    // The fixtures put one pair of each order across the query's edge:
+    // chrA_pair2's read 1 (601-700) is inside the query 350-750 and its read 2
+    // (801-900) outside it; chrA_pair0's read 2 (401-500) is inside and its
+    // read 1 (201-300) outside. chrA_pair1 lies wholly inside, so it is the
+    // pair that pass 1 completes on its own. All three sit inside the widened
+    // pass-2 query, which spans 1-1750 here (300 bp is the largest |TLEN|, so
+    // the padding is the 1000 bp floor).
+
+    #[test]
+    fn test_extract_bam_recovers_a_pair_whose_read2_is_outside_the_first_query() {
+        // chrA_pair2 is the measured p003200 case: pass 1 holds its read 1 and
+        // nothing else of it. Removing that read 1 from the map anyway leaves
+        // pass 2's widened query nothing to pair the read 2 with, and the pair
+        // is lost -- while chrA_pair0, the mirror case, survives.
+        let dir = fixture_dir("extract_bam_recover_read2");
+        let bam = write_three_pair_bam(&dir);
+
+        let extraction = extract_read_pairs(&bam, "chrA", 349, 750, 20, None).unwrap();
+
+        assert_eq!(
+            extracted_names(&extraction),
+            vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
+            "the pair whose read 2 lies outside the first query (chrA_pair2) \
+             must be recovered by pass 2"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_bam_recovers_a_pair_whose_read1_is_outside_the_first_query() {
+        // The other mate order, which pass 1 never damaged: read 2 stays in
+        // its map because the pairing loop only walks read 1's keys. Locked
+        // here so a fix to the read-1 side cannot take this side with it.
+        let dir = fixture_dir("extract_bam_recover_read1");
+        let bam = write_three_pair_bam(&dir);
+
+        let extraction = extract_read_pairs(&bam, "chrA", 349, 750, 20, None).unwrap();
+
+        assert!(
+            extracted_names(&extraction).contains(&"chrA_pair0".to_string()),
+            "the pair whose read 1 lies outside the first query (chrA_pair0) \
+             must be recovered by pass 2, got {:?}",
+            extracted_names(&extraction)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_cram_recovers_a_pair_whose_read2_is_outside_the_first_query() {
+        // The CRAM path carries its own copy of the pass-1 loop, so it needs
+        // its own measurement of the same boundary. Same layout, same query.
+        let dir = fixture_dir("extract_cram_recover_read2");
+        let (fasta, cram) = write_two_contig_cram(&dir);
+
+        let extraction = extract_read_pairs(&cram, "chrA", 349, 750, 20, Some(&fasta)).unwrap();
+
+        assert_eq!(
+            extracted_names(&extraction),
+            vec!["chrA_pair0", "chrA_pair1", "chrA_pair2"],
+            "the pair whose read 2 lies outside the first query (chrA_pair2) \
+             must be recovered by pass 2"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_cram_recovers_a_pair_whose_read1_is_outside_the_first_query() {
+        // The CRAM side of the order that already worked.
+        let dir = fixture_dir("extract_cram_recover_read1");
+        let (fasta, cram) = write_two_contig_cram(&dir);
+
+        let extraction = extract_read_pairs(&cram, "chrA", 349, 750, 20, Some(&fasta)).unwrap();
+
+        assert!(
+            extracted_names(&extraction).contains(&"chrA_pair0".to_string()),
+            "the pair whose read 1 lies outside the first query (chrA_pair0) \
+             must be recovered by pass 2, got {:?}",
+            extracted_names(&extraction)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

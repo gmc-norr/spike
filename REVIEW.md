@@ -2709,7 +2709,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, not fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed |
-| CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, not fixed |
+| CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, not fixed |
 | CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, not fixed |
@@ -2806,6 +2806,11 @@ set for a `[8000,13000)` query, although pass 2's widened query does see R2. The
 appears in the BAM path (`src/extract.rs:140`) and the CRAM path (`src/extract.rs:389`).
 The pass-1 loop iterates `read1_map`'s keys only, so an orphan R2 is left alone -- the
 asymmetry the review describes.
+
+**Fixed.** Pass 1 pairs a name only when both maps hold it, in the BAM path and the CRAM one:
+the probe's `mate_recovery.in_replaced_names` goes false -> true, and `del_1_single` recovers
+62 more pairs, every one of them re-emitted (1287 -> 1349 replaced names, 1036 -> 1098 FASTQ
+pairs).
 
 ### CR9 -- QC passes are weaker than the truth claims made from them
 
