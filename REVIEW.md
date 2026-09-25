@@ -2719,6 +2719,38 @@ changed; **none was refuted**, and every number the review printed came back ide
 
 Statuses are updated as each fix lands.
 
+### Design notes for the findings that change the model or the defaults
+
+Six findings change what spike simulates or what it does by default, so they are written up
+rather than implemented. Each note carries the measured problem, the governing principle, at
+most two options with a recommendation, the measurement that would show the fix works **and**
+the one that would show it does not, a rough size, and what it breaks for existing users. They
+live outside the repo, with this run's ledger, at
+`/home/parlar_ai/spike-codex-run/DESIGN-NOTES.md`.
+
+- **CR2, donor-aware depth.** Gate heterogeneous footprints first, then learn a spatial
+  fragment-start intensity. Decided by the 18.75x interior reading 28.13x rather than 81.09x,
+  and by an unedited control staying at a binned ratio of 1.0.
+- **CR3, the sample's own indels and SVs, and failing closed.** Fail closed on an unreadable
+  sample-variant input and reject footprints containing unsupported variation; build real
+  sample haplotypes only when phased sequence-resolved calls exist to feed them. Decided by
+  `dup_homdel` returning to AF 1.0 without breaking input phase.
+- **CR4, training eligibility versus replacement eligibility.** Census and gate the resistant
+  fraction before trying to edit molecules whose assignment is uncertain. Decided by
+  `del_lowmap` reporting 0.50 resistant, and by an unedited control's whole-BAM read count not
+  moving.
+- **CR6, balanced translocation.** Relabel the additive mode for what it is; derivative-
+  chromosome paths are blocked on CR1's grouped-event composition. Decided by both partners
+  staying at 1.0x their donor depth while both adjacencies carry evidence.
+- **CR7, the rest.** Separate `af=het`'s Beta from the event fraction now; then an explicit
+  specification mode versus a genotype-reproduction mode, with ploidy. Decided by `vcf_hom`
+  round-tripping `GT=1/1` with the dosage to match.
+- **CR9, the rest.** Strengthen the existing checks in place — binned depth, both junctions,
+  INS sequence identity (now possible, since task 4 put the sequence in the truth), the CR4
+  resistant fraction, donor-relative globals. Decided by `dup_variable` and `del_lowmap`
+  starting to FAIL while a correct control still passes, at a false-failure rate measured over
+  at least twenty correct real-data events.
+
 ### CR1 -- nearby non-overlapping events cancel each other
 
 **Claim.** The overlap check compares event *spans*, but each event replaces reads over a
