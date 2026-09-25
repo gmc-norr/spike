@@ -1894,4 +1894,200 @@ mod tests {
             rt
         );
     }
+
+    // --- N7: how far a small pool's quality model drifts (a measurement) ---
+
+    /// (R1, R2) quality strings, Phred+33.
+    type QualPairs = Vec<(Vec<u8>, Vec<u8>)>;
+
+    /// N7's three distances between two sets of quality strings: the mean
+    /// over cycles and reads of |per-cycle mean Q difference|, |difference in
+    /// the fraction under Q20|, and |difference in P(Q < 20 at c+1 given Q < 20
+    /// at c)|.
+    fn n7_distances(a: &QualPairs, b: &QualPairs, read_length: usize) -> [f64; 3] {
+        struct Summary {
+            cycle_sum: [Vec<f64>; 2],
+            cycle_n: [Vec<f64>; 2],
+            low: f64,
+            all: f64,
+            low_then_low: f64,
+            low_then_any: f64,
+        }
+        let summarise = |set: &QualPairs| {
+            let mut s = Summary {
+                cycle_sum: [vec![0.0; read_length], vec![0.0; read_length]],
+                cycle_n: [vec![0.0; read_length], vec![0.0; read_length]],
+                low: 0.0,
+                all: 0.0,
+                low_then_low: 0.0,
+                low_then_any: 0.0,
+            };
+            for (q1, q2) in set {
+                for (r, q) in [q1, q2].into_iter().enumerate() {
+                    let len = q.len().min(read_length);
+                    for c in 0..len {
+                        let phred = q[c].saturating_sub(33);
+                        s.cycle_sum[r][c] += phred as f64;
+                        s.cycle_n[r][c] += 1.0;
+                        s.all += 1.0;
+                        if phred < 20 {
+                            s.low += 1.0;
+                            if c + 1 < len {
+                                s.low_then_any += 1.0;
+                                if q[c + 1].saturating_sub(33) < 20 {
+                                    s.low_then_low += 1.0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            s
+        };
+        let (sa, sb) = (summarise(a), summarise(b));
+        let (mut m1, mut cells) = (0.0, 0.0);
+        for r in 0..2 {
+            for c in 0..read_length {
+                if sa.cycle_n[r][c] > 0.0 && sb.cycle_n[r][c] > 0.0 {
+                    m1 += (sa.cycle_sum[r][c] / sa.cycle_n[r][c]
+                        - sb.cycle_sum[r][c] / sb.cycle_n[r][c])
+                        .abs();
+                    cells += 1.0;
+                }
+            }
+        }
+        let frac = |s: &Summary| s.low / s.all;
+        let persist = |s: &Summary| {
+            if s.low_then_any > 0.0 {
+                s.low_then_low / s.low_then_any
+            } else {
+                0.0
+            }
+        };
+        [
+            m1 / cells,
+            (frac(&sa) - frac(&sb)).abs(),
+            (persist(&sa) - persist(&sb)).abs(),
+        ]
+    }
+
+    #[test]
+    fn test_n7_distances_measure_what_they_say() {
+        // The ruler for N7's measurement, checked on inputs with known
+        // answers before it is trusted on real ones.
+        let q = |phreds: &[u8]| phreds.iter().map(|p| p + 33).collect::<Vec<u8>>();
+        let a: QualPairs = vec![(q(&[30, 30, 10, 10]), q(&[30, 30, 30, 30])); 4];
+        assert_eq!(n7_distances(&a, &a, 4), [0.0, 0.0, 0.0], "a set against itself");
+
+        // Every quality 5 higher: M1 is 5. Q10 becomes Q15, still under Q20.
+        let b: QualPairs = vec![(q(&[35, 35, 15, 15]), q(&[35, 35, 35, 35])); 4];
+        assert_eq!(n7_distances(&a, &b, 4), [5.0, 0.0, 0.0]);
+
+        // R1's last base lifted to Q30: under-Q20 falls from 2/8 to 1/8, and
+        // a low base is followed by a low one 1/1 -> 0/1 of the time.
+        let c: QualPairs = vec![(q(&[30, 30, 10, 30]), q(&[30, 30, 30, 30])); 4];
+        let d = n7_distances(&a, &c, 4);
+        assert!((d[0] - 20.0 / 8.0).abs() < 1e-12, "M1 {}", d[0]);
+        assert!((d[1] - 1.0 / 8.0).abs() < 1e-12, "M2 {}", d[1]);
+        assert!((d[2] - 1.0).abs() < 1e-12, "M3 {}", d[2]);
+    }
+
+    /// Draw R1 and R2 qualities from `profile` over each pair's own bases,
+    /// chaining the previous quality forward as `generate_from_template`
+    /// does, `N` at Q2 included.
+    fn n7_draw(profile: &QualityProfile, pairs: &[ReadPair], rng: &mut StdRng) -> QualPairs {
+        fn draw(profile: &QualityProfile, read_num: u8, bases: &[u8], rng: &mut StdRng) -> Vec<u8> {
+            let mut prev = None;
+            let mut out = Vec::with_capacity(bases.len());
+            for (c, &b) in bases.iter().enumerate() {
+                let base = b.to_ascii_uppercase();
+                let q = if base == b'N' {
+                    N_QUAL
+                } else {
+                    profile.sample_quality(read_num, c, base, prev, rng)
+                };
+                out.push(q);
+                prev = Some(q);
+            }
+            out
+        }
+        pairs
+            .iter()
+            .map(|p| (draw(profile, 1, &p.seq1, rng), draw(profile, 2, &p.seq2, rng)))
+            .collect()
+    }
+
+    /// N7's measurement, as REVIEW.md's N7 plan locks it. Run by hand:
+    /// `SPIKE_N7_BAM=<HG002 35x BAM> cargo test --release -- --ignored
+    /// measure_n7_quality_drift --nocapture`. Prints one row per tolerance
+    /// window and per repeat, the medians, and N*.
+    #[test]
+    #[ignore]
+    fn measure_n7_quality_drift() {
+        use crate::extract::extract_read_pairs;
+        const READ_LENGTH: usize = 151;
+        let bam = std::env::var("SPIKE_N7_BAM").expect("set SPIKE_N7_BAM to the HG002 35x BAM");
+
+        let pool = extract_read_pairs(&bam, "chr20", 38_402_500, 38_432_500, 20, None)
+            .unwrap()
+            .pairs;
+        let fnv = |name: &str| {
+            name.bytes()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+        };
+        let (train, held): (Vec<ReadPair>, Vec<ReadPair>) =
+            pool.into_iter().partition(|p| fnv(&p.name) % 2 == 0);
+        let real: QualPairs = held.iter().map(|p| (p.qual1.clone(), p.qual2.clone())).collect();
+        println!("pool\ttrain={}\theld_out={}", train.len(), held.len());
+
+        let mut tol = [0.0f64; 3];
+        for mb in [32u64, 33, 34, 35, 36, 37, 40, 41, 42, 43] {
+            let start = mb * 1_000_000;
+            let other: QualPairs = extract_read_pairs(&bam, "chr20", start, start + 30_000, 20, None)
+                .unwrap()
+                .pairs
+                .iter()
+                .map(|p| (p.qual1.clone(), p.qual2.clone()))
+                .collect();
+            let d = n7_distances(&other, &real, READ_LENGTH);
+            println!("tolerance\t{}Mb\tpairs={}\t{:.4}\t{:.5}\t{:.5}", mb, other.len(), d[0], d[1], d[2]);
+            for k in 0..3 {
+                tol[k] = tol[k].max(d[k]);
+            }
+        }
+        println!("T\t{:.4}\t{:.5}\t{:.5}", tol[0], tol[1], tol[2]);
+
+        let sizes = [30, 60, 125, 250, 500, 1000, train.len()];
+        let mut ok = Vec::new();
+        for (si, &n) in sizes.iter().enumerate() {
+            let mut per_metric: [Vec<f64>; 3] = Default::default();
+            for rep in 0..20u64 {
+                let mut rng = StdRng::seed_from_u64(1000 * si as u64 + rep);
+                let subset: Vec<ReadPair> = rand::seq::index::sample(&mut rng, train.len(), n)
+                    .iter()
+                    .map(|i| train[i].clone())
+                    .collect();
+                let profile = QualityProfile::from_read_pairs(&subset, READ_LENGTH);
+                let d = n7_distances(&n7_draw(&profile, &held, &mut rng), &real, READ_LENGTH);
+                println!("size\t{}\t{}\t{:.4}\t{:.5}\t{:.5}", n, rep, d[0], d[1], d[2]);
+                for k in 0..3 {
+                    per_metric[k].push(d[k]);
+                }
+            }
+            let median: Vec<f64> = per_metric
+                .iter_mut()
+                .map(|v| {
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    (v[9] + v[10]) / 2.0
+                })
+                .collect();
+            println!("median\t{}\t{:.4}\t{:.5}\t{:.5}", n, median[0], median[1], median[2]);
+            ok.push((0..3).all(|k| median[k] <= tol[k]));
+        }
+        // The smallest tested n inside the tolerance there and at every larger n.
+        let n_star = (0..sizes.len())
+            .find(|&i| ok[i..].iter().all(|&b| b))
+            .map(|i| sizes[i]);
+        println!("N*\t{:?}", n_star);
+    }
 }
