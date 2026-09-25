@@ -92,6 +92,28 @@ cargo build --release
 # Binary at target/release/spike
 ```
 
+### Measuring a change: one target dir per commit
+
+A before/after comparison is only as good as the two binaries behind it. In
+this repo's own review work, three different source trees built with one
+shared `CARGO_TARGET_DIR` gave three **byte-identical** binaries, and cargo
+printed `Finished ... in 0.06s` each time. The comparison would have shown no
+effect for a change that has one, with no error anywhere. (A milder form of
+the same trap: measuring with a `target/release/spike` that was not rebuilt
+after the last edit.)
+
+So give each commit its own target dir, and check the binaries differ before
+trusting the numbers:
+
+```bash
+CARGO_TARGET_DIR=/tmp/spike-before cargo build --release   # at the "before" commit
+CARGO_TARGET_DIR=/tmp/spike-after  cargo build --release   # at the "after" commit
+md5sum /tmp/spike-before/release/spike /tmp/spike-after/release/spike
+```
+
+Two equal checksums for two commits that change code mean a stale build, not
+a zero effect. See `NF4` in `CLINICAL_SV_NEW_FINDINGS.md`.
+
 ## Quick start
 
 ```bash
