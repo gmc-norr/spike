@@ -624,17 +624,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Validate overlap relationships between single-region events.
+/// Validate overlap relationships between events.
 ///
-/// Overlaps are rejected by default to keep multi-event simulations independent.
-/// When `allow_overlap` is true, overlaps are allowed but logged as warnings.
+/// Events are compared on their *replacement footprints*, not their spans: each
+/// event is simulated independently against the original donor and replaces
+/// reads across its whole footprint, so two events whose footprints intersect
+/// each lay reference sequence over the other's edit and cancel it (CR1), even
+/// though their spans never touch. Overlaps are rejected by default to keep
+/// multi-event simulations independent. When `allow_overlap` is true, overlaps
+/// are allowed but logged as warnings.
 fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<()> {
     let mut overlaps: Vec<(usize, usize, String, u64, u64, u64, u64)> = Vec::new();
 
     for i in 0..events.len() {
-        let regions_i = event_regions_for_overlap(&events[i]);
+        let regions_i = event_footprints_for_overlap(&events[i]);
         for j in (i + 1)..events.len() {
-            let regions_j = event_regions_for_overlap(&events[j]);
+            let regions_j = event_footprints_for_overlap(&events[j]);
             for (chrom_i, start_i, end_i) in &regions_i {
                 for (chrom_j, start_j, end_j) in &regions_j {
                     if chrom_i != chrom_j {
@@ -664,8 +669,8 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
     if allow_overlap {
         for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps {
             log::warn!(
-                "Events {} and {} overlap on {} ({}-{} vs {}-{}). \
-                 Overlap composition is approximate.",
+                "Events {} and {} have intersecting replacement footprints on \
+                 {} ({}-{} vs {}-{}). Overlap composition is approximate.",
                 i,
                 j,
                 chrom,
@@ -678,13 +683,20 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
         return Ok(());
     }
 
-    let mut msg = String::from(
+    let mut msg = format!(
         "overlapping events detected (default is to reject overlaps).\n\
+         Each event replaces reads across its span grown by {}bp on each side \
+         ({}bp of haplotype flank + {}bp of fragment), and two such replacement \
+         footprints may not intersect.\n\
          Use --allow-overlap to override.\n",
+        FOOTPRINT_MARGIN,
+        HAP_FLANK,
+        crate::stats::MAX_FRAGMENT_LEN,
     );
     for (i, j, chrom, start_i, end_i, start_j, end_j) in overlaps.iter().take(10) {
         msg.push_str(&format!(
-            "  - events {} and {} overlap on {} ({}-{} vs {}-{})\n",
+            "  - events {} and {} have intersecting replacement footprints on \
+             {} ({}-{} vs {}-{})\n",
             i, j, chrom, start_i, end_i, start_j, end_j
         ));
     }
@@ -696,6 +708,41 @@ fn validate_event_overlaps(events: &[SimEvent], allow_overlap: bool) -> Result<(
     }
 
     bail!("{}", msg.trim_end());
+}
+
+/// Extra range on each side of an event's span that the event still replaces
+/// reads over -- its *replacement footprint* beyond the span itself.
+///
+/// `build_haplotype` grows every event by `HAP_FLANK` on each side (each
+/// `Haplotype::from_*` constructor fetches `start - flank .. end + flank`), and
+/// `simulate_event` suppresses every original pair inside `ref_range()` and
+/// tiles synthetic reads over the same range. On top of that a pair whose
+/// fragment is up to `MAX_FRAGMENT_LEN` long can start that far outside the
+/// range and still reach into it, so the longest fragment is added as well.
+const FOOTPRINT_MARGIN: u64 = HAP_FLANK + crate::stats::MAX_FRAGMENT_LEN as u64;
+
+/// Return the replacement footprint of each of an event's regions: the range
+/// over which that event removes originals and lays synthetic reads down.
+///
+/// Multi-region events (`SimEvent::Fusion`) contribute one footprint per
+/// breakpoint. A fusion is additive (`is_additive`, `simulate.rs`) so it
+/// suppresses nothing, but it still writes synthetic reference sequence across
+/// its footprint -- sequence another event may have deleted or inverted -- which
+/// corrupts that event the same way, so fusions are checked like every other
+/// event.
+fn event_footprints_for_overlap(event: &SimEvent) -> Vec<(String, u64, u64)> {
+    event_regions_for_overlap(event)
+        .into_iter()
+        .map(|(chrom, start, end)| {
+            // Saturating at 0 as the haplotype constructors do at a chromosome
+            // start; a footprint past a chromosome end is harmless here.
+            (
+                chrom,
+                start.saturating_sub(FOOTPRINT_MARGIN),
+                end.saturating_add(FOOTPRINT_MARGIN),
+            )
+        })
+        .collect()
 }
 
 /// Return one or more non-empty regions used for overlap checks.
@@ -2865,7 +2912,16 @@ done"#,
 
     #[test]
     fn test_overlap_policy_allows_touching_boundaries() {
-        let events = vec![del("chr1", 100, 200), del("chr1", 200, 300)];
+        // Half-open: one region's end equal to the next one's start is not an
+        // overlap. The regions compared are replacement footprints, so the case
+        // is two spans exactly 2 * FOOTPRINT_MARGIN apart, which puts their
+        // footprints end to start. (Before CR1 this test used spans that touched
+        // each other -- 100-200 and 200-300 -- whose footprints overlap almost
+        // completely and which spike now rejects.)
+        let events = vec![
+            del("chr1", 100_000, 200_000),
+            del("chr1", 200_000 + 2 * FOOTPRINT_MARGIN, 300_000),
+        ];
         assert!(validate_event_overlaps(&events, false).is_ok());
     }
 
@@ -2883,6 +2939,48 @@ done"#,
     #[test]
     fn test_overlap_policy_allow_flag() {
         let events = vec![del("chr1", 100, 200), del("chr1", 150, 250)];
+        assert!(validate_event_overlaps(&events, true).is_ok());
+    }
+
+    #[test]
+    fn test_overlap_policy_rejects_intersecting_replacement_footprints() {
+        // The review's reproduction: two 1 kb deletions 1 kb apart. Their spans
+        // do not overlap, but each event replaces reads across its span grown by
+        // HAP_FLANK (the haplotype's reference flank) and MAX_FRAGMENT_LEN (the
+        // longest fragment a pair can span), so the two replacements land on top
+        // of each other and cancel each other's depth.
+        let margin = HAP_FLANK + crate::stats::MAX_FRAGMENT_LEN as u64;
+        let events = vec![del("chrT", 10_000, 11_000), del("chrT", 12_000, 13_000)];
+        let err = validate_event_overlaps(&events, false)
+            .expect_err("events 1 kb apart replace reads over the same range")
+            .to_string();
+        // The message must name both events and both footprints.
+        assert!(
+            err.contains("events 1 and 2"),
+            "the error must name both events:\n{err}"
+        );
+        for (start, end) in [(10_000u64, 11_000u64), (12_000, 13_000)] {
+            let footprint = format!("{}-{}", start - margin, end + margin);
+            assert!(
+                err.contains(&footprint),
+                "the error must name the footprint {footprint}:\n{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_overlap_policy_allows_footprints_that_do_not_intersect() {
+        // Far enough apart that neither event touches the other's replacement
+        // footprint: still accepted, exactly as before CR1.
+        let events = vec![del("chrT", 10_000, 11_000), del("chrT", 31_000, 32_000)];
+        assert!(validate_event_overlaps(&events, false).is_ok());
+    }
+
+    #[test]
+    fn test_overlap_policy_allow_flag_covers_footprints() {
+        // --allow-overlap keeps its meaning: intersecting footprints are then a
+        // warning, not an error.
+        let events = vec![del("chrT", 10_000, 11_000), del("chrT", 12_000, 13_000)];
         assert!(validate_event_overlaps(&events, true).is_ok());
     }
 

@@ -2702,7 +2702,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 
 | ID | Priority | Finding | Status |
 | --- | --- | --- | --- |
-| CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, not fixed |
+| CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, fixed |
 | CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note |
 | CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note |
 | CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note |
@@ -2728,6 +2728,20 @@ the two deletion interiors read **70.21x and 74.34x** at AF=1 (alone: 0.00x), an
 coverage checks (observed 0.79 and 0.81 against an expected 0.00). Code:
 `validate_event_overlaps` (`src/main.rs:631`) versus `haplotype.ref_range()`
 (`src/simulate.rs:180`) and `combine_event_outputs` (`src/simulate.rs:301`).
+
+**Fixed (the rejection only).** `validate_event_overlaps` now intersects *replacement
+footprints* rather than spans: `event_footprints_for_overlap` grows each region from
+`event_regions_for_overlap` by `FOOTPRINT_MARGIN = HAP_FLANK + stats::MAX_FRAGMENT_LEN`
+(2000 + 1500 = 3500 bp) on each side, so two spans must now be 7000 bp apart. Same 75x
+uniform donor, `del:chrT:10000-11000` + `del:chrT:12000-13000` at AF=1: **accepted, 70.21x
+and 74.34x inside the two deletions -> rejected, exit 1**, with
+`events 1 and 2 have intersecting replacement footprints on chrT (6500-14500 vs 8500-16500)`.
+`--allow-overlap` still accepts the pair with a warning (and the interiors still read 67.05x
+/ 67.03x there), spans 7000 bp apart are accepted and spans 6999 bp apart are rejected, and
+overlapping spans are rejected as before. **Only the rejection is fixed**: composing two
+nearby events correctly -- grouping them, assigning haplotypes, and generating and
+suppressing molecules once per group -- remains open, and `--allow-overlap` still merges
+independent simulations approximately.
 
 ### CR2 -- one depth estimate flattens the donor's coverage profile
 

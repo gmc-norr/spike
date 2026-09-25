@@ -97,6 +97,10 @@ CHROM="chr20"
 REGION=""          # optional CHROM:START-END, for a small/fast run
 MAX_EVENTS=0       # 0 = no cap
 MIN_EVENTS=5       # abort if fewer events survive filtering
+# Minimum gap spike requires between two event spans: 2 * FOOTPRINT_MARGIN in
+# src/main.rs (HAP_FLANK 2000 + MAX_FRAGMENT_LEN 1500, on each side of each
+# event). Closer than this and spike rejects the whole event set.
+FOOTPRINT_GAP=7000
 MIN_RECALL=""      # optional per-VAF recall floor
 MIN_GAIN=1         # spiked TP must beat the background control by this many
 
@@ -589,20 +593,21 @@ step2_filter_truth_vcf() {
     n_bench=$(count_records "${final_vcf}.overlapping")
     log "  After benchmark intersection: $n_bench het DELs"
 
-    # Drop events that overlap a kept event. spike rejects overlapping events
-    # outright (--allow-overlap only downgrades that to a warning, and says the
+    # Drop events that land on a kept event. spike rejects them outright
+    # (--allow-overlap only downgrades that to a warning, and says the
     # composition is then approximate), and overlapping truth DELs also make
     # truvari's one-to-one matching ambiguous. Keep the first of each cluster.
     grep '^#' "${final_vcf}.overlapping" > "$final_vcf"
     { grep -v '^#' "${final_vcf}.overlapping" || true; } \
-        | awk -F'\t' -v cap="$MAX_EVENTS" '
+        | awk -F'\t' -v cap="$MAX_EVENTS" -v gap="$FOOTPRINT_GAP" '
             BEGIN { kept_chrom=""; kept_end=0; n=0 }
             {
                 if (!match($8, /SVLEN=-?[0-9]+/)) next
                 len = substr($8, RSTART + 6, RLENGTH - 6) + 0
                 if (len < 0) len = -len
-                # spike compares [POS, POS+SVLEN) — see validate_event_overlaps.
-                if ($1 == kept_chrom && $2 < kept_end) next
+                # spike compares [POS, POS+SVLEN) grown by FOOTPRINT_MARGIN on
+                # each side — see validate_event_overlaps.
+                if ($1 == kept_chrom && $2 < kept_end + gap) next
                 if (cap > 0 && n >= cap) next
                 kept_chrom = $1; kept_end = $2 + len; n++
                 print
