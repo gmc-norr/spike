@@ -1386,6 +1386,74 @@ bases away, comparing `cigar_indel_vote`'s carriers against `samtools mpileup`
 indel calls at the exact position. Until then the size of the effect is
 unknown, which is why this is recorded rather than tuned.
 
+#### N15 plan (locked before any code or result)
+
+**Principle.** A read supports a small indel when its gap, applied to the
+reference, spells the same sequence as the truth allele does, wherever the
+aligner put the gap. It does not support it otherwise. "Same kind and length
+within 10 bp" is a stand-in for that. It is too loose where the sequence
+differs, and it needs a distance limit that a long repeat can exceed.
+
+**The rule to build (the "same-sequence rule"):**
+- `Carries`: the read has an `I` or `D` operation of the truth's kind and
+  length whose edit gives the same sequence as the truth's edit.
+  - A deletion of L bases at reference position q and one at p (q < p) are
+    the same when `ref[i] == ref[i + L]` for every i in `q..p`.
+  - An insertion of read bases S at q and one of truth bases T at p (q <= p)
+    are the same when `S + ref[q..p] == ref[q..p] + T`.
+  - There is no distance limit, so `INDEL_POS_PAD` goes.
+- `Spans`: unchanged. An `M` block covers the anchor base and the first base
+  past REF, and the read does not carry the allele.
+- Otherwise the read votes neither way.
+
+What this changes:
+- A same-size gap that spells a different sequence is no longer support. It
+  votes `Spans` if it leaves both anchor bases covered, and neither if it
+  swallows one.
+- An inserted run now has to match base for base. A sequencing error inside it
+  makes that read vote `Spans`.
+- N13's shift tests change meaning. A shifted deletion carries only where the
+  reference repeats, so they need a repeat context.
+
+**Inputs, checked before writing this:**
+- The GIAB v4.2.1 HG002 VCF is left-aligned: `bcftools norm -f` on chr20
+  realigns 1 of 85,951 records.
+- The BAM is the same HG002 35x bwa-mem2 BAM as N16. bwa-mem2 does not promise
+  left-alignment, and this rule does not need it.
+
+**The sites.** All GIAB v4.2.1 HG002 PASS, biallelic, het indels on chr20 with
+REF and ALT of 11 bp or less: **6,641** sites, each graded at `SIM_VAF=0.5`.
+Two subsets are fixed now, from the truth VCF alone:
+- **Neighbour sites (35):** another truth indel of the same kind and length
+  lies within 10 bp.
+- **Isolated sites (5,564):** no other truth variant of any kind lies within
+  25 bp.
+
+**How it is measured.** The per-site carries and spans come from a
+`log::debug!` line added in its own commit before the rule changes. The
+baseline is that commit, which is the pad rule with N16's fragment counting.
+The new rule is the commit after it. Both are run with `spike validate` on the
+untouched BAM.
+
+**Pass criteria (all three must hold):**
+- **S1, the problem is real.** At one or more neighbour sites, the new rule
+  counts fewer carriers than the pad rule. If carries match at all 35, N15 has
+  no measured effect on real data: the rule change is not merged, and the
+  entry is closed as "measured, no effect".
+- **S2, the rule is not too strict.** Over the isolated sites, carriers that
+  the pad rule counts and the new rule does not are at most **1%** of the pad
+  rule's carriers, summed over all those sites. If there are more, the
+  edit-only comparison drops real carriers, likely a gap written at a
+  non-equivalent spot plus a mismatch. Then the rule is not merged, and the
+  next step would compare the read's own bases.
+- **S3, N13 still holds.** On the untouched BAM, the three spellings N13 used
+  for the (AC)n deletion at chr20:38549586 (`38549585 TAC>T`,
+  `38549587 CAC>C`, `38549589 CAC>C`) get the same carries and spans from each
+  other under the new rule.
+
+Reported but not criteria: how the fractions shift, verdict flips, and the
+unit tests that failed first.
+
 ### N16 · One depth floor, three different denominators
 
 *Found by the verification review. **Not fixed**.*
