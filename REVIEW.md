@@ -79,7 +79,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N15 | Medium | **Not fixed; measured** (found by the verification review; the same-sequence rule was tried and refuted, see the N15 result). Two contradictory rules for the same physical mark, ~250 lines apart in one file: `check_ins_reads` accepts any `I`/soft clip >= `min(SVLEN, 50)` within +/-100 bp, `cigar_indel_vote` requires an operation of *exactly* the allele's length within +/-10 bp. Inside the 10 bp window an unrelated indel of the right length votes Carries, which inflates the numerator in a repeat-rich locus -- the false-PASS direction | `validate.rs:693-731`, `validate.rs:971-1030` |
 | N16 | Low | **Fixed** (found by the verification review). One depth floor, `MIN_PILEUP_DEPTH = 5`, guards three different denominators: base observations for a substitution (an overlapping pair counted twice), records for an indel, fragments for an MNV | `validate.rs:747`, `validate.rs:2172-2176`, `validate.rs:925-955` |
 | N17 | Low | **Fixed** (found by the verification review). Two independent `SimEvent::Fusion` patterns in two files decided the same question -- how many loci an event is drawn from -- with nothing linking them; a future multi-locus event type would silently take the permissive donor-coverage branch. Now `SimEvent::is_multi_locus()`, an exhaustive match both sites go through | `types.rs:79-100`; `simulate.rs:452`; `main.rs:1040-1078` |
-| N18 | Medium | **Not fixed; being measured** (found while measuring N15). 9.6% of real HG002 het indels fail `allele_freq` at 0.5 against 2.2% of SNVs; indel fractions average 0.41 | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
+| N18 | Medium | **Not fixed; cause measured** (found while measuring N15). 9.3% of real HG002 het indels fall outside `allele_freq`'s range at 0.5 against 0.77% of SNVs; indel fractions average 0.41. Cause: reads that stop inside or near the indel's repeat align as reference and vote `Spans` (see the N18 result) | `validate.rs` `count_indel_reads`, `cigar_indel_vote` |
 
 ## High severity
 
@@ -1863,6 +1863,61 @@ now resolved to what they were meant to say:
 
 F = 0, 5, 10, 20, 30 are all still reported. For an SNV, F = 0 and
 unfiltered are the same thing.
+
+#### N18 result: H1 supported -- reads that stop in or near the indel are the under-count
+
+Run as committed (`scripts/n18_indel_flank.py` at `d6f4621`), in 23 s, on the
+HG002 35x BAM.
+
+**The ruler.** Before anything else was read, the re-implemented counting
+matched `validate` itself on:
+- the indel carries and spans at **6,663 / 6,663** sites;
+- the indel verdicts at **6,663 / 6,663**;
+- the SNV observed fractions at **1,696 / 1,696**.
+
+| set | reads counted | evaluable | out of range | mean fraction | fragments |
+| --- | --- | --- | --- | --- | --- |
+| indels | unfiltered (`validate` today) | 6,644 | 619 (**9.32%**) | **0.414** | 249,319 |
+| indels | F = 0 (whole repeat + anchors) | 6,621 | 295 (4.46%) | 0.453 | 231,373 |
+| indels | F = 5 | 6,598 | 263 (3.99%) | 0.470 | 217,650 |
+| indels | F = 10 | 6,570 | 245 (3.73%) | 0.475 | 200,992 |
+| indels | F = 20 | 6,403 | 217 (**3.39%**) | **0.478** | 167,033 |
+| indels | F = 30 | 5,706 | 170 (2.98%) | 0.480 | 133,405 |
+| SNVs | unfiltered = F = 0 | 1,694 | 13 (0.77%) | 0.494 | 69,138 |
+| SNVs | F = 20 | 1,689 | 14 (0.83%) | 0.496 | 52,067 |
+| SNVs | F = 30 | 1,661 | 12 (0.72%) | 0.496 | 43,057 |
+
+**Against the criteria, H1 is supported:**
+- At F = 20 the indel out-of-range rate is 3.39%, at or below 4.0%.
+- The indel mean fraction rose by 0.064, at least 0.04.
+- The SNV control moved by +0.06 percentage points (limit 1.0) and +0.0015
+  in fraction (limit 0.02).
+
+**What the curve says:**
+- **Half the effect is reads that stop inside the repeat.** Asking for
+  nothing more than the whole repeat plus its anchors (F = 0) halves the
+  out-of-range rate, to 4.46%, and keeps 93% of the fragments.
+- **Most of the rest is reads that end within about 10 bases.** That is
+  where an aligner prefers clipping or mismatches to opening a gap.
+- **Past F = 20 the gain is small, and depth starts to go.** At F = 30, 957
+  sites are too shallow to grade.
+
+**A correction to the "Observed" paragraph above.** Its SNV figure of 2.2%
+was N16's whole chr20:38-40 Mb set, which includes 263 indels. The SNVs alone
+fail at **0.77%** (13 of 1,694), inside the rule's 1% design. So indels were
+failing at about 12 times the SNV rate, not 4 times.
+
+**Left over, not explained here.** Even at F = 30, indels fail at 2.98%, about
+four times the SNV rate. Among the suspects is the known L/150 bias against
+insertion carriers, which this filter adds on top. Nothing here measures
+the rest.
+
+**Next: the fix.** `validate` should grade an indel only on reads that span
+its repeat plus a margin on both sides, applied the same way to both votes.
+How big a margin is a threshold. It cannot be read off this table, which
+was measured on the same sites it would be chosen for. The fix needs a plan
+of its own that picks the margin before looking, either from the aligner's
+scoring or on chr20 and confirmed on another chromosome.
 
 ## Low severity
 
