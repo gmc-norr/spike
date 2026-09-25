@@ -1057,6 +1057,12 @@ fn indel_allele_freq(
     indel_len: u64,
 ) -> Result<CheckResult> {
     let (carries, spans) = count_indel_reads(bam_path, ref_path, event, kind, indel_len, min_mapq)?;
+    log::debug!(
+        "allele_freq {}: {} carry, {} span",
+        format_event_label(event),
+        carries,
+        spans
+    );
     Ok(allele_freq_result(event, carries, carries + spans))
 }
 
