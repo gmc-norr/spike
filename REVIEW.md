@@ -4020,3 +4020,33 @@ afterwards: that would be choosing one after seeing its distribution.
 - *`samtools depth` must not fail silently.* T3's own census returned 0.0 everywhere because
   `--ff` is not one of its options and it exited non-zero while writing nothing. The scan raises on
   a non-zero exit.
+
+##### Plan addendum: T4's second tier, the hardest loci spike accepts (locked before any `SIM_RESIST` was read)
+
+The scan's three hardest eligible windows are all pericentromeric -- `chr20:27000000-27010000`,
+`27200000-27210000` and `27300000-27310000`, `low_share` 0.9990 to 0.9996 at 59x-74x of any-MAPQ
+depth -- and **spike refuses all six runs on them**, exit 1 with an empty output directory:
+`event ... has no donor coverage at any of its breakpoints ...: the pool holds 136 read pair(s)
+but none of them cover that`. That is N5/N12's refusal working exactly as designed: 99.96% of the
+reads there are below MAPQ 20, so the donor pool holds 115-140 pairs out of ~4,900 reads and none
+of them reaches a breakpoint.
+
+By the locked rule (more than 2 refusals among the six makes C1 inconclusive), **C1 is
+inconclusive at the extreme**. It is inconclusive for a reason worth stating: at the hardest real
+loci on chr20 the warning cannot fire, because there is no run to warn about.
+
+So the question -- does the resistant warning ever fire on real data -- has to be asked where
+spike still runs. **Locked here, before any `SIM_RESIST` from a second-tier run has been read:**
+
+- Walk **down** the `low_share` ranking of eligible windows from the hardest, and take the **first
+  three** for which spike accepts **both** a `del:` and a `dup:` (exit 0 with a truth VCF). Call
+  them the **hardest accepted** windows.
+- The selection rule is spike's own acceptance, not any measured `SIM_RESIST`. `SIM_RESIST` is read
+  only after the three are fixed.
+- **C1', the accept side.** Of those six runs, **at least 4 warn on `SIM_RESIST`** -> supported.
+  **1 to 3** -> weakly supported. **0** -> refuted, and `census::WARN_ABOVE = 0.10` is untouched by
+  real chr20 data at 35x wherever spike will run at all.
+- **C2 is unchanged**: the three easiest eligible windows are the control and must not warn.
+- Every refused window met on the way down is reported with its `low_share` and its refusal, so the
+  walk is auditable rather than a search that stopped where it liked.
+- **No threshold is changed either way.**
