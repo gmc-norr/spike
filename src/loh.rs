@@ -1442,6 +1442,13 @@ mod tests {
 
     #[test]
     fn test_a_gvcf_read_that_fails_says_loh_is_skipped() {
+        // Without bcftools the read fails at the spawn instead, and that
+        // failure's own context ("failed to run bcftools ... (is bcftools in
+        // PATH?)") carries the same NextStep::SkipLoh sentence and no pileup
+        // one -- so both assertions below hold and the test reports `ok` over
+        // the wrong path, never reaching the `bcftools exited with status`
+        // error it exists to pin. A false pass is worse than a failure.
+        require_bcftools();
         // An error is not an empty result: there is no pileup pass after it.
         let dir = test_dir("loh_read_error");
         let path = dir.join("unindexed.vcf.gz");

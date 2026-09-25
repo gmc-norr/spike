@@ -67,17 +67,18 @@ What `cargo test` needs on PATH is not the same list as what a spike *run*
 needs:
 
 - **bcftools** — required to run the suite, unconditionally, even though a
-  run needs it only for `--gvcf` with a `.vcf.gz`. One test,
+  run needs it only for `--gvcf` with a `.vcf.gz`. Two tests in `src/loh.rs`,
   `loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup`
-  (`src/loh.rs`), reads a `.vcf.gz` the way spike does, through
-  `bcftools view`. Without bcftools that test fails, by name and on purpose:
-  a missing test dependency is a broken environment, not a test to skip.
+  and `loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped`, read a
+  `.vcf.gz` the way spike does, through `bcftools view`. Without bcftools both
+  fail, by name and on purpose: a missing test dependency is a broken
+  environment, not a test to skip.
 - **bash**, for the tests that run the generated `align.sh` / `merge.sh` and
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `447 passed; 1 failed; 1 ignored`, the
-  one failure being the bcftools test above.
+  with all of them off PATH the suite is `446 passed; 2 failed; 1 ignored`, the
+  two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
 the tiny inputs they need. The one `#[ignore]`d measurement

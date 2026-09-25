@@ -2715,7 +2715,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
 | CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
-| CR-BUILD | Engineering | The one test needing `bcftools` fails with an unrelated message when it is absent | Confirmed, fixed |
+| CR-BUILD | Engineering | The two tests needing `bcftools` mis-report when it is absent: one fails with an unrelated message, one passes over the wrong code path | Confirmed, fixed |
 
 Statuses are updated as each fix lands.
 
@@ -2947,8 +2947,8 @@ hidden a real bug behind an environment message.
 
 This diagnoses; it does not tolerate. The test is **not** skipped and **not** `#[ignore]`d, no
 assertion is weakened, and all three of the original assertions still run unchanged when
-`bcftools` is present. With `bcftools` off PATH the suite is still `447 passed; 1 failed;
-1 ignored` -- the same one test, with a message that names the tool:
+`bcftools` is present. With `bcftools` off PATH it still fails, now with a message that names
+the tool:
 
 ```
 thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1316:9:
@@ -2971,10 +2971,53 @@ bcftools message: the environment check does not mask real bugs.
 `bash`, but write their own stub `samtools` and stub aligner onto the script's PATH.
 `README.md` now states the test-time tools under `### Test-time prerequisites`.
 
-One test does depend on `bcftools` without failing when it is absent, and is left alone
-deliberately: `loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped` (`src/loh.rs:1444`)
-reads the same kind of `.vcf.gz` and asserts the error says `LOH is skipped for this region`
-and not `Falling back to pileup`. Without `bcftools` the spawn failure's own context string
-satisfies both assertions, so the test passes over the wrong code path -- the intended one is
-`bcftools exited with status ...`. Giving it the same diagnostic would make it fail too and
-take the suite to `446 passed; 2 failed`, so it is recorded here rather than changed.
+**The second test -- a false pass -- also fixed.** A sibling reads the same kind of `.vcf.gz`
+and had the same dependency with a worse symptom:
+`loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped` (`src/loh.rs:1444`) asserts the
+error says `LOH is skipped for this region` and not `Falling back to pileup`. Both branches of
+`load_snps_from_gvcf`'s `.gz` arm end in that same `NextStep::SkipLoh` sentence, so without
+`bcftools` the *spawn* failure's context satisfies both assertions and the test reported `ok`
+over a path it was never written for. Measured, printing the error the test inspects:
+
+```
+with bcftools:    bcftools exited with status exit status: 255 on gVCF '...unindexed.vcf.gz': Failed to open ...: not compressed with bgzip. LOH is skipped for this region: original reads are suppressed at random.
+without bcftools: failed to run bcftools for gVCF reading (is bcftools in PATH?). LOH is skipped for this region: original reads are suppressed at random.
+```
+
+The second is `src/loh.rs:377`'s spawn context, not the `bcftools exited with status` bail at
+`src/loh.rs:418` the test exists to pin. A test that reports `ok` while exercising the wrong
+code path is a false pass, and a verification that reddens nothing is a finding here, so it
+gets the same `require_bcftools()` -- same probe, same message, nothing skipped or weakened.
+It now fails when `bcftools` is absent, which takes the no-bcftools suite to **`446 passed;
+2 failed; 1 ignored`**, both failures naming the tool:
+
+```
+thread 'loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped' panicked at src/loh.rs:1316:9:
+this test requires bcftools on PATH: it reads a .vcf.gz, which load_snps_from_gvcf queries with `bcftools view`. Without bcftools the read fails at the spawn and never reaches the behaviour under test. Install bcftools and re-run.
+
+thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1316:9:
+this test requires bcftools on PATH: it reads a .vcf.gz, which load_snps_from_gvcf queries with `bcftools view`. Without bcftools the read fails at the spawn and never reaches the behaviour under test. Install bcftools and re-run.
+```
+
+That is a higher failure count than before, and it is the honest one: the suite now fails
+twice where it used to fail once and lie once. With `bcftools` present it is unchanged at
+`448 passed; 0 failed; 1 ignored`.
+
+**Mutated too.** With `bcftools` present, regressing the production message the test pins --
+the `anyhow::bail!` at `src/loh.rs:418` promising `NextStep::Pileup` instead of
+`NextStep::SkipLoh` -- still fails on the test's own assertion at `src/loh.rs:1459`, quoting
+`... not compressed with bgzip. Falling back to pileup-based het SNP detection.`, not on the
+`bcftools` precondition at `src/loh.rs:1316`. The precondition does not mask a genuine bug.
+
+**The re-check, run again independently.** `bcftools` is spawned in exactly one place in
+production, `load_snps_from_gvcf` (`src/loh.rs:371`), and only when the gVCF path ends `.gz`.
+Four tests call that function: two pass a plain `.vcf` (no spawn), and the two `.vcf.gz` ones
+are the pair above -- both now guarded. Nothing else can reach a `bcftools` invocation: the
+only other `Command::new` in the tree is `bash` (`src/main.rs`), and the two `"$BCFTOOLS"`
+calls in `scripts/validate_pipeline.sh`'s `step8_summarize` sit behind
+`[[ -f .../delly.vcf.gz ]]` guards over fabricated outdirs that contain no such file, so
+`test_validate_pipeline_verdict_fails_when_the_highest_vaf_has_no_truvari` never spawns it.
+`vcf_input.rs` and `reference.rs` read their `.gz` inputs in-process through `noodles::bgzf`,
+not through a tool. Measured end to end with the whole pixi bin directory (`bcftools`,
+`samtools`, `bwa-mem2`) off PATH: `446 passed; 2 failed; 1 ignored`, the two failures being
+exactly this pair.
