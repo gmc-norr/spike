@@ -905,6 +905,19 @@ The profile is still sampled for an `N` and the result discarded, so the *qualit
 
 Carrying Q2 forward costs the bases *after* an `N` nothing in practice. Measured over 40 seeds at a 1 bp reference gap on chr2 (an `N`-containing read there is 98.3% real sequence), the non-`N` bases of `N`-containing reads average **Q35.621** when the chain carries Q2 and **Q35.615** when it does not — a difference of +0.006 Q against a 0.022 standard error. The reason is that real Illumina Q2 is rare enough (6 of 389,429 donor bases in that window) that the after-Q2 transition bin never reaches the 30-observation threshold, so sampling falls straight through to the non-Markov levels.
 
+### Too few donor reads
+
+Every simulated read is built from the donor pool extracted for its event -- the quality profile above, the fragment-length distribution and the coverage the tiling count is scaled by all come from it. A pool holding fewer than **30 read pairs** after deduplication is refused: the run exits non-zero, naming the event and the windows it searched, and writes nothing.
+
+```
+Error: event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0 read pair(s)
+extracted from chr20:29990000-30020000, fewer than the 30 spike needs. ...
+```
+
+Without that check a starved window is silent. spike logs `Built read pool: 0 pairs`, then falls through to every substitute in turn -- the constant Q20 last resort above for every base, the default 400 +/- 80 fragment distribution, coverage 0 with the 2-read tiling floor -- and exits **0** with a truth VCF and two invented read pairs beside it. An event in a zero-coverage region, an off-target panel BAM and a mistyped `--region` all reach it.
+
+30 is the observation count the quality model itself requires before it will sample from a bin, and a pool of *n* pairs puts *n* observations in each cycle-only bin (level 4 above), so it is the smallest pool at which any level of the model is trained to its own threshold. It is a floor on "measured from this library at all", not a coverage requirement: the 30 kb window of `del:chr20:38412500-38422500` yields 4559 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
+
 ### Missing or unusable donor base qualities
 
 SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). The two containers encode `*` differently and spike sees both — BAM keeps a per-base array with every byte `0xFF`, while noodles normalises a CRAM record's all-`0xFF` buffer to an *empty* one before spike ever sees it. A record with either shape, or carrying a raw quality above Q93 (the SAM maximum — a malformed record), is dropped during extraction: it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped records are counted and logged as a warning (spike logs to stderr), e.g.:

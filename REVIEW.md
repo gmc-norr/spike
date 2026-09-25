@@ -61,6 +61,7 @@ The tests pass, but most would still pass with the high-severity bugs below. See
 | N1 | Medium | **Not fixed** (found during the fix run). `spike validate` scores a cross-sample spike-in against a confounded background, and `split_reads` looks for a signal spike does not emit | `validate.rs:440-520`; `scripts/validate_pipeline.sh` |
 | N3 | Medium | **Fixed** (found during the fix run). Five more CRAM query sites walked the whole chromosome's index | `loh.rs:507, 910`; `validate.rs:708, 822, 950` |
 | N4 | Medium | **Fixed** (found during the fix run). The same five CRAM query sites also read another contig's records out of a shared container | `loh.rs:656, 1056`; `validate.rs:712, 823, 948` |
+| N5 | High | **Fixed** (found during the fix run). An empty or near-empty donor pool was simulated from anyway: exit 0 with a truth VCF and 2 invented read pairs beside it | `main.rs:492`, `extract.rs:497`, `simulate.rs:409, 429` (at `66b45a5`) |
 
 ## High severity
 
@@ -490,6 +491,99 @@ the leak here.
 - Each guard is independently observable: removing any one of the five reddens
   its own test and only that one. The mate clause is the exception, and is
   reported under L2.
+
+### N5 · An empty donor pool is simulated from anyway
+
+*Found while reviewing the L19 fix, not part of the original review. The
+[Design notes](#design-notes) already carry the same observation untracked --
+"`n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently
+gives a constant-Q20 profile" -- with no numbered row, no task and no
+measurement. This row is that note, numbered, measured and fixed.*
+
+`extract.rs:497` logs `Built read pool: 0 pairs` and continues. `main.rs:492`
+then trains `QualityProfile::from_read_pairs` on the empty slice, `stats.rs`
+substitutes its default 400/80 fragment distribution, and `simulate.rs:429`
+scales the tiling count by a coverage of 0 -- which `n.max(2)` turns into 2
+fragments. Nothing between extraction and the FASTQ writer asked whether there
+were any donor reads at all: there was no `pairs.is_empty()` check anywhere in
+`main.rs` or `extract.rs`. This is reachable on ordinary input -- an event in a
+zero-coverage region, an off-target panel BAM, a mistyped `--region`.
+
+Measured on branch HEAD `66b45a5`, `del:chr20:30000000-30010000 --seed 1`
+against the chr20 37.5-41.5 Mb HG002 slice (the event lies outside the slice,
+so the window has no coverage):
+
+```
+INFO spike::extract] Extracted 0 complete read pairs from chr20:29990000-30020000
+WARN spike::stats] No valid insert sizes found, using default distribution (mean=400, sd=80)
+INFO spike::extract] Built read pool: 0 pairs
+INFO spike::synth] Quality profile: 0 pairs, 151 cycles. R1 mean Q: start=0.0 mid=0.0 end=0.0,
+     R2: start=0.0 end=0.0. Base-conditioned bins: 0/1208 usable.
+     Markov bins: base 0/4832, cycle 0/1208 usable
+INFO spike::simulate] Tiling 2 synthetic reads across 4000bp haplotype (cov=0.0, vaf=0.50, bp_only=false)
+```
+
+**exit 0**, with `truth.vcf`, `R1.fq.gz`, `R2.fq.gz`, `events.bed`, `align.sh`,
+`merge.sh` and `README.md` all written. The two pairs are real reference
+sequence at a locus the BAM has no read over, and all 604 of their quality
+bytes are the single character `5`.
+
+**On the Design note's "constant-Q20": that phrase names two different
+measurable numbers, and they disagree.** The *profile's* mean is Q0 --
+`R1 mean Q: start=0.0 mid=0.0 end=0.0` above, the mean of zero observations --
+while the *emitted* quality is Q20: with every bin empty, `sample_quality_inner`
+falls past all four levels of the hierarchy to `synth.rs:338`,
+`b'!' + 20 // last resort: Q20, a fixed byte with no draw at all`. So the note
+is right about the FASTQ and wrong about the profile, and reading the log line
+alone ("Q0") is right about the profile and wrong about the FASTQ. Neither
+value is caught downstream: `5` (byte 53) and `!` (byte 33) both sit inside the
+printable Phred+33 range `!`-`~` that M14's `write_paired_fastq` guard checks,
+so that guard cannot see either.
+
+Task 26's `test_paired_bam_without_proper_pairs_is_not_mistaken_for_single_end`
+deliberately asserts this case is `Ok`. That is right for its own question --
+the library *is* paired, and capping the scan there would truncate a paired
+BAM's fragment-length estimate (L15) -- but it means the downstream run is the
+only thing left that could notice, and it did not.
+
+- **Fix:** a donor pool of fewer than `MIN_DONOR_PAIRS` = **30** read pairs is a
+  hard error naming the event and every window it searched. The count is taken
+  after `dedup_pairs_by_name`, so a fragment two overlapping windows both hand
+  in cannot lift a pool over the floor, and before `FragmentDist::from_read_pairs`,
+  so the run fails instead of first warning about a substituted distribution.
+  **Why 30:** it is `synth.rs`'s own `MIN_BASE_OBS` (`synth.rs:26`), the
+  observation count the quality model requires before it will sample from a
+  bin, and a pool of *n* pairs puts exactly *n* observations in each cycle-only
+  bin -- level 4, the model's final fallback and the only level an ordinary
+  pool always reaches. 30 pairs is therefore the smallest pool at which any
+  level of the model is trained to the threshold the model itself sets. "Empty"
+  is the wrong floor because one pair trains no bin either and its single
+  insert size becomes the whole fragment distribution; 30 is a floor on
+  "measured from this library at all", not a coverage requirement -- the same
+  30 kb window yields 4559 pairs on the 35x HG002 BAM, so it would have to fall
+  to about 0.2x before the floor bound.
+- **Fixed**, and measured: the same command and seed now exits **1** with
+  `event DEL  chr20:30000001-30010000 (10000bp) has no usable donor reads: 0
+  read pair(s) extracted from chr20:29990000-30020000, fewer than the 30 spike
+  needs. ...`, and leaves `--output` empty -- **7 files written and exit 0
+  before, 0 files and exit 1 after**. A working event is untouched:
+  `del:chr20:38412500-38422500 --seed 1` on the same slice still extracts 4559
+  pairs and gives byte-identical output before and after (`R1.fq.gz`
+  `8cf7964f`, `R2.fq.gz` `1bd652f8`, `truth.vcf` `5a73bfd8`,
+  `replaced_reads.txt` `6bc6392a`).
+- **`n.max(2)` (`simulate.rs:409, 429`) is half subsumed, not subsumed.** The
+  catastrophic half is closed: no pool can now reach `compute_tiling_count`
+  without 30 measured pairs behind it, so the 2 fragments can no longer be
+  built from an untrained quality model and a default fragment distribution.
+  The residual is narrower and is *not* fixed: a pool that clears the floor on
+  its flanks can still estimate coverage 0 at the breakpoint itself
+  (`estimate_coverage_at`, a 2 kb window), and `n.max(2)` then emits 2
+  synthetic pairs whose realised VAF means nothing. Those 2 pairs at least
+  carry qualities and fragment lengths measured from this library. Leaving the
+  floor in place is deliberate: `test_tiling_count_minimum` pins it, and it is
+  the right behaviour for a genuinely thin but non-empty region. A fix would
+  have to decide what a VAF means where there is no local depth to take a
+  fraction of, which is a separate question from this one.
 
 ## Low severity
 
@@ -931,7 +1025,7 @@ left as is.
 - Coordinate conventions are mixed: `del/dup/inv` take VCF POS/END meaning, `snp` is 1-based, `--region` is 1-based inclusive. `del:chr1:0-100` is rejected with "coordinates must be >= 1" although the documented convention is 0-based.
 - `del:LDLR:4-8` parses as coordinates on a chromosome named "LDLR". An unknown fusion suffix (`:inverted`, `:rev`) silently gives a forward fusion.
 - VCF input ignores FILTER and GT; 0/0 and non-PASS records are simulated.
-- Coverage is estimated once, ±1 kb around the first breakpoint, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile.
+- Coverage is estimated once, ±1 kb around the first breakpoint, and applied to the whole haplotype. `n.max(2)` emits 2 pairs even at zero coverage. An empty read pool silently gives a constant-Q20 profile. (Now tracked and fixed as [N5](#n5--an-empty-donor-pool-is-simulated-from-anyway), which also corrects "constant-Q20": the *profile* measures Q0, the *emitted* reads are Q20. `n.max(2)` survives in the narrower breakpoint-only case N5 describes.)
 - The CIGAR walk is duplicated four times in `loh.rs` plus once in `validate.rs`. `generate_read` and `generate_read_from_seq` are ~70 near-duplicate lines that have already diverged (root of L1).
 - Quality profile stores every observed quality four times and sorts them unnecessarily; a histogram per bin would do. `SharedReference::load` doubles peak memory via the FIFO cache.
 - gVCF sample column is always 9 despite a comment saying it reads the header. Pileup het caller has no base-quality filter and counts overlapping mates twice. A plain-text gVCF is re-read in full per event.

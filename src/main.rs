@@ -1035,6 +1035,7 @@ fn extract_pool_for_event(
     unusable_qual_names: &mut BTreeSet<String>,
 ) -> Result<(ReadPool, String)> {
     let mut all_pairs: Vec<ReadPair> = Vec::new();
+    let mut windows_searched: Vec<String> = Vec::new();
     let pool_chrom;
 
     if let SimEvent::Fusion {
@@ -1065,21 +1066,81 @@ fn extract_pool_for_event(
             &mut all_pairs,
             unusable_qual_names,
         )?;
+        windows_searched.extend(window_labels(chrom_a, &windows_a));
+        windows_searched.extend(window_labels(chrom_b, &windows_b));
         pool_chrom = chrom_a.clone();
     } else {
         // Single-region events (DEL, DUP, INV, INS).
         let (chrom, start, end) = event.primary_region().unwrap();
         let windows = extraction_bounds(chrom, start, end, config.flank_bp, extraction_region);
         extract_windows(config, chrom, &windows, &mut all_pairs, unusable_qual_names)?;
+        windows_searched.extend(window_labels(chrom, &windows));
         pool_chrom = chrom.to_string();
     }
 
-    // Windows can share reads, and the same fragment must not enter the pool
-    // -- or the fragment distribution -- twice.
-    extract::dedup_pairs_by_name(&mut all_pairs);
-    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
-    let pool = extract::build_read_pool(all_pairs, frag_dist);
+    let pool = finish_donor_pool(all_pairs, event, &windows_searched)?;
     Ok((pool, pool_chrom))
+}
+
+/// Format one side's extraction windows as `chrom:start-end`, for messages.
+fn window_labels(chrom: &str, windows: &[(u64, u64)]) -> Vec<String> {
+    windows
+        .iter()
+        .map(|(start, end)| format!("{}:{}-{}", chrom, start, end))
+        .collect()
+}
+
+/// Smallest donor pool spike will simulate one event from.
+///
+/// Below this the output is invention rather than simulation: everything
+/// spike puts in a read comes from this pool -- the quality profile, the
+/// fragment lengths, the coverage the tiling count is scaled by -- and each
+/// of those silently substitutes a constant when the pool runs out.
+///
+/// 30 is `synth.rs`'s own `MIN_BASE_OBS`, the observation count it requires
+/// before it will sample from a quality bin, and a pool of *n* pairs puts
+/// exactly *n* observations in each cycle-only bin -- the profile's final
+/// fallback, and the only level an ordinary pool always reaches. So 30 pairs
+/// is the smallest pool at which any bin of the profile can meet the
+/// threshold the profile itself sets; below it every bin is unusable by that
+/// rule and, at zero pairs, sampling returns `synth.rs`'s last-resort
+/// constant Q20 byte for every base. This is a floor on "measured from this
+/// library at all", not a claim that 30 pairs is enough coverage for a good
+/// simulation.
+const MIN_DONOR_PAIRS: usize = 30;
+
+/// Dedup one event's extracted pairs and turn them into its donor pool.
+///
+/// Split out of `extract_pool_for_event` so the pool the simulation runs on
+/// can be checked without a BAM behind it.
+fn finish_donor_pool(
+    mut all_pairs: Vec<ReadPair>,
+    event: &SimEvent,
+    windows_searched: &[String],
+) -> Result<ReadPool> {
+    // Windows can share reads, and the same fragment must not enter the pool
+    // -- or the fragment distribution -- twice. Dedup before counting: a
+    // fragment handed in by two overlapping windows is not extra material.
+    extract::dedup_pairs_by_name(&mut all_pairs);
+
+    if all_pairs.len() < MIN_DONOR_PAIRS {
+        bail!(
+            "event {} has no usable donor reads: {} read pair(s) extracted from {}, \
+             fewer than the {} spike needs. Every simulated read is built from this \
+             pool -- its base qualities, its fragment lengths and the coverage the \
+             tiling count is scaled by all come from it -- so spike would invent reads \
+             rather than simulate them, and still write a truth VCF beside them. \
+             Check that the event lies in a covered region of the BAM, that --region \
+             (if given) covers it, and that --min-mapq is not filtering the window out.",
+            event_label(event),
+            all_pairs.len(),
+            windows_searched.join(", "),
+            MIN_DONOR_PAIRS,
+        );
+    }
+
+    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs);
+    Ok(extract::build_read_pool(all_pairs, frag_dist))
 }
 
 /// Extract read pairs from every window of one event side into `pairs`.
@@ -2762,5 +2823,140 @@ done"#,
         assert_eq!(r.chrom, "chr20");
         assert_eq!((r.start, r.end), (999, 2000));
         assert!(parse_region("chr20", &[]).is_err());
+    }
+
+    // --- N5: a donor pool too small to simulate from must fail loudly ---
+
+    /// One usable donor pair, 100 bp, at `start`.
+    fn donor_pair(name: &str, start: u64) -> ReadPair {
+        ReadPair {
+            name: name.to_string(),
+            seq1: vec![b'A'; 100],
+            qual1: vec![b'!' + 35; 100],
+            seq2: vec![b'T'; 100],
+            qual2: vec![b'!' + 35; 100],
+            ref_start: start,
+            ref_end: start + 400,
+            insert_size: 400,
+            chrom: "chr20".to_string(),
+        }
+    }
+
+    fn donor_pairs(n: usize) -> Vec<ReadPair> {
+        (0..n)
+            .map(|i| donor_pair(&format!("p{}", i), 1000 + i as u64))
+            .collect()
+    }
+
+    #[test]
+    fn test_empty_donor_pool_is_rejected_instead_of_simulated_from() {
+        // An event in a zero-coverage region, an off-target panel BAM or a
+        // mistyped --region all yield 0 extracted pairs. spike used to log
+        // "Built read pool: 0 pairs" and carry on: the quality profile had
+        // no observation in any bin, so every base got synth.rs's
+        // last-resort constant Q20 byte, and the run exited 0 with a truth
+        // VCF and 2 invented read pairs beside it.
+        let err = match finish_donor_pool(
+            Vec::new(),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+        ) {
+            Ok(pool) => panic!(
+                "empty donor pool accepted; the run would write a truth VCF off {} pairs",
+                pool.pairs.len()
+            ),
+            Err(e) => e.to_string(),
+        };
+        // The user has to be able to see which event starved, and where it
+        // looked: a multi-event run reports only the one that failed.
+        assert!(
+            err.contains("DEL  chr20:30000001-30010000 (10000bp)"),
+            "the error must name the event: {}",
+            err
+        );
+        assert!(
+            err.contains("chr20:29990000-30020000"),
+            "the error must name the window it searched: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_donor_pool_below_the_minimum_is_rejected() {
+        // "Empty" is not the whole defect: one pair trains no bin of the
+        // quality profile either, and its single insert size becomes the
+        // whole fragment distribution.
+        let err = match finish_donor_pool(
+            donor_pairs(MIN_DONOR_PAIRS - 1),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+        ) {
+            Ok(_) => panic!("{} donor pairs accepted", MIN_DONOR_PAIRS - 1),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains(&format!("{}", MIN_DONOR_PAIRS - 1)),
+            "the error must say how many pairs it found: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_donor_pool_at_the_minimum_is_accepted() {
+        // The floor is a floor, not a coverage requirement: a pool that
+        // reaches it is simulated from, unchanged.
+        let pool = finish_donor_pool(
+            donor_pairs(MIN_DONOR_PAIRS),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+        )
+        .expect("a pool at the minimum must be usable");
+        assert_eq!(pool.pairs.len(), MIN_DONOR_PAIRS);
+    }
+
+    #[test]
+    fn test_donor_pool_is_counted_after_deduplication() {
+        // Overlapping windows can hand the same fragment in twice; the
+        // duplicate is not extra donor material and must not count towards
+        // the floor (the check runs after dedup_pairs_by_name).
+        let mut pairs = donor_pairs(MIN_DONOR_PAIRS - 1);
+        pairs.push(donor_pair("p0", 1000)); // same name, second window
+        assert_eq!(pairs.len(), MIN_DONOR_PAIRS);
+        assert!(
+            finish_donor_pool(
+                pairs,
+                &del("chr20", 30_000_000, 30_010_000),
+                &["chr20:29990000-30020000".to_string()],
+            )
+            .is_err(),
+            "a duplicated fragment must not lift a pool over the floor"
+        );
+    }
+
+    #[test]
+    fn test_donor_pool_error_names_a_fusion_by_both_breakpoints() {
+        // A fusion draws from two windows; either side can be the starved
+        // one, so the message carries both.
+        let err = match finish_donor_pool(
+            Vec::new(),
+            &fusion("chr2", 42_000_000, "chr2", 29_000_000),
+            &[
+                "chr2:41990000-42010000".to_string(),
+                "chr2:28990000-29010000".to_string(),
+            ],
+        ) {
+            Ok(_) => panic!("empty fusion donor pool accepted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("FUSION  chr2:42000001>>chr2:29000001"),
+            "the error must name both breakpoints: {}",
+            err
+        );
+        assert!(
+            err.contains("chr2:41990000-42010000") && err.contains("chr2:28990000-29010000"),
+            "the error must name both windows: {}",
+            err
+        );
     }
 }
