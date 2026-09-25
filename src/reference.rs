@@ -61,17 +61,6 @@ pub fn split_contig<'a>(s: &'a str, contigs: &[String]) -> Option<(&'a str, &'a 
     }
 }
 
-/// Reference bases over 0-based `[start, end)` of `chrom`, clipped to the
-/// contig, uppercase. Returns the clipped start with the bases.
-pub fn fetch_window(fasta_path: &str, chrom: &str, start: u64, end: u64) -> Result<(u64, Vec<u8>)> {
-    let mut reader = ReferenceReader::open(fasta_path)?;
-    let end = end.min(reader.chromosome_length(chrom)?);
-    if start >= end {
-        return Ok((start, Vec::new()));
-    }
-    Ok((start, reader.fetch_sequence(chrom, start, end)?))
-}
-
 /// Indexed reference FASTA reader with region caching.
 struct ReferenceReader {
     index: fasta::fai::Index,
