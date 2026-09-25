@@ -72,6 +72,17 @@ pub fn write_truth_vcf(
     reference: &SharedReference,
     contigs: &[(String, u64)],
 ) -> Result<()> {
+    // `adjusted_afs` is read below by the same index as `events`, with `.get(i)`,
+    // so a short slice would quietly write the request as `SIM_VAF` for every
+    // event past its end -- the exact defect this field exists to fix, silent.
+    // The one production caller builds both in the same loop; this catches a
+    // future one that does not.
+    debug_assert_eq!(
+        adjusted_afs.len(),
+        events.len(),
+        "write_truth_vcf: one adjusted AF per event, in the same order",
+    );
+
     let mut f = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create truth VCF: {}", output_path))?;
 
@@ -560,7 +571,9 @@ mod tests {
         }];
         let path = std::env::temp_dir()
             .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
-        write_truth_vcf(&events, &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        // One entry per event, as `write_truth_vcf` now asserts: this helper
+        // builds exactly one.
+        write_truth_vcf(&events, &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -602,6 +615,12 @@ mod tests {
     /// the tiling actually planted (`None` when the request stands). `tag`
     /// keeps concurrently running callers off each other's temporary file.
     fn af_truth_text(tag: &str, af: f64, simulated: Option<f64>) -> String {
+        af_truth_text_with(tag, af, &[simulated])
+    }
+
+    /// `af_truth_text` with the `adjusted_afs` slice given explicitly, so a
+    /// test can hand `write_truth_vcf` one that does not match the events.
+    fn af_truth_text_with(tag: &str, af: f64, adjusted: &[Option<f64>]) -> String {
         let reference = SharedReference::from_sequences(
             [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
         );
@@ -618,7 +637,7 @@ mod tests {
             .join(format!("spike_truth_af_{}_{}.vcf", std::process::id(), tag));
         write_truth_vcf(
             &events,
-            &[simulated],
+            adjusted,
             0.5,
             path.to_str().unwrap(),
             "ref.fa",
@@ -684,16 +703,25 @@ mod tests {
         );
         // "the fraction of the depth the fragments spike planted make up" is
         // not the whole story for an additive event: a junction DUP at a
-        // capped af=0.99 plants 1900 junction fragments (0.950) *and* 249
-        // interior depth copies scaled by the uncapped 0.99, so its interior
-        // dosage realises about 0.996 while SIM_VAF records 0.950. The
-        // recorded number is the junction evidence, and the description has
-        // to say so.
+        // capped af=0.99 plants 1900 junction fragments at the capped 0.950
+        // *and* 249 interior depth copies drawn at the uncapped 0.99 (both
+        // counts measured from the run's log), so the interior dosage is not
+        // the number SIM_VAF records. The recorded number is the junction
+        // evidence, and the description has to say so.
         assert!(
             sim_vaf.contains("junction"),
             "SIM_VAF's description must say that on an additive event the \
              fraction is the junction evidence, got {}",
             sim_vaf
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "one adjusted AF per event, in the same order")]
+    fn test_truth_refuses_an_adjusted_af_slice_that_does_not_match_the_events() {
+        // The records read `adjusted_afs` with `.get(i)`, so a short slice
+        // would silently write the request as `SIM_VAF` for every event past
+        // its end -- the defect the field exists to fix, back and quiet.
+        af_truth_text_with("short", 0.5, &[]);
     }
 }

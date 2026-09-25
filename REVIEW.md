@@ -24,10 +24,10 @@ already, because a commit that adds tests does not think to come back here.
 Re-run the row's own command and update it in any commit that moves the test
 count, the clippy counts or the build warnings.
 
-| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`review-fixes-2` tip -- re-measure in any commit that moves it) |
+| Check | At review (`master@f5428ce` + uncommitted) | At branch base (`8d1beba`) | Current (`codex-fixes` tip -- re-measure in any commit that moves it) |
 | --- | --- | --- | --- |
-| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | OK, **1** warning (unused `is_within_single_segment` in `haplotype.rs`) |
-| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **411** passed, 0 failed |
+| `cargo build --release` | OK, 1 warning (unused `primary_chrom`, `is_within_single_segment` in `haplotype.rs`) | not re-measured | OK, **1** warning (unused `is_within_single_segment` **and** `overlaps_ref_segment` in `haplotype.rs`; the latter became test-only when CR5's direct sampler replaced the rejection loop that used it, and is kept as that sampler's oracle) |
+| `cargo test` | 128 passed, 0 failed | **173** passed, 0 failed | **448** passed, 0 failed, 1 ignored (with `bcftools` on PATH; **446** passed, **2** failed, 1 ignored without it -- see CR-BUILD) |
 | `cargo clippy --all-targets` | Style only: 6× `is_multiple_of`, 4× too many arguments, 2× use `?`, 1× no-effect op, 1× range loop, 1× manual `contains` | **13** (bin) / **14** (test target, 12 duplicates) | **13** (bin) / **14** (test target, 12 duplicates) — unchanged from base; every fix in this run and in the whole-branch pass held the line here |
 | `scripts/validate_pipeline.sh` | Broken (see M17) | Broken: exit 1 at step 0, reference not found (M17 fix `29ec590` had not landed yet — `8d1beba` is its ancestor) | **Fixed** (`29ec590` M17/M5; hardened by `3e85a0d`, then `61af374`): runs end to end; fails (exit 1) when the spike-in contributed nothing the background does not already carry; and fails (exit 1) rather than printing `VALIDATION PASSED` when the highest VAF has no truvari summary to grade at all |
 
@@ -2956,7 +2956,13 @@ in `[read_length, MAX_FRAGMENT_LEN = 1500]` (`src/stats.rs:12`, `src/simulate.rs
 
 **Fixed.** `FragmentDist::from_read_pairs` now takes the read length and keeps only insert sizes
 in `[read_length, MAX_FRAGMENT_LEN]` -- the range every generator call samples -- so `mean` and
-`stddev` describe the distribution that is emitted. The empty case (no donor insert size in that
+`stddev` describe the distribution that is emitted.
+
+One book-keeping note, because the number appears twice in this file with two values: the
+`del:chr20:38412500-38422500` window yields **4,595** donor pairs at this branch's tip. The
+**4559** in N1, N7, N9 and N19 above is the same window measured before CR8's mate recovery
+landed, which recovered 62 orphan read 1 records across the run's windows. Those entries are
+dated records of what was measured then and are left as they stand. The empty case (no donor insert size in that
 range) still warns, but the fallback is the 400 +/- 80 default *clamped into the same range*, not
 a distribution the generator cannot draw from.
 
@@ -3003,7 +3009,7 @@ assertion is weakened, and all three of the original assertions still run unchan
 the tool:
 
 ```
-thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1316:9:
+thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1468:9:
 this test requires bcftools on PATH: it reads a .vcf.gz, which load_snps_from_gvcf queries with `bcftools view`. Without bcftools the read fails at the spawn and never reaches the behaviour under test. Install bcftools and re-run.
 ```
 
@@ -3045,7 +3051,7 @@ It now fails when `bcftools` is absent, which takes the no-bcftools suite to **`
 2 failed; 1 ignored`**, both failures naming the tool:
 
 ```
-thread 'loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped' panicked at src/loh.rs:1316:9:
+thread 'loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped' panicked at src/loh.rs:1452:9:
 this test requires bcftools on PATH: it reads a .vcf.gz, which load_snps_from_gvcf queries with `bcftools view`. Without bcftools the read fails at the spawn and never reaches the behaviour under test. Install bcftools and re-run.
 
 thread 'loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup' panicked at src/loh.rs:1316:9:
@@ -3058,9 +3064,11 @@ twice where it used to fail once and lie once. With `bcftools` present it is unc
 
 **Mutated too.** With `bcftools` present, regressing the production message the test pins --
 the `anyhow::bail!` at `src/loh.rs:418` promising `NextStep::Pileup` instead of
-`NextStep::SkipLoh` -- still fails on the test's own assertion at `src/loh.rs:1459`, quoting
+`NextStep::SkipLoh` -- still fails on the test's own assertion at `src/loh.rs:1461`, quoting
 `... not compressed with bgzip. Falling back to pileup-based het SNP detection.`, not on the
-`bcftools` precondition at `src/loh.rs:1316`. The precondition does not mask a genuine bug.
+`bcftools` precondition at `src/loh.rs:1317`. The precondition does not mask a genuine bug.
+`require_bcftools` carries `#[track_caller]`, so each failure above names its own test's
+line rather than the helper's.
 
 **The re-check, run again independently.** `bcftools` is spawned in exactly one place in
 production, `load_snps_from_gvcf` (`src/loh.rs:371`), and only when the gVCF path ends `.gz`.
