@@ -1301,7 +1301,11 @@ fn extract_windows(
     Ok(())
 }
 
-/// Build a VariantHaplotype for a given event.
+/// Build a VariantHaplotype for a given event, which it may mutate: an
+/// insertion with no supplied sequence has the sequence generated here
+/// stored back into its `ins_seq`, so the truth VCF written after the
+/// haplotype loop can spell out the bases the reads were cut from. No
+/// other event type and no other field is touched.
 fn build_haplotype(
     event: &mut SimEvent,
     reference: &crate::reference::SharedReference,

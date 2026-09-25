@@ -685,12 +685,7 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 The truth VCF contains one record per simulated event with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
-- A sequence-resolved `ALT` for an insertion: `REF` is the anchor base at `POS` and `ALT` is
-  that base followed by the inserted bases, supplied or generated, so the truth carries the
-  sequence the reads were built from rather than a symbolic `<INS>`. `SVTYPE=INS` and `SVLEN`
-  are unchanged, and the record reads back through `--vcf` as the same insertion. A 1 Mb
-  insertion therefore writes a ~1 MB `ALT` on one line: that truth VCF is 1,001,142 bytes
-  against 1146 for the symbolic form
+- A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
 - `SIM_VAF` in the INFO field with the actual allele fraction used
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)

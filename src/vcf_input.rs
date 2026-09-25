@@ -379,7 +379,13 @@ fn records_to_events(
                         log::warn!("{}", before_first_base_warning(record, "INS"));
                         continue;
                     }
-                    (start, Some(trimmed.alt_rem.to_vec()))
+                    // Uppercase, as types.rs documents ins_seq and as
+                    // exon.rs's ins: spec already stores it: synthesis
+                    // uppercases either way, so the stored case only ever
+                    // reaches the truth VCF text, and the same variant must
+                    // not be written one way via --vcf and another via
+                    // --event.
+                    (start, Some(trimmed.alt_rem.to_ascii_uppercase()))
                 } else {
                     (record.pos, None)
                 };
@@ -1592,6 +1598,23 @@ mod tests {
                 assert_eq!(*ins_len, 3);
                 assert_eq!(ins_seq.as_deref(), Some(b"GGG".as_slice()));
                 assert_eq!(*pos, 100);
+            }
+            _ => panic!("expected Insertion"),
+        }
+    }
+
+    /// A soft-masked ALT must store the same bases an uppercase one does:
+    /// the same variant must not be written one way via `--vcf` and another
+    /// via `--event`, which uppercases in `exon.rs`.
+    #[test]
+    fn test_sequence_ins_uppercases_a_lowercase_alt() {
+        let vcf = "chr1\t100\ttest_ins\tG\tgacgt\t.\t.\tSVTYPE=INS\n";
+        let records = parse_records(vcf).unwrap();
+        let events = to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one INS event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Insertion { ins_seq, .. } => {
+                assert_eq!(ins_seq.as_deref(), Some(b"ACGT".as_slice()));
             }
             _ => panic!("expected Insertion"),
         }

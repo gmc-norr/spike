@@ -60,7 +60,7 @@ pub enum SimEvent {
     Insertion {
         chrom: String,
         pos: u64,                 // 0-based insertion point
-        ins_seq: Option<Vec<u8>>, // explicit inserted sequence (None = generate random)
+        ins_seq: Option<Vec<u8>>, // inserted sequence, uppercase (None = generate random)
         ins_len: u64,             // length of insertion
         gene: String,
         allele_fraction: Option<f64>,
