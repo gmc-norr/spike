@@ -3401,3 +3401,115 @@ calls in `scripts/validate_pipeline.sh`'s `step8_summarize` sit behind
 not through a tool. Measured end to end with the whole pixi bin directory (`bcftools`,
 `samtools`, `bwa-mem2`) off PATH: `446 passed; 2 failed; 1 ignored`, the two failures being
 exactly this pair.
+
+## The steps after the CR4 and CR2 census (2026-09-25)
+
+CR4's and CR2's censuses put `SIM_RESIST` and `SIM_DEPTH_FOLD` in the truth VCF and warn on
+them, and CR9's note lists what strengthening `spike validate` in place would need. This run
+takes those steps. Every step keeps the human's standing choice: **measure and warn** -- no run
+that passes today starts failing, what spike emits does not change, and a new `spike validate`
+check is advisory by default, with one opt-in flag `--strict` putting the advisory checks into
+the exit status.
+
+| ID | What | Status |
+| --- | --- | --- |
+| T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Plan locked |
+| T2 | `coverage_ratio` at every MAPQ, advisory | Not started |
+| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Not started |
+| T4 | CR4 on a real hard locus (measurement only) | Not started |
+| T5 | Split reads at each breakpoint (NF5), advisory | Not started |
+| T6 | INS sequence identity, advisory | Not started |
+| T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
+
+The real-data loop every measuring step uses is `scripts/slice_loop.sh` (`ab61c6c`): one event
+on a ±100 kb slice of the 35x HG002 BAM, through spike, `align.sh`, `merge.sh` and
+`spike validate`. Measured on placement 1 of `cr4_placements.py`'s 40
+(`del:chr20:1136743-1146743`) with master's binary: spike exit 0, `align.sh` 28 s,
+`merge.sh` 0.8 s, `spike validate` exit 0 at `Result: 5/5 PASS`.
+
+### T1 -- `spike validate` reports the census spike recorded
+
+#### Plan: T1, the advisory census rows and `--strict` (locked before any code or measurement)
+
+**Claim.** `spike validate` can report the census spike already wrote into the truth VCF --
+`SIM_RESIST` and `SIM_DEPTH_FOLD` -- as advisory per-event rows judged against census's own
+thresholds, without changing its default exit status, its existing rows, or the message it
+fails with; and `--strict` moves the advisory rows into the exit status.
+
+**Metric and rule.** Two new per-event rows, both advisory:
+
+- `resistant`: for a truth record carrying `SIM_RESIST`, expected `<=0.100`, observed the
+  parsed value to 3 decimals, **pass iff value `<= census::WARN_ABOVE`**.
+- `depth_fold`: for a truth record carrying `SIM_DEPTH_FOLD`, expected `<=1.50`, observed the
+  value to 2 decimals, **pass iff value `<= census::DEPTH_FOLD_WARN_ABOVE`**.
+
+Both thresholds are read from `census`, not copied, so the row and the warning can never drift
+apart. Neither number is chosen here: they are the ones spike already warns at.
+
+- A record **without** the field gets **no row** for it -- an older spike's truth VCF is not a
+  FAIL.
+- A record **with** the field but an unparseable value gets an advisory **FAIL** row. A
+  malformed field is not silently dropped.
+- An advisory row **never** satisfies `check_event`'s "a check applies" fallback. Otherwise an
+  INS-only truth VCF carrying `SIM_RESIST` would stop reporting `event_checked FAIL`, and that
+  is a default change (M11). The fallback counts non-advisory rows only.
+
+**Output.**
+
+- Text table: Status reads `PASS (advisory)` or `FAIL (advisory)`; the non-advisory rows keep
+  the bare `PASS`/`FAIL` they print today.
+- `--json`: every check object gains `"advisory": true|false`.
+- The `Result: <pass>/<total> PASS` line counts every row, advisory included, and a second line
+  follows it when any advisory row exists:
+  `Advisory: <n> checks, <p> PASS, <f> FAIL (not in the exit status; --strict includes them)`,
+  with `(in the exit status: --strict)` under `--strict`.
+- The failure the run exits with counts **non-advisory** failures against the **non-advisory**
+  total by default, so `3/5 validation checks failed` on a run that fails today stays exactly
+  that. Under `--strict` it counts every row.
+- `--strict` is documented in `validate --help` and in README.md.
+
+**Criteria.** Each is run and its real output recorded in the result commit and in STATUS.md.
+
+- **C1, it fires on the known resistant case.** The Codex review probe's `lowmap` BAM (half the
+  pairs at MAPQ 0), `del:chrT:10000-14000;af=1` -- CR4's C1 event, whose truth records
+  `SIM_RESIST=0.500`. `spike validate` prints a `resistant` row with Status `FAIL (advisory)`,
+  and `--json` gives `"check": "resistant"`, `"pass": false`, `"advisory": true`.
+- **C2, it fires on the known depth-fold case.** The `variable` BAM,
+  `dup:chrT:10000-28000;af=0.5` -- CR2's C1 event, whose truth records `SIM_DEPTH_FOLD=3.88`:
+  a `depth_fold` row at `FAIL (advisory)`.
+- **C3, it is silent on the clean donor.** The `uniform` BAM with each of those two events:
+  the `resistant` and `depth_fold` rows both read `PASS (advisory)`.
+- **C4, an older truth VCF gives no row, not a FAIL.** A copy of one of those truth VCFs with
+  the two INFO fields and their header lines stripped: neither row appears, and the
+  non-advisory rows and the exit status are identical to master's binary on the same file.
+- **C5, the default is unchanged on a correct real control.** `del:chr20:1136743-1146743`
+  through `scripts/slice_loop.sh` on the 35x HG002 BAM. Master's binary and T1's, both without
+  `--strict`: the same exit status, and the non-advisory rows byte-identical once the advisory
+  rows and the new summary line are removed. Each binary built in its own `CARGO_TARGET_DIR`
+  and md5'd (NF4).
+- **C6, `--strict` rejects what the default accepts.** The same control's truth VCF copied into
+  the scratch dir with `SIM_RESIST` edited to `0.500`: without `--strict` exit **0**, with
+  `--strict` exit **non-zero**, and the only failing row the advisory `resistant` one. The
+  unedited control exits **0** under `--strict` too. (Copy, then restore from the copy -- never
+  `git checkout --`.)
+- **C7, the flag list only grows.** `spike --help` and `spike validate --help 2>&1` still
+  contain every line of `/home/parlar_ai/spike-next-run/BASE-FLAGS.txt`, and
+  `validate --help` gains exactly one line, `--strict`.
+- **C8, the gates.** `cargo test` at 476 passed / 0 failed or better;
+  `cargo clippy --all-targets` at 13 warnings (bin) / 14 (test) or fewer.
+
+**Outcome rules.**
+
+- C1-C8 pass: supported, keep.
+- **C5 or C7 fails:** the default changed. Revert the code.
+- **C6 fails:** `--strict` does not do what it says. Revert `--strict`; keep the advisory rows
+  if C1-C5 pass; record it.
+- **C1, C2, C3 or C4 fails:** the rows are wrong. Fix and re-measure. If it cannot be made to
+  hold, revert.
+
+**Known limit, stated before measuring.** Both numbers are read back from the truth VCF, not
+recomputed from the BAM, so the rows report what spike measured at simulation time and inherit
+its blind spots -- `SIM_DEPTH_FOLD`'s donor pool holds only reads at `--min-mapq` or above
+(CR2's known limit). A truth VCF hand-edited between the run and the validation is believed.
+That is what "reports the census spike recorded" means, and it is why C6 can be measured by
+editing the field at all.
