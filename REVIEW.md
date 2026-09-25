@@ -1919,6 +1919,49 @@ was measured on the same sites it would be chosen for. The fix needs a plan
 of its own that picks the margin before looking, either from the aligner's
 scoring or on chr20 and confirmed on another chromosome.
 
+#### N18 fix plan (locked before the held-out run or any code)
+
+**The margin, chosen on chr20: F = 10.** The table above was seen first, so
+this is a training choice, not a test:
+- F = 10 takes the out-of-range rate from 9.32% to 3.73%, 88% of the drop
+  F = 30 reaches.
+- It keeps 81% of the fragments.
+- F = 20 is only 0.34 points better and costs another 14% of the fragments.
+  Depth is what decides how low a VAF `validate` can grade (N14), so the
+  smaller margin wins.
+
+**The rule to build.**
+- `count_indel_reads` finds the indel's repeat region, the same way the
+  script does: the deleted or inserted unit, extended along the reference for
+  as long as it repeats.
+- A read votes, either way, only when its aligned span, clips excluded,
+  covers the base before that region, the base after it, and 10 more on each
+  side.
+- The pad rule and the per-fragment vote are unchanged.
+
+**The held-out test** (chr21 and chr22, not looked at before this commit):
+- **Sites:** all GIAB v4.2.1 HG002 PASS, biallelic, het indels on chr21 and
+  chr22 with REF and ALT of 11 bp or less, sharing an anchor base. That is
+  **8,008** sites (3,973 on chr21, 4,035 on chr22).
+- **Control:** the 1,156 PASS biallelic het SNVs in chr21:30-32 Mb.
+- **Ruler first.** `scripts/n18_indel_flank.py` has to match `spike validate`
+  (this commit's build) on those sets at 99% or more: indel carries and spans,
+  indel verdicts, and SNV fractions. Otherwise nothing is read.
+
+**Predictions, all four required:**
+- At F = 10, the held-out indel out-of-range rate is **<= 4.5%**,
+- and it is **at most half** the unfiltered rate.
+- The indel mean fraction rises by **>= 0.04** over the unfiltered count.
+- The SNV control moves by **< 1.0 point** in out-of-range rate and **< 0.02**
+  in mean fraction.
+
+**If they hold,** the rule is built test-first. Then `spike validate` on
+chr20's 6,663 sites has to reproduce the script's F = 10 carries and spans
+at 99% or more of sites. That is the check that the Rust rule is the
+measured rule.
+
+**If any fails,** there is no code change, and the result is recorded.
+
 ## Low severity
 
 | ID | Problem | Where | Fix |
