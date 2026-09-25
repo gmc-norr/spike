@@ -515,6 +515,69 @@ events it was given. Which check covers which type:
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
+#### What each check establishes, and what it does not
+
+Each check above is evidence at one locus, and each is narrower than the claim
+it is easy to read into it. What each one settles, and what it leaves open:
+
+`coverage_ratio` establishes that the event's **mean** depth over its whole
+span, divided by the mean of its two flanks (`--flank` bp on each side, default
+5000), is within 0.30 of `1 - VAF` for a DEL or `1 + VAF` for a DUP. It does
+not establish that the depth is right anywhere in particular: one average over
+the whole span hides a local error the rest of the span cancels. Measured by
+the review's reproduction script (`scripts/review_sv_model.py`) on a synthetic
+probe, a het DUP of `chrT:10000-28000` over a donor whose interior section is
+18.75x PASSed at an observed **1.32** against an expected **1.50** while that
+interior read **81.09x** -- 4.32x, where a locally proportional CN2->CN3
+predicts 28.13x (`CR2` in `REVIEW.md`). Nor does the check see a read its own
+MAPQ filter rejects: on the same probes, with half the donor pairs at MAPQ 0, a
+deletion requested at AF=1 kept **37.5x** of its reads inside the deletion and
+still PASSed at an observed **0.00**, because `--min-mapq` (default 20) hides
+exactly the reads that survived (`CR4`).
+
+`split_reads` establishes that at least **two** distinct read names, pooled
+over the two breakpoints, sit within 500 bp of one breakpoint and carry an
+`SA:Z` entry naming the partner's contig at a position within 500 bp of the
+other. That is the whole of it. The SA parser reads an entry's first two
+fields -- contig and position -- and stops: the strand, CIGAR, MAPQ and NM
+fields of the same entry are never looked at. So the check does not verify that
+the two segments are on opposite strands, which for an INV is the one thing
+separating its junctions from any other pair of splits; it does not locate the
+breakpoint the CIGAR implies; and it reads no sequence at all. It is a count
+with no denominator, so it says nothing about allele fraction -- two split
+reads pass at any depth. In the other direction, a short deletion an aligner
+represents as a `D` operation rather than as a supplementary alignment carries
+no SA tag at all, so a spike-in whose sequence is right can still fail:
+measured on the harness's chr20 window, a correctly planted 505 bp DEL emitted
+188 ALT fragment pairs of which **0** carried an `SA:Z` tag, and `split_reads`
+scored 0 -- a FAIL (`N1` in `REVIEW.md`).
+
+`ins_reads` establishes that at least **two** reads leave the reference within
+100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
+soft clip of that length once the threshold has reached 50. It works from the
+CIGAR alone -- the record's own sequence is never read -- so it does not
+establish that the inserted bases are the bases the truth VCF names. An
+insertion of roughly the right length in roughly the right place passes,
+whatever it spells. Like `split_reads` it is a count, not a fraction.
+
+`allele_freq` is the one per-event check that measures a fraction rather than
+counting evidence; the table below says what it can and cannot read off a truth
+record.
+
+The three `[global]` checks are **fixed library heuristics, not comparisons
+against the donor**. `insert_size` passes when the sampled mean is 50-1000 bp
+and its SD is 5-300 bp, `dup_rate` when the duplicate rate is under 50%, and
+`mean_mapq` when the mean MAPQ is above 20. `spike validate` never reads the
+donor BAM's own measured fragment distribution, so none of the three asks
+whether the simulated reads resemble the library they came from. **A nonzero
+exit therefore need not mean an event is wrong:** any failed check fails the
+run, and a global one can fail on a property of the file that has nothing to do
+with the spike-in. On the review's synthetic probes every fragment is exactly
+400 bp, so `insert_size` observed `400+/-0` and failed on the SD floor of 5,
+and nothing had marked duplicates, so `dup_rate` reported `no dup flags` and
+failed; all four probes exited **1** with both of those rows failing. Read the
+failing rows, not the exit code alone.
+
 **A check that cannot measure its answer is a failed check, at event level as
 well as globally.** `allele_freq` reads a truth record's REF/ALT pair, picks
 the counting rule that fits its shape, and fails outright when none does:
@@ -1435,3 +1498,39 @@ beyond "the report parsed and at least one check passed". On a cross-sample
 spike-in most of them compare against a background that already carries the
 event, so they fail for reasons that have nothing to do with the injection —
 see `N1` in `REVIEW.md`.
+
+#### What the harness establishes, and what it does not
+
+`scripts/validate_pipeline.sh` is an **integration and regression test**. What
+it establishes is that spike's whole loop runs on real data, and that the
+caller's result moves when the spike-in is present. It is not a measure of a
+caller's sensitivity or precision, and the numbers in
+`validation_summary.tsv` should not be quoted as one.
+
+It is a deletion test with one caller. Step 2 keeps only `SVTYPE=DEL` records
+that are het and 500-50,000 bp, and both `delly call` invocations run with
+`-t DEL`. Nothing in the run plants or calls an INS, DUP, INV or BND, so a
+green run says nothing about those types — or about any caller other than
+Delly.
+
+The verdict is a gain-over-background gate, and a gain is not an
+identification. It establishes that the injection changed the caller's output;
+it does not say *which* event was added. The measured example above is exactly
+that gap: at `--vafs 0.001` the run gains one event over the control, and that
+event is `sim_del_8`, a DEL the background already carries which re-alignment
+flipped from FN to TP.
+
+Precision against this truth set is not a clinical precision. Truvari scores
+Delly's whole callset against spike's truth VCF, which holds the **added events
+only**, so a call matching a real variant of the background sample is counted
+FP for being absent from a truth set that never described the background.
+Recall is the column that means something here — how many planted events the
+caller recovered — and even that is read against the background row rather than
+against zero, for the reason given above. The converse is no safer: a locus at
+which the caller made no call has not been shown to be variant-free. The run
+measures what this caller recovered from this background, not what is in it.
+
+Genotype accuracy is not measured at all. A call matches a truth record on
+position, size and reciprocal overlap (`-r 500 -p 0.5 -P 0.5 -s 500
+--passonly`), and the fields the script reads back out of Truvari's summary are
+`TP-base`, `FP`, `FN`, recall, precision and F1 — no genotype is compared.

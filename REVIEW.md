@@ -2713,7 +2713,7 @@ changed; **none was refuted**, and every number the review printed came back ide
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note |
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence and the AF caps fixed; input GT, ploidy and `af=het` still open) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
-| CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, not fixed |
+| CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, design note |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
 | CR-BUILD | Engineering | The two tests needing `bcftools` mis-report when it is absent: one fails with an unrelated message, one passes over the wrong code path | Confirmed, fixed |
 
@@ -2893,6 +2893,26 @@ are evidence-presence checks, not event validation.
 expected 1.50; CR4's 37.5x resistant depth passes at observed 0.00. Every probe's global exit
 is 1, from `insert_size 400+/-0` and `dup_rate no dup flags` -- library heuristics, not event
 failures. Code: `src/validate.rs:587`, `:636`, `:698`.
+
+**Documented.** `README.md` now states, beside the checks themselves, what each one
+establishes and what it does not: that `coverage_ratio` is one event-average number judged
+within 0.30 of `1 -/+ VAF` and counts only the reads its own `--min-mapq` admits (with the
+1.32-against-1.50 and 0.00-over-37.5x numbers above); that `split_reads` reads only the contig
+and position of an `SA:Z` entry, so it checks neither strand, nor the CIGAR-implied breakpoint,
+nor sequence, nor allele fraction; that `ins_reads` works from the CIGAR alone and never reads
+the inserted bases; and that `insert_size` (mean 50-1000, SD 5-300), `dup_rate` (<50%) and
+`mean_mapq` (>20) are fixed library heuristics, never a comparison against the donor, so a
+nonzero validator exit need not mean any event is wrong. The harness section now says that
+`scripts/validate_pipeline.sh` is an integration and regression test -- a het-DEL-only,
+`delly call -t DEL` run behind a gain-over-background gate -- and not a measure of caller
+sensitivity or precision: a TP gain does not identify which event was added, precision against
+a truth VCF of added events only is not a clinical precision, a no-call locus is not shown to
+be variant-free, and no genotype is compared.
+
+**What remains** is the validation overhaul R9 asks for -- separating genome truth, molecular
+truth, alignment evidence and caller output, with per-window depth profiles, strand- and
+CIGAR-aware junction checks, inserted-sequence identity and a donor-derived insert-size
+comparison. That is a Phase 3 design note, not a documentation change.
 
 ### CR-FRAG -- the fragment model and the generator use different ranges
 
