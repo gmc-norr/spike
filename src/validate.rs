@@ -87,8 +87,9 @@ pub fn run() -> Result<()> {
     let mut results: Vec<CheckResult> = Vec::new();
 
     // Per-event checks.
+    let nearby = NearbyRecords::new(&truth_events);
     for event in &truth_events {
-        check_event(&args, event, &mut results);
+        check_event(&args, event, &nearby, &mut results);
     }
 
     // Global checks. All three read one sample, taken from the truth events'
@@ -134,7 +135,12 @@ pub fn run() -> Result<()> {
 /// Run every check that applies to one truth event, pushing one result per
 /// check. An event no check applies to gets one failed "not evaluable"
 /// result, so a truth VCF of such events cannot report all-PASS (M11).
-fn check_event(args: &ValidateArgs, event: &TruthEvent, results: &mut Vec<CheckResult>) {
+fn check_event(
+    args: &ValidateArgs,
+    event: &TruthEvent,
+    nearby: &NearbyRecords,
+    results: &mut Vec<CheckResult>,
+) {
     let label = format_event_label(event);
     let n_before = results.len();
 
@@ -166,7 +172,7 @@ fn check_event(args: &ValidateArgs, event: &TruthEvent, results: &mut Vec<CheckR
 
     // Allele frequency (meaningful for SNPs/small variants).
     if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
-        let r = check_allele_freq(&args.bam_path, &args.ref_path, event, args.min_mapq);
+        let r = check_allele_freq(&args.bam_path, &args.ref_path, event, nearby, args.min_mapq);
         results.push(check_outcome(&label, "allele_freq", r));
     }
 
@@ -294,9 +300,10 @@ fn print_usage() {
     eprintln!("                   reference at POS -- an I operation, or a soft clip");
     eprintln!("                   once the insertion is 50 bp or longer)");
     eprintln!("  SNP, small indel allele_freq (a substitution from the pileup; a small");
-    eprintln!("  and MNV          indel from an I/D operation of its own length at the");
-    eprintln!("                   junction just past the anchor base, within 10bp,");
-    eprintln!("                   against the reads spanning it without one -- only");
+    eprintln!("  and MNV          indel from each read's bases over it: nearer the");
+    eprintln!("                   reference with the indel made carries it, nearer");
+    eprintln!("                   the reference spans it, a tie does not vote; other");
+    eprintln!("                   truth records nearby are tried in with it -- only");
     eprintln!("                   reads reaching 10bp past the indel's repeat on both");
     eprintln!("                   sides vote; an MNV");
     eprintln!("                   from the whole alt run, read by read). Each read");
@@ -789,12 +796,6 @@ const MIN_ALT_READS: u32 = 3;
 /// Deepest pileup the "depth it needs" hint searches up to.
 const AF_MAX_DEPTH_HINT: u32 = 1_000_000;
 
-/// How far from the junction an aligner may place a small indel's operation.
-/// An aligner left-aligns an indel to the start of the repeat it sits in, so a
-/// 2 bp deletion inside a short tandem repeat is written a few bases from the
-/// truth record's own POS. 10 bp covers that without reaching a neighbour.
-const INDEL_POS_PAD: u64 = 10;
-
 /// Aligned bases a read needs past an indel's repeat region, on each side,
 /// before it may vote on the indel either way (N18). Near its end a read's
 /// indel is written as mismatches or a clip rather than a gap, and a read that
@@ -974,6 +975,7 @@ fn check_allele_freq(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
+    nearby: &NearbyRecords,
     min_mapq: u8,
 ) -> Result<CheckResult> {
     let label = format_event_label(event);
@@ -999,10 +1001,10 @@ fn check_allele_freq(
     };
     match shape {
         SmallVariantShape::Deletion(len) => {
-            return indel_allele_freq(bam_path, ref_path, event, min_mapq, Kind::Deletion, len)
+            return indel_allele_freq(bam_path, ref_path, event, nearby, min_mapq, Kind::Deletion, len)
         }
         SmallVariantShape::Insertion(len) => {
-            return indel_allele_freq(bam_path, ref_path, event, min_mapq, Kind::Insertion, len)
+            return indel_allele_freq(bam_path, ref_path, event, nearby, min_mapq, Kind::Insertion, len)
         }
         SmallVariantShape::Mnv => return mnv_allele_freq(bam_path, ref_path, event, min_mapq),
         SmallVariantShape::Substitution => {}
@@ -1058,21 +1060,23 @@ fn check_allele_freq(
 
 /// Allele fraction of a small indel, counted off the alignments' CIGARs.
 ///
-/// An indel is not a column in a pileup. The reads that carry it are the ones
-/// whose alignment leaves the reference at the junction just past the anchor
-/// base -- a `D` operation of the deleted length, an `I` operation of the
-/// inserted length -- and the reads that speak against it are the ones that
-/// span the same junction without one. This is N8's `ins_reads` rule narrowed
-/// to the allele's exact length and turned into a fraction.
+/// An indel is not a column in a pileup, and where an aligner writes its gap
+/// -- or whether it writes one at all -- depends on the read. So each read's
+/// own bases over the site are compared with the reference with and without
+/// the site's edit, and with every other truth record nearby tried in too,
+/// and the read counts for the nearer kind (N15). This is the MNV rule (N10)
+/// with a nearest match instead of an exact one.
 fn indel_allele_freq(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
+    nearby: &NearbyRecords,
     min_mapq: u8,
     kind: Kind,
     indel_len: u64,
 ) -> Result<CheckResult> {
-    let (carries, spans) = count_indel_reads(bam_path, ref_path, event, kind, indel_len, min_mapq)?;
+    let (carries, spans) =
+        count_indel_reads(bam_path, ref_path, event, nearby, kind, indel_len, min_mapq)?;
     log::debug!(
         "allele_freq {}: {} carry, {} span",
         format_event_label(event),
@@ -1082,13 +1086,14 @@ fn indel_allele_freq(
     Ok(allele_freq_result(event, carries, carries + spans))
 }
 
-/// Fragments whose reads carry the small indel at the event's position, and
-/// fragments whose reads span the same junction without it -- one vote per
-/// fragment (`fragment_vote`), not per read.
+/// Fragments whose reads' bases over the site are nearest haplotypes holding
+/// the site, and fragments whose reads' bases are nearest haplotypes without
+/// it -- one vote per fragment (`fragment_vote`), not per read.
 fn count_indel_reads(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
+    nearby: &NearbyRecords,
     kind: Kind,
     indel_len: u64,
     min_mapq: u8,
@@ -1109,13 +1114,36 @@ fn count_indel_reads(
     )?;
     let (region_start, region_end) =
         indel_repeat_region(&window, window_start, event.start, kind, indel_len, &inserted);
-    // A read votes only if it reaches INDEL_FLANK bases past the base on
-    // either side of the repeat region (N18).
-    let needs = (
-        region_start.saturating_sub(1 + INDEL_FLANK),
-        region_end + INDEL_FLANK,
+    // The site: the repeat region, the base on each side, and INDEL_FLANK
+    // more (N18). A read has to cover all of it to vote, and its bases over
+    // it are what it votes with.
+    let window_end = window_start + window.len() as u64;
+    let first = region_start.saturating_sub(1 + INDEL_FLANK).max(window_start);
+    let last = (region_end + INDEL_FLANK).min(window_end.saturating_sub(1));
+    let site: Edit = (
+        event.start,
+        event.ref_allele.as_deref().unwrap_or_default(),
+        event.alt_allele.as_deref().unwrap_or_default(),
     );
+    // The other truth records in the window: the reads may carry any of them
+    // with the site, as one local change the truth set wrote in parts (N19).
+    let mut others = nearby.inside(event, first, last);
+    if others.len() > MAX_NEARBY_EDITS {
+        log::debug!(
+            "allele_freq {}: {} truth records nearby, more than {}; comparing with the site alone",
+            format_event_label(event),
+            others.len(),
+            MAX_NEARBY_EDITS
+        );
+        others.clear();
+    }
+    let Some(haplotypes) = site_haplotypes(&window, window_start, first, last, site, &others) else {
+        return Ok((0, 0));
+    };
     let mut votes: HashMap<Vec<u8>, Vec<IndelVote>> = HashMap::new();
+    // Reads often share their bases over the site; each distinct run is
+    // compared with the haplotypes once.
+    let mut vote_of: HashMap<Vec<u8>, Option<IndelVote>> = HashMap::new();
 
     // Every read that votes either way covers the anchor base and the base
     // just past the REF allele, so that span is also the query window.
@@ -1126,10 +1154,14 @@ fn count_indel_reads(
         event.start,
         event.start + ref_len + 1,
         min_mapq,
-        &mut |name, align_start, ops| {
-            if let Some(vote) =
-                cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len, needs)
-            {
+        &mut |name, align_start, ops, seq| {
+            let Some(bases) = read_bases_over(ops, seq, align_start, first, last) else {
+                return;
+            };
+            let vote = *vote_of
+                .entry(bases.to_vec())
+                .or_insert_with(|| haplotype_vote(bases, &haplotypes));
+            if let Some(vote) = vote {
                 votes.entry(name.to_vec()).or_default().push(vote);
             }
         },
@@ -1146,14 +1178,187 @@ fn count_indel_reads(
     Ok((carries, spans))
 }
 
+/// The truth set's small variants on each chromosome, sorted by start, so an
+/// indel can find the records near it (N15).
+#[derive(Default)]
+struct NearbyRecords<'a> {
+    by_chrom: HashMap<&'a str, Vec<&'a TruthEvent>>,
+}
+
+impl<'a> NearbyRecords<'a> {
+    fn new(events: &'a [TruthEvent]) -> Self {
+        let mut by_chrom: HashMap<&str, Vec<&TruthEvent>> = HashMap::new();
+        for e in events.iter().filter(|e| e.ref_allele.is_some() && e.alt_allele.is_some()) {
+            by_chrom.entry(e.chrom.as_str()).or_default().push(e);
+        }
+        for records in by_chrom.values_mut() {
+            records.sort_by_key(|e| e.start);
+        }
+        NearbyRecords { by_chrom }
+    }
+
+    /// The edits of the records other than `event` whose REF lies inside
+    /// 0-based `[first, last]`, one per record.
+    fn inside(&self, event: &TruthEvent, first: u64, last: u64) -> Vec<Edit<'a>> {
+        let Some(records) = self.by_chrom.get(event.chrom.as_str()) else {
+            return Vec::new();
+        };
+        let same = |r: &[u8], a: &[u8]| {
+            event.ref_allele.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(r))
+                && event.alt_allele.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(a))
+        };
+        let from = records.partition_point(|e| e.start < first);
+        records[from..]
+            .iter()
+            .take_while(|e| e.start <= last)
+            .filter_map(|e| Some((e.start, e.ref_allele.as_deref()?, e.alt_allele.as_deref()?)))
+            .filter(|&(p, r, a)| p + (r.len().max(1) as u64) - 1 <= last && !(p == event.start && same(r, a)))
+            .collect()
+    }
+}
+
+/// One truth record's change to the reference: its 0-based start, REF and
+/// ALT.
+type Edit<'a> = (u64, &'a [u8], &'a [u8]);
+
+/// With more truth records than this near an indel, it is compared with its
+/// own record alone: the combinations double with each one.
+const MAX_NEARBY_EDITS: usize = 10;
+
 /// How one read votes on a small indel at a position.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum IndelVote {
-    /// Its alignment carries the indel: an operation of the truth record's own
-    /// kind and length, at the junction just past the anchor base.
+    /// The haplotypes nearest its bases over the site all hold the site.
     Carries,
-    /// It spans the same junction without one.
+    /// The haplotypes nearest its bases over the site all lack it.
     Spans,
+}
+
+/// The reference over 0-based `[first, last]` with every combination of the
+/// site's edit and the `others` applied whose REF spans do not overlap, each
+/// marked with whether it holds the site; `None` if the site does not fit.
+/// No genotype is used: which records a read carries, its bases say.
+fn site_haplotypes(
+    window: &[u8],
+    window_start: u64,
+    first: u64,
+    last: u64,
+    site: Edit,
+    others: &[Edit],
+) -> Option<Vec<(bool, Vec<u8>)>> {
+    let mut haplotypes = Vec::new();
+    for mask in 0u32..1 << others.len() {
+        let chosen = others.iter().enumerate().filter(|(i, _)| mask >> i & 1 == 1);
+        let mut edits: Vec<Edit> = chosen.map(|(_, &e)| e).collect();
+        if let Some(h) = apply_edits(window, window_start, first, last, &mut edits) {
+            haplotypes.push((false, h));
+        }
+        edits.push(site);
+        if let Some(h) = apply_edits(window, window_start, first, last, &mut edits) {
+            haplotypes.push((true, h));
+        }
+    }
+    haplotypes.iter().any(|&(holds, _)| holds).then_some(haplotypes)
+}
+
+/// The reference over 0-based `[first, last]` with `edits` applied, upper
+/// case; `None` if two of them overlap or one does not lie inside.
+fn apply_edits(
+    window: &[u8],
+    window_start: u64,
+    first: u64,
+    last: u64,
+    edits: &mut [Edit],
+) -> Option<Vec<u8>> {
+    let at = |p: u64| usize::try_from(p.checked_sub(window_start)?).ok();
+    let (f, l) = (at(first)?, at(last)?);
+    if l >= window.len() {
+        return None;
+    }
+    edits.sort_by_key(|e| e.0);
+    let mut h = Vec::new();
+    let mut from = f;
+    for &mut (pos, reference, alt) in edits {
+        let p = at(pos)?;
+        let past = p + reference.len();
+        if p < from || past > l + 1 {
+            return None;
+        }
+        h.extend_from_slice(&window[from..p]);
+        h.extend_from_slice(alt);
+        from = past;
+    }
+    h.extend_from_slice(&window[from..=l]);
+    h.make_ascii_uppercase();
+    Some(h)
+}
+
+/// A read's bases from the one aligned to reference position `first` to the
+/// one aligned to `last`, inclusive, inserted bases between them included; or
+/// `None` unless both ends sit on an aligned (`M`, `=`, `X`) base. A read that
+/// stops short of either end, or has a gap or clip there, cannot show the
+/// site whole (N18).
+fn read_bases_over<'a>(
+    ops: &[noodles::sam::alignment::record::cigar::Op],
+    seq: &'a [u8],
+    align_start: u64,
+    first: u64,
+    last: u64,
+) -> Option<&'a [u8]> {
+    let (mut ref_pos, mut q) = (align_start, 0usize);
+    let (mut q_first, mut q_last) = (None, None);
+    for op in ops {
+        let len = op.len();
+        match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                let span = ref_pos..ref_pos + len as u64;
+                if span.contains(&first) {
+                    q_first = Some(q + (first - ref_pos) as usize);
+                }
+                if span.contains(&last) {
+                    q_last = Some(q + (last - ref_pos) as usize);
+                }
+                ref_pos += len as u64;
+                q += len;
+            }
+            Kind::Insertion | Kind::SoftClip => q += len,
+            Kind::Deletion | Kind::Skip => ref_pos += len as u64,
+            Kind::HardClip | Kind::Pad => {}
+        }
+    }
+    seq.get(q_first?..=q_last?)
+}
+
+/// Levenshtein distance, ignoring case.
+fn levenshtein(a: &[u8], b: &[u8]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.iter().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let next = if x.eq_ignore_ascii_case(y) { diag } else { diag + 1 };
+            diag = row[j + 1];
+            row[j + 1] = next.min(row[j] + 1).min(row[j + 1] + 1);
+        }
+    }
+    row[b.len()]
+}
+
+/// A read's vote from its bases over the site: `Carries` if every haplotype
+/// nearest them holds the site, `Spans` if none does, none otherwise.
+fn haplotype_vote(bases: &[u8], haplotypes: &[(bool, Vec<u8>)]) -> Option<IndelVote> {
+    let distances: Vec<(usize, bool)> = haplotypes
+        .iter()
+        .map(|(holds, h)| (levenshtein(bases, h), *holds))
+        .collect();
+    let nearest = distances.iter().map(|&(d, _)| d).min()?;
+    let mut holds = distances.iter().filter(|&&(d, _)| d == nearest).map(|&(_, h)| h);
+    let first = holds.next()?;
+    if holds.all(|h| h == first) {
+        Some(if first { IndelVote::Carries } else { IndelVote::Spans })
+    } else {
+        None
+    }
 }
 
 /// The stretch of reference a small indel can slide along, 0-based
@@ -1202,73 +1407,6 @@ fn indel_repeat_region(
             (s, e)
         }
     }
-}
-
-/// Read one alignment's vote off its CIGAR, or `None` if it neither carries
-/// the allele nor spans the junction without it -- clipped across it, or
-/// carrying a *different* indel that swallows one of the two reference bases
-/// the "spans" vote is anchored on. Such a read is evidence for neither allele
-/// and enters neither count. So is one whose alignment does not cover
-/// `needs`, 0-based and inclusive: it stops too close to the indel to show it
-/// (N18).
-fn cigar_indel_vote(
-    ops: &[noodles::sam::alignment::record::cigar::Op],
-    align_start: u64,
-    pos: u64,
-    ref_len: u64,
-    kind: Kind,
-    indel_len: u64,
-    needs: (u64, u64),
-) -> Option<IndelVote> {
-    // The two reference bases a "spans" vote is anchored on: the anchor base
-    // the REF allele starts at, and the first base past the REF allele.
-    let far_side = pos + ref_len;
-    let mut ref_pos = align_start;
-    let (mut carries, mut covers_anchor, mut covers_far_side) = (false, false, false);
-
-    for op in ops {
-        let len = op.len() as u64;
-        match op.kind() {
-            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
-                covers_anchor |= (ref_pos..ref_pos + len).contains(&pos);
-                covers_far_side |= (ref_pos..ref_pos + len).contains(&far_side);
-                ref_pos += len;
-            }
-            k if k == kind => {
-                if len == indel_len && ref_pos.abs_diff(pos + 1) <= INDEL_POS_PAD {
-                    carries = true;
-                }
-                if k == Kind::Deletion {
-                    ref_pos += len;
-                }
-            }
-            Kind::Deletion | Kind::Skip => ref_pos += len,
-            // Insertion, SoftClip, HardClip and Pad consume no reference.
-            _ => {}
-        }
-    }
-
-    // `ref_pos` is now one past the alignment's last reference base. A read
-    // that stops short of `needs` on either side cannot show the indel, so it
-    // votes neither way -- carrier or not, the same test for both (N18).
-    if align_start > needs.0 || ref_pos <= needs.1 {
-        return None;
-    }
-
-    // An operation of this allele's own kind and length inside the pad *is*
-    // the junction, so the read has already shown it reaches it. Asking for M
-    // coverage of the two anchor bases on top of that dropped every read whose
-    // own `D` swallowed one of them -- which is every deletion spelled 1..=len
-    // bases off the aligner's left-alignment, exactly the case the pad is
-    // there for. The anchors are only needed to tell "spans it without one"
-    // from "never reached it".
-    if carries {
-        return Some(IndelVote::Carries);
-    }
-    if !(covers_anchor && covers_far_side) {
-        return None;
-    }
-    Some(IndelVote::Spans)
 }
 
 /// Allele fraction of an MNV: reads whose bases are the whole alt run against
@@ -2128,17 +2266,17 @@ fn reads_with_inserted_sequence(
 }
 
 /// What `for_each_alignment` hands each record to: its read name, 0-based
-/// alignment start and CIGAR operations.
+/// alignment start, CIGAR operations and bases.
 type AlignmentVisitor<'a> =
-    dyn FnMut(&[u8], u64, &[noodles::sam::alignment::record::cigar::Op]) + 'a;
+    dyn FnMut(&[u8], u64, &[noodles::sam::alignment::record::cigar::Op], &[u8]) + 'a;
 
 /// Walk every usable, named alignment overlapping 0-based `[start, end)`,
-/// handing the visitor each record's read name, 0-based alignment start and
-/// CIGAR operations.
+/// handing the visitor each record's read name, 0-based alignment start, CIGAR
+/// operations and bases.
 ///
 /// The BAM and the CRAM reader hand out different record types, so the scans
 /// above each carry their own copy of this query; a check that needs nothing
-/// from a record but its name and CIGAR can share one.
+/// from a record but its name, CIGAR and bases can share one.
 fn for_each_alignment(
     bam_path: &str,
     ref_path: &str,
@@ -2181,7 +2319,12 @@ fn for_each_alignment(
             };
             let cigar = buf.cigar();
             let ops: Vec<_> = CigarTrait::iter(&cigar).collect::<std::io::Result<_>>()?;
-            visit(name.as_ref(), usize::from(align_start).saturating_sub(1) as u64, &ops);
+            visit(
+                name.as_ref(),
+                usize::from(align_start).saturating_sub(1) as u64,
+                &ops,
+                buf.sequence().as_ref(),
+            );
         }
     } else {
         let mut reader = noodles::bam::io::indexed_reader::Builder::default()
@@ -2208,7 +2351,8 @@ fn for_each_alignment(
             };
             let cigar = record.cigar();
             let ops: Vec<_> = cigar.iter().collect::<std::io::Result<_>>()?;
-            visit(name.as_ref(), align_start, &ops);
+            let seq: Vec<u8> = record.sequence().iter().collect();
+            visit(name.as_ref(), align_start, &ops, &seq);
         }
     }
 
@@ -3283,7 +3427,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         };
         let mut results: Vec<CheckResult> = Vec::new();
 
-        check_event(&args, &event, &mut results);
+        check_event(&args, &event, &NearbyRecords::default(), &mut results);
 
         assert_eq!(results.len(), 1, "an unchecked event must leave a result");
         assert!(!results[0].pass, "an event no check covers may not pass");
@@ -3323,7 +3467,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             (&b"TG"[..], &b"AN"[..], "an MNV with a non-ACGT base"),
         ] {
             let event = small_variant_event(reference, alt);
-            let r = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, 20)
+            let r = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, &NearbyRecords::default(), 20)
                 .expect("an unmeasurable allele fraction is a result, not an error");
             assert!(
                 !r.pass,
@@ -3346,7 +3490,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             (&b"TG"[..], &b"AC"[..], "an MNV"),
         ] {
             let event = small_variant_event(reference, alt);
-            let outcome = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, 20);
+            let outcome = check_allele_freq("/nonexistent/no.bam", "/nonexistent/no.fa", &event, &NearbyRecords::default(), 20);
             assert!(
                 outcome.is_err(),
                 "{} must be measured from the BAM, not decided without opening one",
@@ -3362,7 +3506,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
         let (dir, fasta, cram) = two_contig_cram("low_depth_af");
         let event = small_variant_event(b"A", b"C");
 
-        let r = check_allele_freq(&cram, &fasta, &event, 20).unwrap();
+        let r = check_allele_freq(&cram, &fasta, &event, &NearbyRecords::default(), 20).unwrap();
 
         assert!(
             !r.pass,
@@ -3538,7 +3682,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let event = ins_event("chrA", 10_000);
         let mut results: Vec<CheckResult> = Vec::new();
 
-        check_event(&args, &event, &mut results);
+        check_event(&args, &event, &NearbyRecords::default(), &mut results);
 
         assert_eq!(results.len(), 1, "an INS must leave exactly one result");
         assert_eq!(
@@ -4009,7 +4153,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             (11_000, &b"AC"[..], &b"GT"[..], "an MNV"),
         ] {
             let event = small_variant_event_at(pos, reference, alt);
-            let r = check_allele_freq(&cram, &fasta, &event, 20).unwrap();
+            let r = check_allele_freq(&cram, &fasta, &event, &NearbyRecords::default(), 20).unwrap();
             assert_eq!(
                 r.observed,
                 "0.50",
@@ -4021,7 +4165,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
 
             // The same record at a site where nothing was planted.
             let clean = small_variant_event_at(14_000, reference, alt);
-            let r = check_allele_freq(&cram, &fasta, &clean, 20).unwrap();
+            let r = check_allele_freq(&cram, &fasta, &clean, &NearbyRecords::default(), 20).unwrap();
             assert_eq!(
                 r.observed, "0.00",
                 "nothing was planted at chrA:14001, so no read carries {}",
@@ -4121,7 +4265,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let (dir, fasta, cram) = overlapping_pairs_cram("n16_once");
         for (pos, reference, what) in [(16_000u64, &b"A"[..], "an SNV"), (18_000, &b"ACG"[..], "a deletion")] {
             let alt = if reference.len() == 1 { &b"T"[..] } else { &reference[..1] };
-            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), 20).unwrap();
+            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), &NearbyRecords::default(), 20).unwrap();
             assert_eq!(
                 r.observed, "low depth (3)",
                 "{}: three pairs are three votes, not six",
@@ -4140,7 +4284,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let (dir, fasta, cram) = overlapping_pairs_cram("n16_split");
         for (pos, reference, what) in [(17_000u64, &b"A"[..], "an SNV"), (19_000, &b"ACG"[..], "a deletion")] {
             let alt = if reference.len() == 1 { &b"T"[..] } else { &reference[..1] };
-            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), 20).unwrap();
+            let r = check_allele_freq(&cram, &fasta, &hom_event_at(pos, reference, alt), &NearbyRecords::default(), 20).unwrap();
             assert_eq!(r.observed, "0.83", "{}: the two split pairs must not vote", what);
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -4217,10 +4361,171 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             (5_000u64, seq[5_000..5_003].to_vec(), seq[5_000..5_001].to_vec(), "a deletion"),
             (8_000, seq[8_000..8_001].to_vec(), [&seq[8_000..8_001], &b"TTTT"[..]].concat(), "an insertion"),
         ] {
-            let r = check_allele_freq(&cram, &fasta, &small_variant_event_at(pos, &reference, &alt), 20).unwrap();
+            let r = check_allele_freq(&cram, &fasta, &small_variant_event_at(pos, &reference, &alt), &NearbyRecords::default(), 20).unwrap();
             assert_eq!(r.observed, "0.50", "{}: reads stopping at it must not vote", what);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- N15: a read votes by the haplotype its bases spell ---
+
+    /// Two sites on `cycling_contig`, 16 pairs each, read 2 always a plain
+    /// 100M 200 bp downstream:
+    ///
+    /// - chrA:5001 `ACG>A` (deleting 0-based 5001..5003): 8 pairs carry it,
+    ///   8 carry a 2 bp deletion at 5009 instead -- another sequence, since
+    ///   no 2 bp deletion slides in `ACGT` repeated.
+    /// - chrA:8002 `CG>C` (deleting 8002): 8 pairs carry the whole local
+    ///   change a split truth record is one part of, a 3 bp deletion of
+    ///   8002..8005; 8 are plain reference.
+    fn haplotype_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let plain = |s: usize| -> TestRead {
+            (s, vec![(Kind::Match, TEST_READ_LEN)], seq[s..s + TEST_READ_LEN].to_vec())
+        };
+        let mut pairs: Vec<(String, TestRead, TestRead)> = Vec::new();
+        let mut push = |name: String, read1: TestRead| {
+            let mate = plain(read1.0 + 200);
+            pairs.push((name, read1, mate));
+        };
+        for i in 0..8usize {
+            push(format!("a_here{}", i), read_with_indel(&seq, 4_951 + i, 5_001, Kind::Deletion, 2, b""));
+            push(format!("a_other{}", i), read_with_indel(&seq, 4_959 + i, 5_009, Kind::Deletion, 2, b""));
+            push(format!("b_whole{}", i), read_with_indel(&seq, 7_952 + i, 8_002, Kind::Deletion, 3, b""));
+            push(format!("b_ref{}", i), plain(7_941 + i));
+        }
+        pairs_cram(tag, &seq, &pairs)
+    }
+
+    #[test]
+    fn test_a_read_votes_by_the_haplotype_its_bases_spell() {
+        // Site A: a same-size gap 8 bp on is another variant, but the pad
+        // rule counted it (N15): 16 of 16. Site B: the reads carry the whole
+        // change the truth record is part of, written as one 3 bp gap, which
+        // the pad rule could not see (N19): 0 carriers. Each read's bases are
+        // closer to one haplotype, so each site is 8 of 16.
+        let (dir, fasta, cram) = haplotype_cram("n15_haplotype");
+        let seq = cycling_contig();
+        for (pos, reference, alt, what) in [
+            (5_000u64, &seq[5_000..5_003], &seq[5_000..5_001], "another deletion 8 bp on"),
+            (8_001, &seq[8_001..8_003], &seq[8_001..8_002], "the whole change as one gap"),
+        ] {
+            let r = check_allele_freq(&cram, &fasta, &small_variant_event_at(pos, reference, alt), &NearbyRecords::default(), 20).unwrap();
+            assert_eq!(r.observed, "0.50", "{}", what);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// chrA:12001 `ACG>A` and chrA:12004 `T>TCG` on `cycling_contig`: one
+    /// local change, `CGT` to `TCG` at 12001..12004, written by the truth set
+    /// as two records the way GIAB often does (N19). 8 pairs carry it as the
+    /// aligner writes it, three mismatches and no gap; 8 are plain reference.
+    fn split_record_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let plain = |s: usize| -> TestRead {
+            (s, vec![(Kind::Match, TEST_READ_LEN)], seq[s..s + TEST_READ_LEN].to_vec())
+        };
+        let mut pairs: Vec<(String, TestRead, TestRead)> = Vec::new();
+        for i in 0..8usize {
+            let (s, ops, mut bases) = plain(11_951 + i);
+            bases[12_001 - s..12_004 - s].copy_from_slice(b"TCG");
+            pairs.push((format!("both{}", i), (s, ops, bases), plain(s + 200)));
+            pairs.push((format!("ref{}", i), plain(11_941 + i), plain(12_141 + i)));
+        }
+        pairs_cram(tag, &seq, &pairs)
+    }
+
+    #[test]
+    fn test_a_read_votes_by_the_nearby_truth_records_it_carries() {
+        // Compared with each record alone, a read carrying both is two
+        // edits from the reference and two from the record: a tie, no vote,
+        // so 0 of 8. Compared with every combination of the two, it is the
+        // pair, which holds each record: 8 of 16 for both.
+        let (dir, fasta, cram) = split_record_cram("n15_split_record");
+        let seq = cycling_contig();
+        let events = vec![
+            small_variant_event_at(12_000, &seq[12_000..12_003], &seq[12_000..12_001]),
+            small_variant_event_at(12_003, &seq[12_003..12_004], b"TCG"),
+        ];
+        let nearby = NearbyRecords::new(&events);
+        for event in &events {
+            let r = check_allele_freq(&cram, &fasta, event, &nearby, 20).unwrap();
+            assert_eq!(r.observed, "0.50", "{}", format_event_label(event));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_crowded_site_is_compared_with_its_own_record_alone() {
+        // Eleven other records in the window, one past the cap: the pair's
+        // second half is left out with the rest, and its carriers tie again.
+        let (dir, fasta, cram) = split_record_cram("n15_crowded");
+        let seq = cycling_contig();
+        let mut events = vec![
+            small_variant_event_at(12_000, &seq[12_000..12_003], &seq[12_000..12_001]),
+            small_variant_event_at(12_003, &seq[12_003..12_004], b"TCG"),
+        ];
+        for p in (11_991..12_000).chain(12_005..12_006) {
+            events.push(small_variant_event_at(p as u64, &seq[p..p + 1], b"N"));
+        }
+        assert_eq!(events.len() - 1, MAX_NEARBY_EDITS + 1);
+        let r = check_allele_freq(&cram, &fasta, &events[0], &NearbyRecords::new(&events), 20).unwrap();
+        assert_eq!(r.observed, "too shallow (0.00 at 8 reads; needs about 14 reads)");
+        let r = check_allele_freq(&cram, &fasta, &events[0], &NearbyRecords::new(&events[..11]), 20).unwrap();
+        assert_eq!(r.observed, "0.50", "at the cap, every record is used");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_nearby_records_are_the_others_wholly_inside_the_window() {
+        let seq = cycling_contig();
+        let at = |p: usize, r: usize, a: &[u8]| small_variant_event_at(p as u64, &seq[p..p + r], a);
+        let mut other_chrom = at(1_010, 1, b"T");
+        other_chrom.chrom = "chrB".to_string();
+        let events = vec![
+            at(1_010, 3, &seq[1_010..1_011]), // the site
+            at(1_000, 1, b"T"),               // first base: inside
+            at(1_030, 1, b"T"),               // last base: inside
+            at(999, 2, b"T"),                 // starts before the window
+            at(1_030, 2, b"T"),               // runs past it
+            at(1_010, 1, b"T"),               // same start, another record
+            other_chrom,
+            TruthEvent { ref_allele: None, alt_allele: None, ..at(1_020, 1, b"T") }, // no alleles
+        ];
+        let nearby = NearbyRecords::new(&events);
+        let starts: Vec<u64> = nearby.inside(&events[0], 1_000, 1_030).iter().map(|e| e.0).collect();
+        assert_eq!(starts, vec![1_000, 1_010, 1_030]);
+    }
+
+    #[test]
+    fn test_overlapping_records_never_share_a_haplotype() {
+        // Two alleles at one place are two haplotypes, never one.
+        let window = cycling_contig();
+        let site = (1_000, &window[1_000..1_001], &b"ATT"[..]);
+        let same_place = (1_000, &window[1_000..1_001], &b"AGG"[..]);
+        let elsewhere = (1_020, &window[1_020..1_021], &b"T"[..]);
+        let count = |others: &[Edit]| site_haplotypes(&window, 0, 980, 1_030, site, others).unwrap().len();
+        assert_eq!(count(&[]), 2);
+        assert_eq!(count(&[elsewhere]), 4);
+        assert_eq!(count(&[same_place]), 3, "the reference, the site, the other allele");
+        assert_eq!(count(&[same_place, elsewhere]), 6);
+    }
+
+    #[test]
+    fn test_another_truth_allele_at_the_site_counts_as_spanning_it() {
+        // Alone, a same-size insertion of other bases is no nearer the
+        // reference than the site's own. When the truth set lists it, a read
+        // carrying it is nearest that allele, which does not hold the site.
+        let window = cycling_contig();
+        let site = (1_000, &window[1_000..1_001], &b"ATTTT"[..]);
+        let other = (1_000, &window[1_000..1_001], &b"AGGCA"[..]);
+        let mut read = window[980..1_001].to_vec();
+        read.extend_from_slice(b"GGCA");
+        read.extend_from_slice(&window[1_001..=1_030]);
+        let alone = site_haplotypes(&window, 0, 980, 1_030, site, &[]).unwrap();
+        let listed = site_haplotypes(&window, 0, 980, 1_030, site, &[other]).unwrap();
+        assert_eq!(haplotype_vote(&read, &alone), None);
+        assert_eq!(haplotype_vote(&read, &listed), Some(IndelVote::Spans));
     }
 
     #[test]
@@ -4244,139 +4549,97 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
     }
 
     #[test]
-    fn test_a_read_must_reach_past_the_span_it_needs_on_both_sides() {
-        // The same test for a carrier and for a spanning read (N18): stopping
-        // one base short on either side takes the vote away.
-        const POS: u64 = 1_000;
-        let carrier = [
-            Op::new(Kind::Match, 51),
-            Op::new(Kind::Deletion, 2),
-            Op::new(Kind::Match, 49),
-        ];
+    fn test_read_bases_over_needs_an_aligned_base_at_both_ends() {
+        // A read that stops one base short of either end, or has a gap
+        // there, cannot show the site whole and gives no bases (N18).
+        let seq: Vec<u8> = (0..100).map(|i| b"ACGT"[i % 4]).collect();
         let plain = [Op::new(Kind::Match, 100)];
-        for (ops, span, vote) in [
-            (&carrier[..], 102u64, IndelVote::Carries),
-            (&plain[..], 100, IndelVote::Spans),
-        ] {
-            let (start, end) = (950, 950 + span - 1);
-            let v = |needs| cigar_indel_vote(ops, start, POS, 3, Kind::Deletion, 2, needs);
-            assert_eq!(v((start, end)), Some(vote), "covers exactly what it needs");
-            assert_eq!(v((start - 1, end)), None, "one base short on the left");
-            assert_eq!(v((start, end + 1)), None, "one base short on the right");
-        }
+        assert_eq!(read_bases_over(&plain, &seq, 1_000, 1_010, 1_020), Some(&seq[10..=20]));
+        assert_eq!(read_bases_over(&plain, &seq, 1_000, 999, 1_020), None, "starts one base late");
+        assert_eq!(read_bases_over(&plain, &seq, 1_000, 1_010, 1_100), None, "ends one base early");
+        // A deletion over the last position: no base is aligned to it.
+        let gap = [Op::new(Kind::Match, 20), Op::new(Kind::Deletion, 2), Op::new(Kind::Match, 80)];
+        assert_eq!(read_bases_over(&gap, &seq, 1_000, 1_010, 1_021), None);
+        // An insertion inside the span is part of what the read shows.
+        let ins = [Op::new(Kind::Match, 15), Op::new(Kind::Insertion, 3), Op::new(Kind::Match, 82)];
+        assert_eq!(read_bases_over(&ins, &seq, 1_000, 1_010, 1_020), Some(&seq[10..=23]));
     }
 
-    /// `needs` for the tests of the vote itself: any alignment covers it.
-    const NO_SPAN_NEEDED: (u64, u64) = (u64::MAX, 0);
-
-    /// A 2 bp deletion's `D` operation, shifted `shift` bases from the
-    /// junction just past the truth record's anchor base. `ACG` > `A` at
-    /// 0-based 1000, read aligned over 950..1050.
-    fn shifted_deletion_vote(shift: i64) -> Option<IndelVote> {
+    /// `ACG` > `A` at 0-based 1000 over `window` (from 0): the reference and
+    /// truth haplotypes over 980..=1030, and the vote of a read from 950
+    /// whose 2 bp `D` sits `shift` bases from 1001.
+    fn shifted_deletion_vote(window: &[u8], shift: i64) -> Option<IndelVote> {
         const POS: u64 = 1_000;
-        const REF_LEN: u64 = 3;
-        const DEL_LEN: usize = 2;
-        let align_start = POS - 50;
-        let first = (POS as i64 + 1 + shift - align_start as i64) as usize;
-        let ops = [
-            Op::new(Kind::Match, first),
-            Op::new(Kind::Deletion, DEL_LEN),
-            Op::new(Kind::Match, 100 - first),
-        ];
-        cigar_indel_vote(
-            &ops,
-            align_start,
-            POS,
-            REF_LEN,
-            Kind::Deletion,
-            DEL_LEN as u64,
-            NO_SPAN_NEEDED,
-        )
+        let site = (POS, &window[1_000..1_003], &window[1_000..1_001]);
+        let haplotypes = site_haplotypes(window, 0, 980, 1_030, site, &[]).unwrap();
+        let q = (POS as i64 + 1 + shift) as usize;
+        let mut bases = window[950..q].to_vec();
+        bases.extend_from_slice(&window[q + 2..1_052]);
+        let ops = [Op::new(Kind::Match, q - 950), Op::new(Kind::Deletion, 2), Op::new(Kind::Match, 1_050 - q)];
+        read_bases_over(&ops, &bases, 950, 980, 1_030).and_then(|b| haplotype_vote(b, &haplotypes))
     }
 
     #[test]
-    fn test_deletion_vote_is_the_same_across_the_whole_pad() {
-        // INDEL_POS_PAD exists because an aligner left-aligns an indel inside
-        // a repeat, so the same 2 bp deletion is legally spelled a few bases
-        // either way. The vote was read off M coverage of POS and POS+REF_LEN,
-        // and a `D` shifted by 1..=indel_len swallows one of those two bases:
-        // the read then entered neither count and both numerator and
-        // denominator shrank. Non-monotonic in the shift -- Carries at -3 and
-        // at 0, dropped at -2 and -1 -- which is what makes it a bug.
-        for shift in -(INDEL_POS_PAD as i64)..=(INDEL_POS_PAD as i64) {
-            assert_eq!(
-                shifted_deletion_vote(shift),
-                Some(IndelVote::Carries),
-                "a 2 bp deletion {} bp from the junction is inside INDEL_POS_PAD, \
-                 so it carries the allele",
-                shift
-            );
+    fn test_a_deletion_written_anywhere_along_its_repeat_carries() {
+        // Along a repeat the aligner may write one deletion anywhere (N13),
+        // further than any fixed pad (N15). The read's bases are the same
+        // whatever the spelling, so the vote is too.
+        let window: Vec<u8> = (0..2_000).map(|i| b"AC"[i % 2]).collect();
+        for shift in -18i64..=18 {
+            assert_eq!(shifted_deletion_vote(&window, shift), Some(IndelVote::Carries), "shift {}", shift);
         }
     }
 
     #[test]
-    fn test_deletion_beyond_the_pad_is_a_different_variant() {
-        // Past the pad the operation is somebody else's indel, and the read
-        // still spans this junction without one: it speaks against the allele.
-        for shift in [-(INDEL_POS_PAD as i64) - 1, INDEL_POS_PAD as i64 + 1] {
-            assert_eq!(
-                shifted_deletion_vote(shift),
-                Some(IndelVote::Spans),
-                "a deletion {} bp away is not this one",
-                shift
-            );
+    fn test_a_deletion_off_a_repeat_votes_by_how_far_its_bases_are() {
+        // In `ACGT` repeated no 2 bp deletion slides, so one written
+        // elsewhere deletes other bases. One base off it is one edit from
+        // the truth and two from the reference; two off is two from each,
+        // a tie; three or more off it is another variant (N15).
+        let window = cycling_contig();
+        for shift in -12i64..=12 {
+            let want = match shift.abs() {
+                0 | 1 => Some(IndelVote::Carries),
+                2 => None,
+                _ => Some(IndelVote::Spans),
+            };
+            assert_eq!(shifted_deletion_vote(&window, shift), want, "shift {}", shift);
         }
     }
 
     #[test]
-    fn test_insertion_vote_is_the_same_across_the_whole_pad() {
-        // An insertion consumes no reference, so it never swallowed either
-        // anchor base and was never affected. Pinned so the deletion fix
-        // cannot quietly change it.
-        const POS: u64 = 1_000;
-        const INS_LEN: usize = 4;
-        let align_start = POS - 50;
-        for shift in -(INDEL_POS_PAD as i64)..=(INDEL_POS_PAD as i64) {
-            let first = (POS as i64 + 1 + shift - align_start as i64) as usize;
-            let ops = [
-                Op::new(Kind::Match, first),
-                Op::new(Kind::Insertion, INS_LEN),
-                Op::new(Kind::Match, 100 - first),
-            ];
-            assert_eq!(
-                cigar_indel_vote(&ops, align_start, POS, 1, Kind::Insertion, INS_LEN as u64, NO_SPAN_NEEDED),
-                Some(IndelVote::Carries),
-                "a 4 bp insertion {} bp from the junction is inside INDEL_POS_PAD",
-                shift
-            );
-        }
+    fn test_an_insertion_votes_by_its_own_bases() {
+        // `A` > `ATTTT` at 1000 in `ACGT` repeated.
+        let window = cycling_contig();
+        let site = (1_000, &window[1_000..1_001], &b"ATTTT"[..]);
+        let haplotypes = site_haplotypes(&window, 0, 980, 1_030, site, &[]).unwrap();
+        let read = |inserted: &[u8]| {
+            let mut b = window[980..1_001].to_vec();
+            b.extend_from_slice(inserted);
+            b.extend_from_slice(&window[1_001..=1_030]);
+            haplotype_vote(&b, &haplotypes)
+        };
+        assert_eq!(read(b"TTTT"), Some(IndelVote::Carries));
+        assert_eq!(read(b"TTAT"), Some(IndelVote::Carries), "one base misread");
+        assert_eq!(read(b""), Some(IndelVote::Spans), "the reference itself");
+        // Another insertion of the same size is as many edits from the truth
+        // as from the reference, or fewer, so it never counts as spanning --
+        // the pad rule before this counted any same-size insertion.
+        assert_eq!(read(b"GGCA"), None);
+        assert_eq!(read(b"CGTA"), Some(IndelVote::Carries));
     }
 
     #[test]
-    fn test_a_read_that_does_not_reach_the_junction_votes_neither_way() {
-        // The `None` arm still has to exist: a read clipped across the
-        // junction, or carrying a *different* indel that swallows one of the
-        // two anchor bases, is evidence for neither allele.
-        const POS: u64 = 1_000;
-        // Ends on the anchor base: never sees the far side.
-        let short = [Op::new(Kind::Match, 51), Op::new(Kind::SoftClip, 49)];
-        assert_eq!(
-            cigar_indel_vote(&short, POS - 50, POS, 3, Kind::Deletion, 2, NO_SPAN_NEEDED),
-            None,
-            "a read clipped before the far side votes neither way"
-        );
-        // A 4 bp deletion one base left of the junction: wrong length, and it
-        // swallows the anchor base.
-        let other = [
-            Op::new(Kind::Match, 50),
-            Op::new(Kind::Deletion, 4),
-            Op::new(Kind::Match, 50),
-        ];
-        assert_eq!(
-            cigar_indel_vote(&other, POS - 50, POS, 3, Kind::Deletion, 2, NO_SPAN_NEEDED),
-            None,
-            "a different indel over the anchor base is evidence for neither allele"
-        );
+    fn test_a_read_equally_far_from_both_does_not_vote() {
+        // Two bases of the truth's four: two edits from either haplotype.
+        let window = cycling_contig();
+        let site = (1_000, &window[1_000..1_001], &b"ATTTT"[..]);
+        let haplotypes = site_haplotypes(&window, 0, 980, 1_030, site, &[]).unwrap();
+        let mut b = window[980..1_001].to_vec();
+        b.extend_from_slice(b"TT");
+        b.extend_from_slice(&window[1_001..=1_030]);
+        assert_eq!(haplotype_vote(&b, &haplotypes), None);
+        assert_eq!(levenshtein(b"kitten", b"SITTING"), 3, "the ruler, case aside");
     }
 
     #[test]
