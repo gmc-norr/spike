@@ -519,6 +519,27 @@ other verdict -- they separate "spans this junction without the indel" from
 the junction, or carrying a *different* indel there -- is evidence for neither
 and enters neither count.
 
+**Only reads that reach well past an indel vote on it, either way.** Near
+its end a read's indel is written as mismatches or a clip rather than a gap,
+and a read that stops inside the repeat the indel sits in cannot show an
+extra or missing unit at all. Either way it aligns as the reference, whatever
+it carries. So `validate` first finds the indel's repeat region: the deleted
+or inserted unit, extended along the reference for as long as it repeats. A
+read then votes only if its alignment, clips excluded, covers the base on each
+side of that region and 10 more beyond it. The test is the same for a carrier
+and for a reference read.
+
+Measured on HG002 35x, graded against GIAB het indels at 0.5:
+
+| | before | after |
+| --- | --- | --- |
+| chr20 (6,663 indels): out of range | 9.3% | 3.7% |
+| chr20: mean fraction | 0.41 | 0.48 |
+| chr21 + chr22 (8,008 indels, not used to choose 10): out of range | 9.3% | 4.1% |
+| fragments kept | | 81% |
+
+SNVs fail at about 0.6-0.8% on the same BAM.
+
 The three rows that measure nothing still push a result row, so the event
 counts as covered, and the row says out loud that nothing was measured. Only a
 **complex** allele -- one that changes length *and* rewrites the anchor base,

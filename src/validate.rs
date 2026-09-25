@@ -296,7 +296,9 @@ fn print_usage() {
     eprintln!("  SNP, small indel allele_freq (a substitution from the pileup; a small");
     eprintln!("  and MNV          indel from an I/D operation of its own length at the");
     eprintln!("                   junction just past the anchor base, within 10bp,");
-    eprintln!("                   against the reads spanning it without one; an MNV");
+    eprintln!("                   against the reads spanning it without one -- only");
+    eprintln!("                   reads reaching 10bp past the indel's repeat on both");
+    eprintln!("                   sides vote; an MNV");
     eprintln!("                   from the whole alt run, read by read). Each read");
     eprintln!("                   pair votes once; a pair whose mates disagree");
     eprintln!("                   does not vote");
@@ -793,6 +795,20 @@ const AF_MAX_DEPTH_HINT: u32 = 1_000_000;
 /// truth record's own POS. 10 bp covers that without reaching a neighbour.
 const INDEL_POS_PAD: u64 = 10;
 
+/// Aligned bases a read needs past an indel's repeat region, on each side,
+/// before it may vote on the indel either way (N18). Near its end a read's
+/// indel is written as mismatches or a clip rather than a gap, and a read that
+/// stops inside the repeat cannot show an extra or missing unit at all, so
+/// such a read aligns as the reference whatever it carries. Chosen on HG002
+/// 35x chr20 and confirmed on held-out chr21/chr22: it takes the het-indel
+/// out-of-range rate from 9.3% to 4.1% and keeps 81% of fragments.
+const INDEL_FLANK: u64 = 10;
+
+/// Reference bases fetched on each side of a small indel to find its repeat
+/// region. A repeat longer than this is cut off here, which only makes the
+/// region -- and the span a read needs -- shorter than it should be.
+const INDEL_REF_WINDOW: u64 = 2_000;
+
 /// What a truth record's REF/ALT pair describes, and with it how the reads
 /// carrying it have to be counted.
 enum SmallVariantShape {
@@ -1078,6 +1094,27 @@ fn count_indel_reads(
     min_mapq: u8,
 ) -> Result<(u32, u32)> {
     let ref_len = event.ref_allele.as_ref().map_or(1, |r| r.len() as u64);
+    let inserted: Vec<u8> = match kind {
+        Kind::Insertion => event
+            .alt_allele
+            .as_ref()
+            .map_or(Vec::new(), |a| a[1..].to_ascii_uppercase()),
+        _ => Vec::new(),
+    };
+    let (window_start, window) = crate::reference::fetch_window(
+        ref_path,
+        &event.chrom,
+        event.start.saturating_sub(INDEL_REF_WINDOW),
+        event.start + ref_len + INDEL_REF_WINDOW,
+    )?;
+    let (region_start, region_end) =
+        indel_repeat_region(&window, window_start, event.start, kind, indel_len, &inserted);
+    // A read votes only if it reaches INDEL_FLANK bases past the base on
+    // either side of the repeat region (N18).
+    let needs = (
+        region_start.saturating_sub(1 + INDEL_FLANK),
+        region_end + INDEL_FLANK,
+    );
     let mut votes: HashMap<Vec<u8>, Vec<IndelVote>> = HashMap::new();
 
     // Every read that votes either way covers the anchor base and the base
@@ -1091,7 +1128,7 @@ fn count_indel_reads(
         min_mapq,
         &mut |name, align_start, ops| {
             if let Some(vote) =
-                cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len)
+                cigar_indel_vote(ops, align_start, event.start, ref_len, kind, indel_len, needs)
             {
                 votes.entry(name.to_vec()).or_default().push(vote);
             }
@@ -1119,11 +1156,61 @@ enum IndelVote {
     Spans,
 }
 
+/// The stretch of reference a small indel can slide along, 0-based
+/// `[start, end)`: the deleted bases, or the empty junction an insertion
+/// goes into, widened both ways for as long as the reference repeats the
+/// deleted or inserted unit. `pos` is the anchor base; `window` holds the
+/// reference from `window_start` on, and the region stops at its edges.
+fn indel_repeat_region(
+    window: &[u8],
+    window_start: u64,
+    pos: u64,
+    kind: Kind,
+    len: u64,
+    inserted: &[u8],
+) -> (u64, u64) {
+    let base = |p: u64| -> Option<u8> {
+        let i = usize::try_from(p.checked_sub(window_start)?).ok()?;
+        window.get(i).map(u8::to_ascii_uppercase)
+    };
+    let same = |a: Option<u8>, b: Option<u8>| matches!((a, b), (Some(x), Some(y)) if x == y);
+    match kind {
+        Kind::Deletion => {
+            let (mut s, mut e) = (pos + 1, pos + 1 + len);
+            while s > 0 && same(base(s - 1), base(s - 1 + len)) {
+                s -= 1;
+            }
+            while same(base(e), base(e - len)) {
+                e += 1;
+            }
+            (s, e)
+        }
+        _ if inserted.is_empty() => (pos + 1, pos + 1),
+        _ => {
+            let unit = |k: usize| Some(inserted[k % inserted.len()].to_ascii_uppercase());
+            let (mut s, mut e) = (pos + 1, pos + 1);
+            let mut k = 0;
+            while same(base(e), unit(k)) {
+                e += 1;
+                k += 1;
+            }
+            k = 0;
+            while s > 0 && same(base(s - 1), unit(inserted.len() - 1 - k % inserted.len())) {
+                s -= 1;
+                k += 1;
+            }
+            (s, e)
+        }
+    }
+}
+
 /// Read one alignment's vote off its CIGAR, or `None` if it neither carries
 /// the allele nor spans the junction without it -- clipped across it, or
 /// carrying a *different* indel that swallows one of the two reference bases
 /// the "spans" vote is anchored on. Such a read is evidence for neither allele
-/// and enters neither count.
+/// and enters neither count. So is one whose alignment does not cover
+/// `needs`, 0-based and inclusive: it stops too close to the indel to show it
+/// (N18).
 fn cigar_indel_vote(
     ops: &[noodles::sam::alignment::record::cigar::Op],
     align_start: u64,
@@ -1131,6 +1218,7 @@ fn cigar_indel_vote(
     ref_len: u64,
     kind: Kind,
     indel_len: u64,
+    needs: (u64, u64),
 ) -> Option<IndelVote> {
     // The two reference bases a "spans" vote is anchored on: the anchor base
     // the REF allele starts at, and the first base past the REF allele.
@@ -1158,6 +1246,13 @@ fn cigar_indel_vote(
             // Insertion, SoftClip, HardClip and Pad consume no reference.
             _ => {}
         }
+    }
+
+    // `ref_pos` is now one past the alignment's last reference base. A read
+    // that stops short of `needs` on either side cannot show the indel, so it
+    // votes neither way -- carrier or not, the same test for both (N18).
+    if align_start > needs.0 || ref_pos <= needs.1 {
+        return None;
     }
 
     // An operation of this allele's own kind and length inside the pad *is*
@@ -4051,6 +4146,129 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // --- N18: a read that stops at an indel cannot show it ---
+
+    /// A read over the reference from `s` with one `kind` operation at
+    /// reference position `q` (inserting `inserted`).
+    fn read_with_indel(seq: &[u8], s: usize, q: usize, kind: Kind, len: usize, inserted: &[u8]) -> TestRead {
+        let first = q - s;
+        let mut bases = seq[s..q].to_vec();
+        let second = match kind {
+            Kind::Deletion => {
+                let second = TEST_READ_LEN - first;
+                bases.extend_from_slice(&seq[q + len..q + len + second]);
+                second
+            }
+            _ => {
+                let second = TEST_READ_LEN - first - len;
+                bases.extend_from_slice(inserted);
+                bases.extend_from_slice(&seq[q..q + second]);
+                second
+            }
+        };
+        (s, vec![(Kind::Match, first), (kind, len), (Kind::Match, second)], bases)
+    }
+
+    /// Two sites on `cycling_contig`, each with 8 pairs carrying the indel,
+    /// 8 reference pairs reaching well past it, and 10 reference-aligned
+    /// pairs that stop at it -- 6 ending 3 bases past the site, 4 starting 2
+    /// bases before the anchor -- the way an aligner writes a carrier whose
+    /// read ends there. Read 2 is always 200 bp downstream, clear of both.
+    ///
+    /// - chrA:5001 `ACG>A`, deleting 0-based 5001..5003.
+    /// - chrA:8001 `A>ATTTT`, inserting `TTTT` in front of 8001.
+    fn read_end_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let plain = |s: usize| -> TestRead {
+            (s, vec![(Kind::Match, TEST_READ_LEN)], seq[s..s + TEST_READ_LEN].to_vec())
+        };
+        let mut pairs: Vec<(String, TestRead, TestRead)> = Vec::new();
+        let mut push = |name: String, read1: TestRead| {
+            let mate = plain(read1.0 + 200);
+            pairs.push((name, read1, mate));
+        };
+        for (site, far, kind, len, inserted, tag) in [
+            (5_000usize, 5_003usize, Kind::Deletion, 2usize, &b""[..], "d"),
+            (8_000, 8_001, Kind::Insertion, 4, &b"TTTT"[..], "i"),
+        ] {
+            for i in 0..8usize {
+                push(format!("{}_alt{}", tag, i), read_with_indel(&seq, site - 49 + i, site + 1, kind, len, inserted));
+                push(format!("{}_ref{}", tag, i), plain(site - 59 + i));
+            }
+            for i in 0..6usize {
+                push(format!("{}_ends{}", tag, i), plain(far + 4 - TEST_READ_LEN));
+            }
+            for i in 0..4usize {
+                push(format!("{}_starts{}", tag, i), plain(site - 2));
+            }
+        }
+        pairs_cram(tag, &seq, &pairs)
+    }
+
+    #[test]
+    fn test_a_read_that_stops_at_an_indel_does_not_vote_on_it() {
+        // Near a read's end an aligner writes an indel as mismatches or a
+        // clip, not a gap, so a carrier whose read stops there aligns as the
+        // reference and voted `Spans` (N18). Reads that stop at the site are
+        // dropped from both counts: 8 of 16, not 8 of 26.
+        let (dir, fasta, cram) = read_end_cram("n18_ends");
+        let seq = cycling_contig();
+        for (pos, reference, alt, what) in [
+            (5_000u64, seq[5_000..5_003].to_vec(), seq[5_000..5_001].to_vec(), "a deletion"),
+            (8_000, seq[8_000..8_001].to_vec(), [&seq[8_000..8_001], &b"TTTT"[..]].concat(), "an insertion"),
+        ] {
+            let r = check_allele_freq(&cram, &fasta, &small_variant_event_at(pos, &reference, &alt), 20).unwrap();
+            assert_eq!(r.observed, "0.50", "{}: reads stopping at it must not vote", what);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_indel_repeat_region_covers_the_whole_repeat() {
+        // A window from 0: `GATG` + (AC)x10 + `GATC`, the repeat at 4..24
+        // (a `C` in front of it would belong to it too, read as (CA)n). A
+        // 2 bp deletion anchored at 5 (deleting 6..8) can slide over all of
+        // it; so can an `AC` insertion anchored at 9.
+        let mut w = b"GATG".to_vec();
+        w.extend(std::iter::repeat_n(&b"AC"[..], 10).flatten());
+        w.extend_from_slice(b"GATC");
+        assert_eq!(indel_repeat_region(&w, 0, 5, Kind::Deletion, 2, b""), (4, 24));
+        assert_eq!(indel_repeat_region(&w, 0, 9, Kind::Insertion, 2, b"AC"), (4, 24));
+        // Off the repeat nothing slides: the deleted bases, the bare junction.
+        assert_eq!(indel_repeat_region(&w, 0, 0, Kind::Deletion, 1, b""), (1, 2));
+        assert_eq!(indel_repeat_region(&w, 0, 0, Kind::Insertion, 1, b"T"), (1, 1));
+        // A poly-T insertion slides along the whole run, and the window
+        // offset is honoured.
+        let t = b"GGATTTTTTCGG";
+        assert_eq!(indel_repeat_region(t, 100, 103, Kind::Insertion, 1, b"T"), (103, 109));
+    }
+
+    #[test]
+    fn test_a_read_must_reach_past_the_span_it_needs_on_both_sides() {
+        // The same test for a carrier and for a spanning read (N18): stopping
+        // one base short on either side takes the vote away.
+        const POS: u64 = 1_000;
+        let carrier = [
+            Op::new(Kind::Match, 51),
+            Op::new(Kind::Deletion, 2),
+            Op::new(Kind::Match, 49),
+        ];
+        let plain = [Op::new(Kind::Match, 100)];
+        for (ops, span, vote) in [
+            (&carrier[..], 102u64, IndelVote::Carries),
+            (&plain[..], 100, IndelVote::Spans),
+        ] {
+            let (start, end) = (950, 950 + span - 1);
+            let v = |needs| cigar_indel_vote(ops, start, POS, 3, Kind::Deletion, 2, needs);
+            assert_eq!(v((start, end)), Some(vote), "covers exactly what it needs");
+            assert_eq!(v((start - 1, end)), None, "one base short on the left");
+            assert_eq!(v((start, end + 1)), None, "one base short on the right");
+        }
+    }
+
+    /// `needs` for the tests of the vote itself: any alignment covers it.
+    const NO_SPAN_NEEDED: (u64, u64) = (u64::MAX, 0);
+
     /// A 2 bp deletion's `D` operation, shifted `shift` bases from the
     /// junction just past the truth record's anchor base. `ACG` > `A` at
     /// 0-based 1000, read aligned over 950..1050.
@@ -4072,6 +4290,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             REF_LEN,
             Kind::Deletion,
             DEL_LEN as u64,
+            NO_SPAN_NEEDED,
         )
     }
 
@@ -4125,7 +4344,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
                 Op::new(Kind::Match, 100 - first),
             ];
             assert_eq!(
-                cigar_indel_vote(&ops, align_start, POS, 1, Kind::Insertion, INS_LEN as u64),
+                cigar_indel_vote(&ops, align_start, POS, 1, Kind::Insertion, INS_LEN as u64, NO_SPAN_NEEDED),
                 Some(IndelVote::Carries),
                 "a 4 bp insertion {} bp from the junction is inside INDEL_POS_PAD",
                 shift
@@ -4142,7 +4361,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         // Ends on the anchor base: never sees the far side.
         let short = [Op::new(Kind::Match, 51), Op::new(Kind::SoftClip, 49)];
         assert_eq!(
-            cigar_indel_vote(&short, POS - 50, POS, 3, Kind::Deletion, 2),
+            cigar_indel_vote(&short, POS - 50, POS, 3, Kind::Deletion, 2, NO_SPAN_NEEDED),
             None,
             "a read clipped before the far side votes neither way"
         );
@@ -4154,7 +4373,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
             Op::new(Kind::Match, 50),
         ];
         assert_eq!(
-            cigar_indel_vote(&other, POS - 50, POS, 3, Kind::Deletion, 2),
+            cigar_indel_vote(&other, POS - 50, POS, 3, Kind::Deletion, 2, NO_SPAN_NEEDED),
             None,
             "a different indel over the anchor base is evidence for neither allele"
         );
