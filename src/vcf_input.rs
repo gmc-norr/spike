@@ -127,15 +127,8 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
     for record in &records {
         match record.sv_type {
             SvTypeTag::Del => {
-                let end = match resolve_sv_end(record) {
-                    Some(e) => e,
-                    None => {
-                        log::warn!(
-                            "DEL record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
-                            record.id
-                        );
-                        continue;
-                    }
+                let Some(end) = resolve_sv_end_or_warn(record, "DEL") else {
+                    continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
@@ -152,15 +145,8 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Dup => {
-                let end = match resolve_sv_end(record) {
-                    Some(e) => e,
-                    None => {
-                        log::warn!(
-                            "DUP record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
-                            record.id
-                        );
-                        continue;
-                    }
+                let Some(end) = resolve_sv_end_or_warn(record, "DUP") else {
+                    continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
@@ -176,15 +162,8 @@ fn records_to_events(records: Vec<SvRecord>) -> Result<Vec<SimEvent>> {
                 });
             }
             SvTypeTag::Inv => {
-                let end = match resolve_sv_end(record) {
-                    Some(e) => e,
-                    None => {
-                        log::warn!(
-                            "INV record {} has no END, no SVLEN, and a single-base REF (no length information); skipping",
-                            record.id
-                        );
-                        continue;
-                    }
+                let Some(end) = resolve_sv_end_or_warn(record, "INV") else {
+                    continue;
                 };
                 let gene = parse_info_field(&record.info, "SIM_GENE")
                     .unwrap_or("unknown")
@@ -412,19 +391,63 @@ fn parse_info_i64(info: &str, key: &str) -> Option<i64> {
     parse_info_field(info, key)?.parse().ok()
 }
 
+/// True when ALT carries sequence of its own, rather than being a symbolic
+/// allele (`<DEL>`) or the bare anchor base. Same test the INS arm uses to
+/// find an explicit inserted sequence.
+fn alt_carries_sequence(alt: &str) -> bool {
+    !alt.starts_with('<') && alt.len() > 1
+}
+
 /// Resolve a DEL/DUP/INV record's end coordinate: prefer INFO/END, then
-/// INFO/SVLEN, then — for a sequence-resolved record (REF = anchor base +
-/// affected bases, ALT = the anchor alone) — the length implied by REF.
-/// Returns `None` when none of those give a length (single-base REF, no
-/// END, no SVLEN): the caller must reject the record rather than silently
-/// treat it as a 1 bp event.
+/// INFO/SVLEN, then the alleles.
+///
+/// Only two allele shapes give an unambiguous span. REF = anchor base +
+/// affected bases, with ALT carrying no sequence of its own (symbolic, or
+/// the anchor alone): the span is REF's length. And, for DUP, a single-base
+/// REF anchor with ALT = anchor + the duplicated copy: the span is that
+/// copy's length, read exactly as the INS arm reads an explicit insertion.
+///
+/// When both alleles carry sequence (a REF/ALT pair sharing a prefix, or an
+/// equal-length substitution) the span cannot be read off REF's length: the
+/// event neither starts at POS nor spans all of REF, and guessing turns a
+/// malformed record into a plausible-looking wrong truth record. Such a
+/// record, and one with no length anywhere, return `None`; the caller
+/// rejects it rather than silently emitting a 1 bp event.
+// Stripping a shared REF/ALT prefix (the INS arm's L10 bug) would let the
+// first of those shapes be decoded here too; it is deliberately not done yet.
 fn resolve_sv_end(record: &SvRecord) -> Option<u64> {
     parse_info_u64(&record.info, "END")
         .or_else(|| parse_info_i64(&record.info, "SVLEN").map(|v| record.pos + v.unsigned_abs()))
         .or_else(|| {
-            (record.ref_allele.len() > 1)
-                .then(|| record.pos + record.ref_allele.len() as u64 - 1)
+            if alt_carries_sequence(&record.alt) {
+                // ALT = anchor + duplicated copy (the sequence-resolved DUP).
+                return (record.sv_type == SvTypeTag::Dup && record.ref_allele.len() == 1)
+                    .then(|| record.pos + record.alt.len() as u64 - 1);
+            }
+            (record.ref_allele.len() > 1).then(|| record.pos + record.ref_allele.len() as u64 - 1)
         })
+}
+
+/// Resolve a DEL/DUP/INV end, warning when the record has to be dropped.
+/// Shared by the three arms so a rejection reads the same whatever the type.
+fn resolve_sv_end_or_warn(record: &SvRecord, sv_type: &str) -> Option<u64> {
+    let end = resolve_sv_end(record);
+    if end.is_none() {
+        log::warn!("{}", no_length_warning(record, sv_type));
+    }
+    end
+}
+
+/// Message logged when a DEL/DUP/INV record's span cannot be resolved.
+/// Names chrom:pos as well as the ID, because SV records routinely carry
+/// `ID=.`, which on its own does not say which record was dropped.
+/// `record.pos` is the VCF POS column verbatim for these types.
+fn no_length_warning(record: &SvRecord, sv_type: &str) -> String {
+    format!(
+        "{} record {} at {}:{} has no END and no SVLEN, and its REF/ALT alleles are not a shape \
+         a length can be read from; skipping",
+        sv_type, record.id, record.chrom, record.pos
+    )
 }
 
 /// Check if a VCF allele string contains only valid DNA bases (A, C, G, T).
@@ -806,5 +829,142 @@ mod tests {
         let records = parse_vcf_records(vcf.as_bytes()).unwrap();
         let events = records_to_events(records).unwrap();
         assert!(events.is_empty());
+    }
+
+    /// Real chr20:38412500-38412520 reference sequence, used by the
+    /// sequence-resolved cases below.
+    const REF21: &str = "GTTAAAGTTTATCAGAAAATT";
+    /// Its reverse complement.
+    const RC21: &str = "AATTTTCTGATAAACTTTAAC";
+
+    /// A DEL whose ALT carries sequence of its own is not "REF = anchor +
+    /// deleted bases": here REF and ALT share a 7 bp prefix, so the real
+    /// event is a 14 bp deletion at 38412507-38412520 anchored at 38412506.
+    /// Deriving the span from REF alone gave END=38412520;SVLEN=-20 — a
+    /// plausible-looking record starting 6 bases too early. Until the
+    /// common prefix is stripped (see the INS arm), reject it instead.
+    #[test]
+    fn test_del_sequence_resolved_multibase_alt_is_rejected() {
+        let vcf = format!("chr20\t38412500\t.\t{}\tGTTAAAG\t.\t.\tSVTYPE=DEL\n", REF21);
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(
+            events.is_empty(),
+            "REF/ALT sharing a prefix must not be read as a REF-length event: {:?}",
+            events
+        );
+    }
+
+    /// An INV written as an equal-length substitution (REF = the inverted
+    /// span, ALT = its reverse complement). VCF 4.3 uses no padding base
+    /// when neither allele is empty, so POS is the first inverted base and
+    /// spike's "POS is the preceding base" reading is off by one. Deriving
+    /// from REF gave END=38412520 over a 20 bp span starting at 38412501 —
+    /// one base short and one base right of the true 21 bp span.
+    #[test]
+    fn test_inv_equal_length_ref_and_alt_is_rejected() {
+        let vcf = format!(
+            "chr20\t38412500\t.\t{}\t{}\t.\t.\tSVTYPE=INV\n",
+            REF21, RC21
+        );
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(
+            events.is_empty(),
+            "an equal-length REF/ALT substitution must not be read as a REF-length event: {:?}",
+            events
+        );
+    }
+
+    /// The well-formed sequence-resolved DUP: single-base REF anchor, ALT =
+    /// anchor + the duplicated copy. The length is in ALT, exactly as for a
+    /// sequence INS, so it must be read from there rather than rejected.
+    #[test]
+    fn test_dup_no_end_no_svlen_derives_length_from_alt_sequence() {
+        let vcf = format!("chr20\t38412499\t.\tT\tT{}\t.\t.\tSVTYPE=DUP\n", REF21);
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
+        match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => {
+                // POS is the preceding base; the 21 duplicated bases are
+                // 1-based 38412500-38412520 == 0-based [38412499, 38412520).
+                assert_eq!(*dup_start, 38412499);
+                assert_eq!(*dup_end, 38412520);
+            }
+            _ => panic!("expected Duplication"),
+        }
+    }
+
+    /// A DUP with sequence in both REF and ALT is the same ambiguous shape
+    /// as the DEL above (shared prefix), not the anchor+copy shape.
+    #[test]
+    fn test_dup_multibase_ref_and_alt_is_rejected() {
+        let vcf = "chr20\t38412499\t.\tTGTT\tTGTTTGTT\t.\t.\tSVTYPE=DUP\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert!(
+            events.is_empty(),
+            "REF and ALT both carrying sequence must not be read as a length: {:?}",
+            events
+        );
+    }
+
+    /// A derived end must survive the round trip through the truth VCF's
+    /// `SVTYPE=...;END=` form: END is 1-based inclusive and numerically
+    /// equal to the 0-based half-open end, POS to the 0-based start.
+    #[test]
+    fn test_derived_sv_end_round_trips_through_end_info() {
+        let vcf = format!("chr20\t38412499\t.\tT\tT{}\t.\t.\tSVTYPE=DUP\n", REF21);
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        assert_eq!(events.len(), 1, "expected one DUP event, got {:?}", events);
+        let (start, end) = match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => (*dup_start, *dup_end),
+            _ => panic!("expected Duplication"),
+        };
+
+        // The shape truth.rs writes for a Duplication.
+        let round = format!(
+            "chr20\t{}\t.\tT\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={}\n",
+            start,
+            end,
+            end - start
+        );
+        let records = parse_vcf_records(round.as_bytes()).unwrap();
+        let events = records_to_events(records).unwrap();
+        match &events[0] {
+            SimEvent::Duplication {
+                dup_start, dup_end, ..
+            } => {
+                assert_eq!(*dup_start, start);
+                assert_eq!(*dup_end, end);
+            }
+            _ => panic!("expected Duplication"),
+        }
+    }
+
+    /// SV records routinely carry `ID=.`, so the skip warning must name
+    /// chrom:pos as well — otherwise the dropped record cannot be found.
+    #[test]
+    fn test_no_length_warning_identifies_record_by_chrom_and_pos() {
+        let vcf = "chr20\t38412500\t.\tN\t<DEL>\t.\t.\tSVTYPE=DEL\n";
+        let records = parse_vcf_records(vcf.as_bytes()).unwrap();
+        let msg = no_length_warning(&records[0], "DEL");
+        assert!(
+            msg.contains("chr20:38412500"),
+            "warning must locate the record: {}",
+            msg
+        );
+        assert!(msg.contains("DEL"), "warning must name the type: {}", msg);
+        assert!(
+            msg.contains("skipping"),
+            "warning must say the record is dropped: {}",
+            msg
+        );
     }
 }

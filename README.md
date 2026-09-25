@@ -234,7 +234,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
 ```
 
 Supported VCF records:
-- **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN. A DEL/DUP/INV with neither falls back to the length implied by a sequence-resolved `REF` (`REF` longer than 1 base, e.g. `REF=ACGT ALT=A`); if `REF` is a single base too, there is no length information at all and the record is rejected with a warning (logged to stderr) instead of being silently treated as a 1 bp event
+- **DEL, DUP, INV, INS** — standard SVTYPE records with END or SVLEN. A DEL/DUP/INV with neither falls back to the alleles, but only where they give an unambiguous span: a sequence-resolved `REF` (longer than 1 base) whose `ALT` is symbolic or the anchor base alone (e.g. `REF=ACGT ALT=A`), or — for DUP — a single-base `REF` anchor whose `ALT` is that anchor plus the duplicated copy (`REF=G ALT=GACGT...`, the same form a sequence-resolved INS uses). A record where both `REF` and `ALT` carry sequence (a pair sharing a prefix, or an equal-length substitution) does not start at `POS` and does not span all of `REF`, so no length is read from it; that record, and one with no length anywhere, is rejected with a warning naming its type and `chrom:pos` (logged to stderr) instead of being silently treated as a 1 bp event
 - **BND** — breakend notation, paired by MATEID into Fusion events. All four forms are read (`t[p[`, `]p]t`, `t]p]`, `[p[t`); either record of a mate pair gives the same fusion
 - **SNP/indel** — standard REF/ALT records without SVTYPE
 - **AF from INFO** — reads `SIM_VAF`, `VAF`, or `AF` fields (checked in that order)
