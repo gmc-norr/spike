@@ -3416,7 +3416,7 @@ the exit status.
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
-| T4 | CR4 on a real hard locus (measurement only) | Not started |
+| T4 | CR4 on a real hard locus (measurement only) | Plan locked |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
 | T6 | INS sequence identity, advisory | Not started |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
@@ -3953,3 +3953,70 @@ script summed to zero. The script now raises on a non-zero exit instead of retur
 uses `-G SUPPLEMENTARY` (whose default filter-out list already holds UNMAP, SECONDARY, QCFAIL and
 DUP) with `-J`, so a position a read's CIGAR deletes counts as covered, matching validate's own
 `count_depth_in_region`. **No number in this section comes from the broken run.**
+
+### T4 -- CR4 on a real hard locus
+
+#### Plan: T4, does the resistant warning fire on real data (locked before any scan)
+
+**Measurement only. No production code changes.**
+
+**The question CR4's own result left open**, in its words: *"Not measured: a real locus where the
+warning should fire. C1 shows it fires on the synthetic case, and C4 that it stays quiet on
+ordinary loci; a hard real locus (a segmental duplication, say) has not been tried."* CR4's C4
+found `SIM_RESIST` between 0.003 and 0.083 on 40 ordinary benchmark loci, against a warning
+threshold of 0.10. So the threshold has never been crossed by real data.
+
+**Claim.** `SIM_RESIST > census::WARN_ABOVE` fires on real chr20 loci chosen for a high share of
+low-MAPQ reads at ordinary depth.
+
+**The scan, locked.** Step across chr20 in **100 kb** strides; at each stride take the **10 kb**
+window starting there. For each window, over mapped, primary (not secondary, not supplementary),
+non-duplicate, non-QC-fail records:
+
+- `low_share` = the share with **MAPQ < 20**;
+- `any_depth` = mean read depth at any MAPQ (`samtools depth -J -G SUPPLEMENTARY`, whose default
+  filter-out list already holds UNMAP, SECONDARY, QCFAIL and DUP).
+
+A window is **eligible** when its `any_depth` lies in **[0.5, 2.0] times the median `any_depth`
+over all scanned windows** -- "ordinary total depth", so the scan cannot pick a window that is
+merely empty or merely a pile-up. Those bounds are set here, before any window is seen.
+
+**The events.** The **three eligible windows with the highest `low_share`**, each run twice --
+`del:chr20:s-e` and `dup:chr20:s-e`, `--seed 1`, on
+`HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam` -- so **six runs**. For each: spike's
+exit status, `SIM_RESIST`, `SIM_DEPTH_FOLD`, and whether each of the two warnings printed.
+
+**The control, and it is the half that makes this mean anything.** The **three eligible windows
+with the lowest `low_share`** are run the same way, six more runs. They **must not** warn on
+`SIM_RESIST`. A scan whose hardest and easiest windows both warn is not selecting for what it
+claims, and the result is inconclusive whatever the six hard runs say.
+
+**Criteria.**
+
+- **C1, the accept side (the hard loci).** Of the six hard runs, **at least 4 warn on
+  `SIM_RESIST`** -> the claim is **supported**. **1 to 3** -> **weakly supported**, and the count
+  is reported as it is. **0** -> **refuted**: the warning still has never fired on real data, and
+  that is a finding about the threshold, not about the loci.
+- **C2, the reject side (the control).** **0 of the six control runs warn on `SIM_RESIST`.** If any
+  does, T4 is **inconclusive** and the scan is reported as not discriminating.
+- **C3, every run is accounted for.** A run spike refuses is reported with its exit status and its
+  reason, and counted as neither a warn nor a non-warn; more than 2 refusals among the six hard
+  runs makes C1 inconclusive.
+
+**Outcome rules.** No production code is written either way. Supported or weakly supported: record
+the table, and record what the `SIM_RESIST` values were, since CR4's threshold of 0.10 was locked
+without a real crossing to calibrate it. Refuted: record that the threshold is untouched by real
+chr20 data at 35x, and say so plainly beside CR4's own claim. **No threshold is changed**, here or
+afterwards: that would be choosing one after seeing its distribution.
+
+**What must be true of the inputs, and how each will be verified.**
+
+- *The scan's depth filter must not be defeated by reference gaps.* chr20's centromere and
+  telomeres are runs of `N` with no reads, so those windows fall below 0.5x the median and are
+  excluded by the eligibility rule rather than by a hand-written blacklist. Verified by reporting
+  how many windows were excluded and the median the bound was taken from.
+- *`low_share` must be measured over the same record set at both MAPQ floors.* One `samtools view
+  -c -F 3844` and one with `-q 20` added, so the two counts differ only in the floor.
+- *`samtools depth` must not fail silently.* T3's own census returned 0.0 everywhere because
+  `--ff` is not one of its options and it exited non-zero while writing nothing. The scan raises on
+  a non-zero exit.
