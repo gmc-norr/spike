@@ -1761,6 +1761,110 @@ reverted. A third attempt needs a fresh plan, with its criteria locked before
 it looks at sites that neither attempt has seen. chr20, chr21 and chr22 have
 now all been seen.
 
+#### N15 plan, third attempt: the haplotype rule with the truth set's nearby records (locked before any code or held-out result)
+
+**Why a third attempt.** N19 found that the indel failures left after N18
+sit where GIAB writes one local change as several records a few bases apart.
+The second attempt compared a read with the reference plus *this* record
+alone. A read carrying the whole change was then near neither, and the rule
+missed its held-out bar (S4: -4.11 points against 5).
+
+**Principle.** A read supports a truth record when, of all the ways the
+nearby truth records can combine, the one its bases spell best includes that
+record.
+
+**Inputs, checked before writing this:**
+- **GIAB gives no phase.** None of the 4,048,342 records in the v4.2.1 HG002
+  VCF has a `|` genotype or a `PS` value. So the rule cannot be told which
+  copy a neighbour is on. Each read shows that itself.
+- **`validate` sees only the records in its truth file.** So each run below
+  gives it the site list plus every other GIAB PASS record within 500 bp of a
+  site: one line per ALT allele, `SIM_VAF` 1.0 if hom-alt, else 0.5. Only the
+  site-list sites are scored.
+- **The lists are rebuilt by `scripts/n15c_sites.py`.** On chr20 and
+  chr21+chr22 it reproduces the earlier site lists (ID labels aside) and
+  isolated lists byte for byte.
+
+**The rule** (re-implemented in `scripts/n15c_haplotypes.py`):
+- **Unchanged from the second attempt:** the window (N18's repeat region, the
+  base on each side and 10 more), the read's bases over it, one vote per
+  fragment (N16), MAPQ 20, and N14's grade.
+- **Candidate edits:** every other truth record with REF and ALT alleles
+  whose REF span lies inside the window, one per ALT allele. With more than
+  10, the site uses none, which is the second attempt's rule. That keeps a
+  site to at most 2,048 haplotypes per distinct read.
+- **Haplotypes:** the reference over the window, with every subset of the
+  site plus candidates applied whose REF spans do not overlap. No genotype
+  is used.
+- **Vote:** take the haplotypes nearest the read's bases by Levenshtein
+  distance. The read votes `Carries` if every one of them includes the site,
+  `Spans` if none does, and not at all otherwise.
+- **Not added: widening the window over a record that hangs over its edge.**
+  On chr20 it changed 1 of the 74 failing not-isolated sites.
+
+**Design data (chr20, already seen, so not evidence).** The Python rule on
+the chr20 sites, with chr20's truth file plus nearby records:
+
+| out of range | master (pad rule, N18) | second attempt | this rule |
+| --- | --- | --- | --- |
+| not isolated | 16.29% | 10.49% | 6.99% |
+| isolated | 1.29% | 1.15% | 1.07% |
+| overall | 3.73% | 2.64% | 2.03% |
+
+Candidate edits per site on chr20: 0 at 5,899 sites, 1 at 621, 2 at 106,
+3 at 26, 4 at 10, and 8 at 1. With the candidates dropped, the script matches
+the second attempt's `validate` counts at 6,663 / 6,663 sites.
+
+**The held-out sites: chr17, chr18 and chr19.** No N-item has used them; only
+README examples name chr17. Built from the truth VCF alone, before this
+commit:
+- **25,903** sites (chr17 9,023; chr18 8,440; chr19 8,440).
+- **21,421** isolated and **4,482** not isolated.
+- The truth file with nearby records holds 75,289 records.
+- sha256 prefixes: sites `988f15787bd407b9`, isolated `03341fdf663c7a3b`,
+  truth file `43b5a71404430e01`.
+
+**The runs.** `spike validate` runs on the untouched HG002 35x BAM with the
+held-out truth file, by three binaries:
+- master (`4efa0f4`, the pad rule after N18);
+- the second attempt (`26d7c87`);
+- this rule (the code commit after this one).
+
+The three N13 spellings are run as in the second attempt. chr20 (truth file
+`1089e7dffe1ffd01`, 18,969 records) and chr21+chr22 (`61d08a6c0bb9a353`,
+24,091 records) are run the same way, and are reported but not criteria.
+
+**Rulers (they must hold before the held-out run).** If one fails, the code
+is fixed, or this plan is amended, before any held-out result:
+- **R1:** adding the nearby records leaves master's carries and spans
+  unchanged at all 6,663 chr20 sites.
+- **R2:** on chr20, `validate`'s counts under this rule equal
+  `scripts/n15c_haplotypes.py`'s at 99% of sites or more.
+
+**Pass criteria, on chr17+chr18+chr19 (all must hold).** Scored by
+`scripts/n15c_score.py`. "Out of range" is an `allele_freq` FAIL among sites
+with a fractional observed value, as before.
+- **C1, the residual.** The not-isolated rate falls at least **5 points**
+  below master's.
+- **C2, isolated sites not made worse.** The isolated rate rises no more
+  than **0.5 points** above master's.
+- **C3, overall.** The overall rate is below master's.
+- **C4, the neighbours earn their place.** The not-isolated rate is below
+  the second attempt's.
+- **C5, spelling-proof.** The three N13 spellings get identical carries and
+  spans.
+
+Each criterion was checked against input it must reject. Fed the second
+attempt's chr21+chr22 runs, C1 and C4 fail. A copy of master's run with 60
+isolated passes turned to fails makes C2 and C3 fail. Mismatched spelling
+logs make C5 fail.
+
+**Reported, not criteria:** chr20 and chr21+chr22 under all three binaries;
+carriers gained and lost; verdict flips; candidate edits per site; run time.
+
+**If any criterion fails,** the rule is reverted, as both earlier attempts
+were.
+
 ### N16 · One depth floor, three different denominators
 
 *Found by the verification review. **Not fixed**.*
