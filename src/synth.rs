@@ -36,6 +36,13 @@ const MIN_MARKOV_OBS: usize = 30;
 /// so a deletion error is covered by real sequence instead of `N` padding (L1).
 const INDEL_SLACK: usize = 10;
 
+/// Quality reported for every `N` a synthetic read emits, whatever put it
+/// there — a reference `N`, padding past a contig end, or padding after the
+/// template ran out. An `N` is a no-call, and a real Illumina no-call is
+/// always Q2; the learned profile knows nothing about `N` and would hand one
+/// an ordinary score (often Q37) instead (L18).
+const N_QUAL: u8 = b'!' + 2; // Q2
+
 /// Empirical per-cycle quality score distributions learned from real reads.
 ///
 /// Two levels of conditioning:
@@ -395,9 +402,13 @@ impl<'a> SynthReadGenerator<'a> {
                 .sample_quality(read_num, c, true_base, prev_qual, rng);
 
             if true_base == b'N' {
+                // An `N` is a no-call and reports Q2, not the profile's `q`
+                // (L18). `q` is still drawn, so an `N` costs the same single
+                // random draw as any other base, and the Markov chain carries
+                // the quality the read actually reports.
                 seq.push(b'N');
-                qual.push(q);
-                prev_qual = Some(q);
+                qual.push(N_QUAL);
+                prev_qual = Some(N_QUAL);
                 idx += 1;
                 continue;
             }
@@ -438,7 +449,7 @@ impl<'a> SynthReadGenerator<'a> {
         // Pad only if the template itself ran out (contig or haplotype end).
         while seq.len() < rl {
             seq.push(b'N');
-            qual.push(b'!' + 2); // Q2
+            qual.push(N_QUAL);
         }
 
         // Truncate if insertions made it too long (shouldn't happen with while < rl, but safety).
@@ -1668,6 +1679,78 @@ mod tests {
             expected_rc.as_slice(),
             "real bases must come from the actually-covered span, not a shifted window"
         );
+    }
+
+    #[test]
+    fn test_reference_n_bases_get_q2() {
+        // A real sequencer reports a no-call as `N` at Q2. The learned
+        // profile knows nothing about `N`, so it handed a reference `N` an
+        // ordinary score (often Q37) and the read claimed a base it does not
+        // have with high confidence (L18).
+        let rl = 50usize;
+        let mut seq = scrambled_seq(1000, 29);
+        seq[520..540].fill(b'N');
+        let gen = mock_gen_over(seq, rl, 37, 37);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(3);
+
+        let (read_seq, read_qual) = gen.generate_read("chr1", 500, &no_alleles, 1, false, &mut rng);
+
+        let n_cycles: Vec<usize> = (0..rl).filter(|&i| read_seq[i] == b'N').collect();
+        assert_eq!(n_cycles.len(), 20, "expected the reference `N` run inside the read");
+        for c in n_cycles {
+            assert_eq!(
+                read_qual[c],
+                b'!' + 2,
+                "reference `N` at cycle {} reported Q{}, not Q2",
+                c,
+                read_qual[c] - b'!'
+            );
+        }
+    }
+
+    #[test]
+    fn test_contig_end_padding_n_gets_q2() {
+        // Same rule for the `N` that stands in for bases past the contig end
+        // on a reverse read: whatever puts an `N` in a read, it is a no-call
+        // and reports Q2 (L18).
+        let rl = 150usize;
+        let ref_start = 1000u64;
+        let overhang = 5usize;
+        let contig_len = ref_start as usize + rl - overhang;
+        let gen = mock_gen_over(scrambled_seq(contig_len, 23), rl, 37, 37);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(17);
+
+        let (read_seq, read_qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, &mut rng);
+
+        assert!(read_seq[..overhang].iter().all(|&b| b == b'N'), "expected padding at the 5' end");
+        for (c, &q) in read_qual[..overhang].iter().enumerate() {
+            assert_eq!(q, b'!' + 2, "contig-end padding `N` at cycle {} reported Q{}, not Q2", c, q - b'!');
+        }
+    }
+
+    #[test]
+    fn test_template_exhaustion_padding_n_gets_q2() {
+        // The third way an `N` reaches a read: the template ran out, so the
+        // tail is padded. Locks the third arm of the one rule so the three
+        // cannot drift apart again (L18).
+        let rl = 150usize;
+        let ref_start = 1000u64;
+        let short_by = 7usize;
+        let contig_len = ref_start as usize + rl - short_by;
+        let gen = mock_gen_over(scrambled_seq(contig_len, 31), rl, 37, 37);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(11);
+
+        let (read_seq, read_qual) =
+            gen.generate_read("chr1", ref_start, &no_alleles, 1, false, &mut rng);
+
+        assert_eq!(read_seq.len(), rl, "a synthetic read came out short");
+        assert!(read_seq[rl - short_by..].iter().all(|&b| b == b'N'), "expected a padded 3' tail");
+        for (c, &q) in read_qual.iter().enumerate().skip(rl - short_by) {
+            assert_eq!(q, b'!' + 2, "padding `N` at cycle {} reported Q{}, not Q2", c, q - b'!');
+        }
     }
 
     #[test]

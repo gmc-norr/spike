@@ -897,6 +897,8 @@ Both mates are generated in **sequencing order**, 5'→3' along the read. The re
 
 Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
 
+Every `N` a synthetic read emits is reported at **Q2**, whatever put it there — an `N` in the reference, padding for the part of a read that runs past a contig end, or padding after a deletion sequencing error exhausted the template. An `N` is a no-call, and a real Illumina no-call is always Q2 (all 682 `N` bases in 173,338 HG002 NovaSeq reads on chr20 are Q2); the learned profile knows nothing about `N` and would otherwise hand one an ordinary score, usually Q37. The Q2 is what the Markov chain carries forward, so the base after an `N` is sampled from the after-a-Q2 transition bin.
+
 ### Missing or unusable donor base qualities
 
 SAM's QUAL field is all-or-nothing per record: a read either has a full quality string or none at all (`*`). The two containers encode `*` differently and spike sees both — BAM keeps a per-base array with every byte `0xFF`, while noodles normalises a CRAM record's all-`0xFF` buffer to an *empty* one before spike ever sees it. A record with either shape, or carrying a raw quality above Q93 (the SAM maximum — a malformed record), is dropped during extraction: it is not included in the learned quality profile and does not contribute a read pair to the output. Dropped records are counted and logged as a warning (spike logs to stderr), e.g.:
