@@ -6115,3 +6115,53 @@ N5 null sites passing: 0 of 200
 - **The honest price:** at VAF 0.1 about 1 correct deletion in 15 has no read of spike's
   across its join, and the row fails it. Today's `split_reads` fails about 1 in 2.
 - The README states the measured rate, not a prediction.
+
+#### Result: RF14 code -- C1, C2 and C3 pass
+
+Code `54c238f`. The new binary was built in its own target dir (md5
+`25c83e17b9820b84752889a1389e49c5`). Master is `8b4b878` (md5 `4e2126fc...`).
+
+- **C1, tests first.**
+  - A plain rename came first, with the suite green at 547: `sim_ins_number` became
+    `sim_number`, where INS reads `sim_ins_N` and DEL reads `sim_del_N`, and
+    `carries_ins_probe` became `carries_junction_probe`.
+  - Then 7 new tests, each seen failing for the missing feature: the row's name and the
+    probe were stubs, DEL IDs were not read, and `split_reads` was still counted.
+  - All eleven mutations redden at least one test:
+    - the plan's eight: the name filter, the ID match, tolerance 0, tolerance 3, the right
+      half from END + 1, the START window only, `split_reads` counted for DEL, and
+      `split_reads` advisory for DUP too;
+    - three more: the left half one base early, secondary records counted, and a
+      MAPQ/duplicate filter.
+  - Three old tests pinned a DEL's `split_reads` as counted, and were updated:
+    - `test_the_each_end_row_fails_evidence_that_all_sits_at_one_breakpoint` now asserts it
+      is advisory;
+    - `test_the_each_end_row_is_advisory_in_the_table_and_in_the_json` runs on a DUP, whose
+      pooled row still counts;
+    - `test_the_any_mapq_row_is_advisory_in_the_table_and_in_the_json` has a strict total of
+      5/5, since a DEL now has 5 rows.
+  - 554 pass in debug and in release.
+  - One new clippy warning came from the test fixture's read tuple. A type alias removed it,
+    so the set is the same 15 as RF13's.
+- **C2.** `scripts/rf14_c2.py`: the Rust row's observed count equals the replica's on
+  **712 of 712**. That is 178 runs x (own truth, N2a, N2b, N3): both attempts' K runs and
+  the 70 RF6 runs.
+- **C3.** Master's and the new `validate` on the same merged BAMs, 178 runs: **no run where
+  master exits 0 and the new one does not.** Exit 0 goes from 109 to 145.
+
+  | Set | Runs | Master exit 0 | New exit 0 |
+  | --- | --- | --- | --- |
+  | RF14 second attempt's K | 66 | 41 | 55 |
+  | RF14 first attempt's K | 42 | 20 | 30 |
+  | RF6 chr20 subset | 10 | 6 | 10 |
+  | RF6 chr1 | 40 | 37 | 39 |
+  | Pipeline's 20 real deletions on NA18488 | 20 | 5 | 11 |
+
+  - The 9 pipeline runs that still exit 1 fail on `coverage_ratio` alone: events 1, 6, 7,
+    10, 13, 14, 15, 16 and 19. All 9 are among RF12's background-carried deletions.
+  - The one chr1 run left (40) fails the whole-sample `mean_mapq`.
+
+**Also in this step:**
+- The README's check table has a `del_planted` paragraph with the measured VAF 0.1 rate.
+- `validate_pipeline.sh`'s comment on advisory rows gains `ins_reads` (missed in RF13) and
+  a DEL's `split_reads`.

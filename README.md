@@ -557,14 +557,16 @@ events it was given. Which check covers which type:
 
 | Truth event | Per-event checks |
 | --- | --- |
-| DEL, DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` and `split_reads_each_end` |
+| DEL | `coverage_ratio`, `del_planted`, and the advisory `coverage_any_mapq`, `split_reads` and `split_reads_each_end` |
+| DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` and `split_reads_each_end` |
 | INV, BND | `split_reads`, and the advisory `split_reads_each_end` |
 | INS | `ins_planted`, and the advisory `ins_reads` and `ins_sequence` |
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
 Six rows are **advisory**: printed and counted with the rest, but left out of
-the exit status unless `--strict` is given (see below).
+the exit status unless `--strict` is given (see below). `split_reads` is advisory
+for a DEL as well, and only for a DEL (RF14).
 
 `coverage_any_mapq` is `coverage_ratio` recomputed with **no MAPQ floor**. It
 covers the same event types, DEL and DUP, and it is the same code over the same
@@ -833,6 +835,44 @@ The entries exist: in those runs' `sim.bam` the junction reads are split, and 10
 the supplementary piece on another chromosome, 32 of them at MAPQ 0. The sequence just
 past the far breakpoint is repeated elsewhere, so the aligner cannot place the short
 piece. A real deletion there would align the same way (RF6 in `REVIEW.md`).
+That is why, for a DEL, `split_reads` is advisory since RF14 and `del_planted`
+decides.
+
+`del_planted` establishes that at least **one** of the reads spike made for a
+deletion is in the BAM within 500 bp of START or END (the windows `split_reads`
+reads), carrying the deletion's join. It is the DEL row that decides (RF14).
+- **Whose reads.** spike's reads are known by name: truth record `sim_del_N` goes
+  with reads named `evNNNN_hap_...`.
+- **Carrying.** A read carries the deletion when its bases hold the event
+  haplotype's 31 bases across the join, `ref[START-15, START) + ref[END, END+16)`,
+  in either orientation, with at most 2 bases differing. Those are the sample's
+  own SNPs, which spike writes onto the event copy, and sequencing errors.
+- **Which records.** Every record counts but a secondary or supplementary one:
+  MAPQ, duplicate, QC-fail and unmapped flags are the aligner's verdict, not the
+  question. No read of the sample's own can count, so one read is enough.
+
+What it does **not** establish:
+- **How the aligner split the reads.** That is what `split_reads` and the realism
+  probe are about.
+- **That the bases were removed, where the join is already reference
+  sequence.** A deletion of repeat units, or one between two copies of a repeat,
+  has a join that unedited reads spell too. There the row shows spike's reads are
+  present, and `coverage_ratio`, still counted, is what measures the removal. At
+  RF14's fresh real HG002 sites this was 9 of 12 and 10 of 12.
+- **A truth VCF from another tool.** Without a `sim_del_N` ID the row is a failed
+  not-evaluable row.
+
+Measured on RF14's fresh sites in the 35x HG002 BAM:
+- **At VAF 0.5**, every correct deletion spike accepts by default carries: 33 of 33
+  (8 to 35 reads). These were 50 bp to 10 kb, 9 of them real HG002 deletions. The
+  other 3 real ones are events spike refuses by default (`SIM_RESIST` above
+  0.5); forced through with `--allow-resistant`, they carry too.
+- **At VAF 0.1**, 2 of 30 correct 1 kb deletions had no read of spike's across
+  the join, by chance (95% interval 0.018-0.213). The row fails those. The old
+  `split_reads` failed 14 of the same 30.
+- **The same truth, made wrong** (END + 50, START - 50, moved 1 kb, the ID
+  renumbered, or the unspiked BAM): 0 carriers in 330 tries.
+- **200 empty sites:** 0 pass.
 
 `ins_planted` establishes that at least **one** of the reads spike made for the
 event is in the BAM within 150 bp of POS, carrying its inserted bases across a
@@ -1116,6 +1156,16 @@ insertions are easier to align than real ones (RF15 in
   1 kb, the ID renumbered, or the unspiked BAM: 0 carriers in 216 tries.
 - **200 empty sites.** 0 pass `ins_planted`; `ins_reads` still passes 10, now
   only as information.
+
+**And for a DEL, `split_reads` is advisory and `del_planted` decides** (RF14 in
+`REVIEW.md`; the measured rates are in the `del_planted` paragraph above). Master's
+and the new `validate` were run on the same merged BAMs, 178 saved runs:
+- **No run master passed now fails.**
+- **36 runs flipped from fail to pass** (109 → 145 exit 0), including RF6's four
+  chr20 deletions.
+- **The pipeline's 20 real deletions on NA18488:** 5 → 11 exit 0. The 9 still
+  failing fail `coverage_ratio` alone, at sites where the background already
+  carries the deletion (RF12).
 
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
 and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at

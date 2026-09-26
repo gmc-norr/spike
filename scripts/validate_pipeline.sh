@@ -311,7 +311,8 @@ PY
 # off one `--json` report: its **non-advisory** checks.
 #
 # An advisory row (`resistant`, `depth_fold`, `coverage_any_mapq`,
-# `split_reads_each_end`, `ins_sequence`) reports what spike recorded rather
+# `split_reads_each_end`, `ins_reads` and `ins_sequence`, and `split_reads` for a
+# DEL since RF14, where `del_planted` decides) reports what spike recorded rather
 # than deciding anything, and `spike validate` leaves those rows out of its exit
 # status unless `--strict` is given. Counting them here would disarm step 5's
 # guard: `resistant` and `depth_fold` are read from the truth VCF and never

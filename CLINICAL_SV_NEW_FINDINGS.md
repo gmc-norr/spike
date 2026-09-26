@@ -16,13 +16,13 @@
 > | RF3 | Open. The shape of `summary` was not in T1's locked plan, and changing it is a default output change for existing `--json` parsers. |
 > | RF4 | Open. The `<=` comparison is what T1's plan locked, and no spike version writes a negative value. |
 > | RF5 | Open. T1's plan allowed the help text one new flag line; the footer sentences were added, extending the checks table was not ratified. README.md covers both rows. |
-> | RF6 | Open, and two fixes refuted before any code (branch `rf6`, "RF6" at the end of `REVIEW.md`). The cause is measured: the supplementary piece lands on another chromosome at MAPQ 0 because the far side is repeat sequence. A junction-sequence row failed its kill tests twice: an exact probe misses reads carrying the sample's own SNP (2 of 40), and at 14 of 20 real SV sites the junction is already reference sequence. The real fix belongs to CR9. |
+> | RF6 | **Fixed by RF14** (branch `rf14`, code `54c238f`). A DEL's `split_reads` is advisory; `del_planted` decides: spike's own reads for the event, carrying its join. The two earlier junction rows read all reads and were refuted; this one reads only spike's. |
 > | RF7 | Open. Adding the worst bin to `truth.vcf` for every event changes what spike emits; a per-event column in the run README would be the cheap fix, and it is a design decision rather than a defect. |
 > | RF8 | **Fixed** (branch `rf8`, the user's choice: refuse by default). spike refuses an event whose `SIM_RESIST` is above 0.5 and lists every such event at once; `--allow-resistant` restores the old behaviour byte for byte. Plan, code and result are under "RF8" at the end of `REVIEW.md`. Real SV sites hit it far more often than random spots (6 of `validate_pipeline.sh`'s 20 vs 0 of 40 on chr1), so that script passes the flag and counts them. |
 > | RF12 | **Scored around** (branch `rf12`, the user's choice: option 2). `validation_summary.tsv` gains `N_outside_bg`, `TP_outside_bg` and `Recall_outside_bg`: recall over the truth DELs the background's own Delly run does not recover, and `--min-recall` judges it. On the default run that is 0.7692 / 0.5385 / 0.4615 against 0.85 / 0.70 / 0.65. Four background DELs no short-read caller finds stay counted. See RF12 in `REVIEW.md`. |
 > | RF11 | Open; a fix was refuted before any code (branch `rf11`, "RF11" at the end of `REVIEW.md`). bwa-mem2 clips the reads of a 40-49 bp insertion, and `ins_reads` counts clips only from 50 bp: correct insertions fail 1 of 8 at 40 bp, 5 of 8 at 45 bp, 8 of 8 at 49 bp. Counting clips from 20, 30 or 40 bp makes more empty sites pass (RF13). The README says so. |
 > | RF13 | **Fixed** (branch `rf13`, code `12ee5a1`; plan, result and a first refuted attempt under "RF13" at the end of `REVIEW.md`). The INS row that decides is now `ins_planted`: spike's own reads for the event, carrying its bases. It passed 54 of 54 correct insertions (1-300 bp, VAF 0.1, 12 real HG002 ones) and 0 of 216 wrong truths and 0 of 200 empty sites. `ins_reads` is advisory. |
-> | RF14 | Open. `spike validate` on HG002's own BAM: the default `split_reads` fails 12 of the pipeline's 20 real deletions, and `ins_reads` fails 47 of 112 real het insertions of 20-39 bp. A FAIL on these rows is not evidence that a spike-in is wrong. |
+> | RF14 | **Fixed** for both rows it names: `ins_reads` by RF13, `split_reads` for DEL by RF14 (branch `rf14`, code `54c238f`; plans and results under "RF14" at the end of `REVIEW.md`). `del_planted` carried 33 of 33 correct deletions at VAF 0.5 and failed 2 of 30 at VAF 0.1 by chance, where `split_reads` failed 14; 0 of 330 wrong truths carry. Exit 0 on 178 saved runs went from 109 to 145, none the other way. |
 > | RF15 | Open, a model gap. spike's 20-39 bp insertions fail `ins_reads` 0 of 16, real HG002 ones 47 of 112: the aligner writes real ones messily, spike's cleanly. Cause not yet measured. |
 >
 > RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, RF13 from the RF11 work the same day, RF14 and RF15 from the realism probe after it, and all are written up at the end
@@ -238,6 +238,14 @@
   to look at. **It is also the baseline T5 must be judged against:** a
   per-breakpoint split-read row can only be stricter than a pooled one, so T5's bar has to allow
   for these four before anything about T5's own rate can be read.
+- **Fixed (2026-09-26) by RF14, code `54c238f`.** For a DEL, `split_reads` is advisory and
+  `del_planted` decides. On the saved runs:
+  - the four chr20 events carry at 9 to 14 of spike's own reads and now exit 0;
+  - the chr20 subset goes from 6 of 10 exit 0 to 10 of 10;
+  - chr1 goes from 37 of 40 to 39 of 40; the one left fails the whole-sample `mean_mapq`.
+
+  The two refuted junction rows read every read. This one reads only spike's, so the
+  sample's own reads cannot match, SNP or repeat.
 
 ### RF7 — the depth fold's worst bin is computed for every event and printed for almost none
 
@@ -426,6 +434,19 @@
   that real variants also lack.
 - **Not fixed:** the user's principle is that the yardstick for "realistic" is real variants,
   not a fixed rule. That points at CR9 and the transplant plan, not at a threshold.
+- **Fixed (2026-09-26), for the exit status.** Neither row decides any more:
+  - `ins_reads` since RF13 (`ins_planted` decides an insertion);
+  - a DEL's `split_reads` since RF14, code `54c238f`. `del_planted` decides a deletion:
+    spike's own reads for the event, carrying its 31-base join within 2 substitutions.
+
+  On fresh sites, `del_planted` carried:
+  - 33 of 33 correct deletions at VAF 0.5;
+  - 28 of 30 at VAF 0.1, where the 2 misses had no read across the join by chance.
+    `split_reads` failed 14 of those 30.
+
+  0 of 330 wrong truths carry. The first attempt was refuted; it had forced events spike
+  refuses by default into the test. Whether the rows' *verdicts* match real variants is
+  still the realism question above.
 
 ### RF15 — spike's short insertions are cleaner than real ones
 
