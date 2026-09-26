@@ -559,11 +559,11 @@ events it was given. Which check covers which type:
 | --- | --- |
 | DEL, DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` and `split_reads_each_end` |
 | INV, BND | `split_reads`, and the advisory `split_reads_each_end` |
-| INS | `ins_reads`, and the advisory `ins_sequence` |
+| INS | `ins_planted`, and the advisory `ins_reads` and `ins_sequence` |
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
-Five rows are **advisory**: printed and counted with the rest, but left out of
+Six rows are **advisory**: printed and counted with the rest, but left out of
 the exit status unless `--strict` is given (see below).
 
 `coverage_any_mapq` is `coverage_ratio` recomputed with **no MAPQ floor**. It
@@ -647,6 +647,9 @@ INS chrA:5000 (carried)             ins_sequence       >=2 with a 31bp alt kmer 
 INS chrA:5000 (wrong_bases)         ins_reads          >=2 reads with >=50bp...  3               PASS
 INS chrA:5000 (wrong_bases)         ins_sequence       >=2 with a 31bp alt kmer  0               FAIL (advisory)
 ```
+
+(Measured before RF13. `ins_reads` has printed `(advisory)` since then, and an
+`ins_planted` row comes first.)
 
 Two cases the row cannot answer, each reported as a **failed** row rather than a
 silent pass, and each costing nothing in the exit status because the row is
@@ -830,6 +833,24 @@ The entries exist: in those runs' `sim.bam` the junction reads are split, and 10
 the supplementary piece on another chromosome, 32 of them at MAPQ 0. The sequence just
 past the far breakpoint is repeated elsewhere, so the aligner cannot place the short
 piece. A real deletion there would align the same way (RF6 in `REVIEW.md`).
+
+`ins_planted` establishes that at least **one** of the reads spike made for the
+event is in the BAM within 150 bp of POS, carrying its inserted bases across a
+junction. It is the INS row that decides (RF13). spike's reads are known by
+name: truth record `sim_ins_N` goes with reads named `evNNNN_hap_...`. A read
+carries the insertion when its bases hold one of two 31-base junction probes
+from the event's own haplotype (15 reference bases, then 16 past the junction,
+at each end of the insertion), with every **inserted** base matching exactly and
+at most 2 **reference** bases differing (the sample's own SNPs, which spike
+writes onto the event copy, and sequencing errors). Every such record counts but
+a secondary or supplementary one: its MAPQ and its duplicate, QC-fail and
+unmapped flags are the aligner's verdict, not the question. No read of the
+sample's own can count, so there is no background to rise above, and one read
+is enough. It does **not** establish how the aligner wrote the insertion down --
+that is what `ins_reads` and the realism probe are about -- and it cannot judge
+a truth VCF from another tool: without a `sim_ins_N` ID, or without inserted
+bases in the ALT (a symbolic `<INS>`, which spike wrote before CR7), the row is a
+failed not-evaluable row.
 
 `ins_reads` establishes that at least **two** reads leave the reference within
 100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
@@ -1082,6 +1103,19 @@ HG002's own BAM against GIAB's truth:
 So a FAIL on either row does not show that a spike-in is wrong. And spike's short
 insertions are easier to align than real ones (RF15 in
 `CLINICAL_SV_NEW_FINDINGS.md`).
+
+**So `ins_reads` is advisory, and `ins_planted` decides an insertion** (RF13 in
+`REVIEW.md`). On the 35x HG002 BAM:
+- **54 correct insertions.** These were 1, 2, 4, 15, 45 and 300 bp random ones at
+  6 sites, 45 bp at VAF 0.1, and 12 of HG002's own insertions at their own
+  positions with their own bases. `ins_planted` found spike's reads carrying
+  every one: 2 to 37 reads.
+- **Master's exit status** was 0 on 42 of the 54 and is 0 on all 54 now. The 12
+  that moved are the 45 bp ones `ins_reads` failed.
+- **The same truth, made wrong.** Every inserted base swapped, POS moved by
+  1 kb, the ID renumbered, or the unspiked BAM: 0 carriers in 216 tries.
+- **200 empty sites.** 0 pass `ins_planted`; `ins_reads` still passes 10, now
+  only as information.
 
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
 and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at

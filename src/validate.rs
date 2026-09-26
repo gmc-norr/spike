@@ -62,6 +62,10 @@ struct TruthEvent {
     /// move a non-advisory row. This field is read by [`ins_alt_sequence`],
     /// which is the only reader of it anywhere.
     ins_alt: Option<Vec<u8>>,
+    /// For INS: `N` when the record's ID is spike's `sim_ins_N`, the number
+    /// spike's own reads for the event carry as `evNNNN_hap_` (RF13). None for
+    /// any other ID, and for every other type.
+    sim_ins_number: Option<u32>,
     /// The census numbers spike recorded for this event, as INFO holds them.
     census: CensusInfo,
 }
@@ -323,6 +327,114 @@ const MIN_SPLIT_READS: usize = 2;
 /// The INS row's name: reads carrying the inserted sequence.
 const INS_READS: &str = "ins_reads";
 
+/// The INS row that decides: whether the reads spike made for the event are
+/// in the BAM at POS, carrying its bases (RF13).
+const INS_PLANTED: &str = "ins_planted";
+
+/// Fewest of spike's own reads that must carry an insertion for
+/// [`INS_PLANTED`] to pass. One: the sample's reads are left out, so there is no
+/// background count to rise above (RF13's plan).
+const MIN_PLANTED_READS: usize = 1;
+
+/// Reference bases a junction probe takes on its flank side; the other 16 are
+/// the haplotype's past the junction.
+const PLANTED_PROBE_FLANK: usize = 15;
+
+/// Length of a junction probe.
+const PLANTED_PROBE_LEN: usize = 31;
+
+/// Flank positions of a probe that may differ in a carrying read: the sample's
+/// own SNPs, which spike writes onto the event copy's reference bases, and
+/// sequencing errors. An inserted base may not differ at all: RF13's first
+/// attempt let 2 substitutions fall anywhere, and a truth with the wrong 4
+/// inserted bases matched.
+const PLANTED_MAX_FLANK_MISMATCH: usize = 2;
+
+/// The read-name prefix spike gives the tiled reads of event `n`:
+/// `simulate_event`'s `format!("ev{:04}", n)` and `tile_haplotype_reads`'s
+/// `_hap_`. `simulate.rs` pins that the two agree.
+pub(crate) fn planted_read_prefix(n: u32) -> String {
+    format!("ev{:04}_hap_", n)
+}
+
+/// `N` if `id` is spike's INS truth ID `sim_ins_N`; truth.rs numbers it with
+/// the same `i + 1` that names the event's reads.
+fn sim_ins_number(id: &str) -> Option<u32> {
+    let digits = id.strip_prefix("sim_ins_")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// An insertion's two junction probes, each with a mask marking the positions
+/// that hold an inserted base, in both orientations and without duplicates.
+///
+/// `left` is the reference right up to the insertion point and `right` the
+/// reference from it on, as the event's haplotype `left + inserted + right`
+/// joins them. The probes are that haplotype's [`PLANTED_PROBE_LEN`] bases
+/// across each junction, [`PLANTED_PROBE_FLANK`] of them on the reference
+/// side: `[o-15, o+16)` and `[o+L-16, o+L+15)` for `o = left.len()`. For a
+/// short insertion each probe reaches through it into the other flank.
+fn ins_junction_probes(
+    left: &[u8],
+    inserted: &[u8],
+    right: &[u8],
+) -> Vec<(Vec<u8>, Vec<bool>)> {
+    let mut hap: Vec<u8> = Vec::with_capacity(left.len() + inserted.len() + right.len());
+    hap.extend_from_slice(left);
+    hap.extend_from_slice(inserted);
+    hap.extend_from_slice(right);
+    let hap = hap.to_ascii_uppercase();
+    let o = left.len();
+    let l = inserted.len();
+    let is_inserted = |i: usize| i >= o && i < o + l;
+    let inside = PLANTED_PROBE_LEN - PLANTED_PROBE_FLANK;
+
+    let mut probes: Vec<(Vec<u8>, Vec<bool>)> = Vec::new();
+    for (a, b) in [
+        (o.saturating_sub(PLANTED_PROBE_FLANK), o + inside),
+        ((o + l).saturating_sub(inside), o + l + PLANTED_PROBE_FLANK),
+    ] {
+        let (a, b) = (a, b.min(hap.len()));
+        let probe = hap[a..b].to_vec();
+        let mask: Vec<bool> = (a..b).map(is_inserted).collect();
+        let mut reverse = probe.clone();
+        crate::extract::reverse_complement(&mut reverse);
+        let reverse_mask: Vec<bool> = mask.iter().rev().copied().collect();
+        for candidate in [(probe, mask), (reverse, reverse_mask)] {
+            if !probes.contains(&candidate) {
+                probes.push(candidate);
+            }
+        }
+    }
+    probes
+}
+
+/// True if some window of `seq` carries one of `probes`: every inserted
+/// position equal, and at most [`PLANTED_MAX_FLANK_MISMATCH`] flank positions
+/// not, case-insensitively.
+fn carries_ins_probe(seq: &[u8], probes: &[(Vec<u8>, Vec<bool>)]) -> bool {
+    let seq = seq.to_ascii_uppercase();
+    probes.iter().any(|(probe, mask)| {
+        seq.windows(probe.len()).any(|window| {
+            let mut flank_mismatches = 0;
+            for ((&got, &want), &inserted) in window.iter().zip(probe).zip(mask) {
+                if got != want {
+                    if inserted {
+                        return false;
+                    }
+                    flank_mismatches += 1;
+                    if flank_mismatches > PLANTED_MAX_FLANK_MISMATCH {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+    })
+}
+
 /// At least this many reads must carry an insertion's evidence -- an alignment
 /// that leaves the reference for [`INS_READS`], the inserted bases themselves
 /// for [`INS_SEQUENCE`]. Two matches [`MIN_SPLIT_READS`] and for the same
@@ -372,11 +484,12 @@ const RESISTANT: &str = "resistant";
 /// (CR2).
 const DEPTH_FOLD: &str = "depth_fold";
 
-// The ten check-name constants above name every row `check_event` pushes, and
-// `print_usage` now prints all ten from these same constants: the five
-// non-advisory ones (`COVERAGE_RATIO`, `SPLIT_READS`, `INS_READS`,
-// `ALLELE_FREQ`, `EVENT_CHECKED`) and the five advisory ones
-// (`COVERAGE_ANY_MAPQ`, `SPLIT_READS_EACH_END`, `INS_SEQUENCE`, `RESISTANT`,
+// The eleven check-name constants above name every row `check_event` pushes,
+// and `print_usage` prints all eleven from these same constants: the five
+// non-advisory ones
+// (`COVERAGE_RATIO`, `SPLIT_READS`, `INS_PLANTED`, `ALLELE_FREQ`,
+// `EVENT_CHECKED`) and the six advisory ones (`COVERAGE_ANY_MAPQ`,
+// `SPLIT_READS_EACH_END`, `INS_READS` since RF13, `INS_SEQUENCE`, `RESISTANT`,
 // `DEPTH_FOLD`). Renaming any of them moves the printed table and `--help`
 // together, so neither can print one name while the other prints the old one.
 // README.md is still edited by hand: it spells every row name out in prose (the
@@ -474,8 +587,16 @@ fn check_event(
     // Reads carrying the inserted sequence (INS only: it is the one event
     // type with no second breakpoint and no reference span of its own).
     if event.sv_type == "INS" {
+        // The counted row: are spike's own reads for the event there, carrying
+        // its bases (RF13). Whether the aligner wrote them as a neat `I` is the
+        // realism question, which a fixed CIGAR rule cannot answer: `ins_reads`
+        // below failed 47 of 112 real HG002 insertions of 20-39 bp and passed
+        // absent 50 bp ones at 12 of 200 empty sites, so it is advisory now.
+        let r = check_ins_planted(&args.bam_path, &args.ref_path, event);
+        results.push(check_outcome(&label, INS_PLANTED, r, false));
+
         let r = check_ins_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-        results.push(check_outcome(&label, INS_READS, r, false));
+        results.push(check_outcome(&label, INS_READS, r, true));
 
         // The same insertion, read rather than counted. `ins_reads` works from
         // the CIGAR alone and never looks at a base, so an insertion of
@@ -647,9 +768,9 @@ fn print_usage() {
     eprintln!("Checks, by truth-event type:");
     eprintln!("  DEL, DUP         {}, {}", COVERAGE_RATIO, SPLIT_READS);
     eprintln!("  INV, BND         {}", SPLIT_READS);
-    eprintln!("  INS              {} (reads whose alignment leaves the", INS_READS);
-    eprintln!("                   reference at POS -- an I operation, or a soft clip");
-    eprintln!("                   once the insertion is 50 bp or longer)");
+    eprintln!("  INS              {} (spike's own reads for the event,", INS_PLANTED);
+    eprintln!("                   named after the truth ID sim_ins_N, carrying its");
+    eprintln!("                   inserted bases across a junction at POS)");
     eprintln!(
         "  SNP, small indel {} (a substitution from the pileup; a small",
         ALLELE_FREQ
@@ -673,6 +794,9 @@ fn print_usage() {
         SPLIT_READS_EACH_END
     );
     eprintln!("  and BND          minimum required at each breakpoint, not pooled)");
+    eprintln!("  INS              {} (reads whose alignment leaves the", INS_READS);
+    eprintln!("                   reference at POS -- an I operation, or a soft clip");
+    eprintln!("                   once the insertion is 50 bp or longer)");
     eprintln!("  INS              {} (reads carrying the bases the truth", INS_SEQUENCE);
     eprintln!("                   record's own ALT names)");
     eprintln!(
@@ -777,6 +901,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -795,6 +920,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -813,6 +939,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -834,6 +961,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len,
                     ins_alt: Some(alt_col.as_bytes().to_vec()),
+                    sim_ins_number: sim_ins_number(&id),
                     census: census_info,
                 });
             }
@@ -858,6 +986,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -888,6 +1017,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -910,6 +1040,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: Some(alt_allele),
                     ins_len: None,
                     ins_alt: None,
+                    sim_ins_number: None,
                     census: census_info,
                 });
             }
@@ -1372,6 +1503,82 @@ fn check_ins_sequence(
         expected,
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_INS_READS,
+        advisory: false, // stamped by check_outcome
+    })
+}
+
+/// Check that the reads spike made for an insertion are in the BAM at its
+/// position, carrying its bases (RF13).
+///
+/// The question is whether the event was planted, not how the aligner wrote
+/// it down: [`check_ins_reads`] asks the second, and the realism probe found it
+/// failing 47 of 112 real HG002 insertions of 20-39 bp and passing absent ones
+/// at empty sites. So this row looks only at spike's own reads for the event,
+/// named [`planted_read_prefix`] of the truth ID's `N`, over POS +/-
+/// [`INS_SEQUENCE_PAD`]. Every such record counts but a secondary or
+/// supplementary one: its MAPQ, and duplicate, QC-fail and unmapped flags, are
+/// the aligner's verdict, not the question. A read carries the event when its
+/// bases hold one of [`ins_junction_probes`] as [`carries_ins_probe`] reads it.
+///
+/// No read of the sample's own can count, whatever it spells, so there is no
+/// background to rise above and [`MIN_PLANTED_READS`] is 1. Two cases are a
+/// failed not-evaluable row rather than a silent pass (M10): an ID that is not
+/// `sim_ins_N`, which leaves spike's reads unknown, and an ALT with no bases.
+fn check_ins_planted(bam_path: &str, ref_path: &str, event: &TruthEvent) -> Result<CheckResult> {
+    let label = format_event_label(event);
+    let Some(n) = event.sim_ins_number else {
+        return Ok(event_not_evaluable(
+            &label,
+            INS_PLANTED,
+            &format!(">={} of spike's reads carrying", MIN_PLANTED_READS),
+            "no sim_ins_N id",
+            "the truth record's ID is not spike's sim_ins_N, so which reads are spike's \
+             for this event is unknown",
+        ));
+    };
+    let expected = format!(">={} ev{:04} read carrying", MIN_PLANTED_READS, n);
+    let Some(inserted) = ins_alt_sequence(event) else {
+        return Ok(event_not_evaluable(
+            &label,
+            INS_PLANTED,
+            &expected,
+            "alt has no bases",
+            "the ALT records no inserted bases, so there is nothing to look for",
+        ));
+    };
+
+    // `load_truth_events` reads an INS as `start: vcf_pos`, which is the 0-based
+    // position spike inserts before: the haplotype is `ref[..pos] + INS +
+    // ref[pos..]`.
+    let pos = event.start;
+    let reach = PLANTED_PROBE_LEN as u64;
+    let (_, left) =
+        crate::reference::fetch_window(ref_path, &event.chrom, pos.saturating_sub(reach), pos)?;
+    let (_, right) = crate::reference::fetch_window(ref_path, &event.chrom, pos, pos + reach)?;
+    let probes = ins_junction_probes(&left, inserted, &right);
+    let prefix = planted_read_prefix(n);
+
+    let mut names: HashSet<String> = HashSet::new();
+    scan_region(
+        bam_path,
+        ref_path,
+        &event.chrom,
+        pos.saturating_sub(INS_SEQUENCE_PAD),
+        pos + INS_SEQUENCE_PAD,
+        &|flags, _mapq| !(flags.is_secondary() || flags.is_supplementary()),
+        &mut |name, _align_start, _ops, seq| {
+            if name.starts_with(prefix.as_bytes()) && carries_ins_probe(seq, &probes) {
+                names.insert(String::from_utf8_lossy(name).into_owned());
+            }
+        },
+    )?;
+
+    Ok(CheckResult {
+        event_label: label,
+        check_name: INS_PLANTED.to_string(),
+        expected,
+        observed: format!("{}", names.len()),
+        pass: names.len() >= MIN_PLANTED_READS,
         advisory: false, // stamped by check_outcome
     })
 }
@@ -2924,6 +3131,33 @@ pub(crate) fn for_each_alignment(
     min_mapq: u8,
     visit: &mut AlignmentVisitor<'_>,
 ) -> Result<()> {
+    scan_region(
+        bam_path,
+        ref_path,
+        chrom,
+        start,
+        end,
+        &|flags, mapq| usable_alignment(flags, mapq, min_mapq),
+        visit,
+    )
+}
+
+/// Which records a [`scan_region`] hands on, from their flags and MAPQ (`None`
+/// when the record says 255, "unavailable").
+type RecordFilter<'a> = dyn Fn(noodles::sam::alignment::record::Flags, Option<u8>) -> bool + 'a;
+
+/// [`for_each_alignment`] with the record filter given rather than fixed to
+/// [`usable_alignment`]: `ins_planted` counts spike's reads however the aligner
+/// flagged or scored them.
+fn scan_region(
+    bam_path: &str,
+    ref_path: &str,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    keep: &RecordFilter<'_>,
+    visit: &mut AlignmentVisitor<'_>,
+) -> Result<()> {
     let start_pos = crate::extract::safe_noodles_position(start + 1);
     let end_pos = crate::extract::safe_noodles_position(end);
     let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
@@ -2946,7 +3180,7 @@ pub(crate) fn for_each_alignment(
             if !record_is_on_queried_reference(&buf, queried_reference_sequence_id) {
                 continue;
             }
-            if !usable_alignment(buf.flags(), buf.mapping_quality().map(u8::from), min_mapq) {
+            if !keep(buf.flags(), buf.mapping_quality().map(u8::from)) {
                 continue;
             }
             let Some(name) = buf.name() else {
@@ -2973,11 +3207,7 @@ pub(crate) fn for_each_alignment(
 
         for rec_result in query {
             let record = rec_result?;
-            if !usable_alignment(
-                record.flags(),
-                record.mapping_quality().map(u8::from),
-                min_mapq,
-            ) {
+            if !keep(record.flags(), record.mapping_quality().map(u8::from)) {
                 continue;
             }
             let Some(name) = record.name() else {
@@ -3554,6 +3784,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
+            sim_ins_number: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "DEL chr7:55000-56000 (EGFR)");
@@ -3573,6 +3804,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
+            sim_ins_number: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "INS chr7:55200 (EGFR)");
@@ -3881,6 +4113,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
+            sim_ins_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -3984,6 +4217,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: None,
             ins_len: Some(300),
             ins_alt: None,
+            sim_ins_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -4110,6 +4344,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: Some(alt.to_vec()),
             ins_len: None,
             ins_alt: None,
+            sim_ins_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -4343,16 +4578,29 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         // made `spike validate` unable to exit 0 on spike's own output --
         // README step 4 broken for insertions. An INS must get a check that
         // reads the BAM, not a verdict reached without opening it.
+        //
+        // Since RF13 the counted row is `ins_planted`; `ins_reads` is advisory.
         let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
-        let event = ins_event("chrA", 10_000);
+        let event = TruthEvent {
+            sim_ins_number: Some(1),
+            ins_len: Some(4),
+            ins_alt: Some(b"AGGGG".to_vec()),
+            ..ins_event("chrA", 10_000)
+        };
         let mut results: Vec<CheckResult> = Vec::new();
 
         check_event(&args, &event, &NearbyRecords::default(), &mut results);
 
-        assert_eq!(results.len(), 1, "an INS must leave exactly one result");
+        let counted: Vec<&CheckResult> = results.iter().filter(|r| !r.advisory).collect();
+        assert_eq!(counted.len(), 1, "an INS must leave exactly one counted result");
         assert_eq!(
-            results[0].check_name, "ins_reads",
-            "an INS must be checked for reads carrying the inserted sequence"
+            counted[0].check_name, INS_PLANTED,
+            "an INS must be checked for spike's reads carrying the inserted sequence"
+        );
+        assert!(
+            counted[0].observed.starts_with("error"),
+            "the row went to its data rather than decide without it: {}",
+            counted[0].observed
         );
     }
 
@@ -7045,7 +7293,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             &ins_event_with_alt(INS_CARRIED_POS, &carried_insertion()),
         );
 
-        assert_eq!(row_names(&rows), vec![INS_READS, INS_SEQUENCE]);
+        assert_eq!(row_names(&rows), vec![INS_PLANTED, INS_READS, INS_SEQUENCE]);
         let r = named(&rows, INS_SEQUENCE);
         assert_eq!(r.expected, ins_sequence_expected(INS_KMER_LEN));
         assert_eq!(r.observed, "3", "all three reads carry the inserted bases");
@@ -7163,9 +7411,11 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
     #[test]
     fn test_an_alt_that_records_no_sequence_gets_no_ins_sequence_row() {
         // A symbolic `<INS>` did not record the bases, and an older spike's
-        // truth VCF must not become a FAIL for that -- the same rule T1
-        // applied to a missing census field. So: no row at all, not a failing
-        // one.
+        // truth VCF must not become a FAIL *on this advisory row* for that --
+        // the same rule T1 applied to a missing census field. So: no
+        // `ins_sequence` row at all, not a failing one. (`ins_planted`, the
+        // counted row since RF13, is still there: with no bases it has nothing
+        // to look for and is a failed not-evaluable row, as its plan locked.)
         let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
         let carried = carried_insertion();
         for (what, alt) in [
@@ -7183,7 +7433,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             check_event(&args, &event, &NearbyRecords::default(), &mut results);
             assert_eq!(
                 row_names(&results),
-                vec![INS_READS],
+                vec![INS_PLANTED, INS_READS],
                 "{} records no sequence, so it gets no {} row",
                 what,
                 INS_SEQUENCE
@@ -7393,19 +7643,20 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert!(!r.pass);
         assert!(r.advisory, "an errored ins_sequence row is still advisory");
         assert!(
-            !named(&rows, INS_READS).advisory,
-            "while the ins_reads row beside it is not"
+            !named(&rows, INS_PLANTED).advisory,
+            "while the ins_planted row beside it is not"
         );
+        assert!(named(&rows, INS_READS).advisory, "and since RF13 ins_reads is advisory too");
 
         assert_eq!(
             failure_message(&rows, false).as_deref(),
             Some("1/1 validation checks failed"),
-            "the advisory row is in neither the count nor the total by default"
+            "the advisory rows are in neither the count nor the total by default"
         );
         assert_eq!(
             failure_message(&rows, true).as_deref(),
-            Some("2/2 validation checks failed"),
-            "--strict counts it"
+            Some("3/3 validation checks failed"),
+            "--strict counts them"
         );
 
         let report = text_report(&rows, false);
@@ -7415,8 +7666,13 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             report
         );
         assert!(
-            line_for(&report, INS_READS).ends_with("FAIL")
-                && !line_for(&report, INS_READS).ends_with("(advisory)"),
+            line_for(&report, INS_PLANTED).ends_with("FAIL")
+                && !line_for(&report, INS_PLANTED).ends_with("(advisory)"),
+            "in:\n{}",
+            report
+        );
+        assert!(
+            line_for(&report, INS_READS).ends_with("FAIL (advisory)"),
             "in:\n{}",
             report
         );
@@ -7430,7 +7686,12 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             json
         );
         assert!(
-            line_for(&json, "\"ins_reads\"").contains("\"advisory\": false"),
+            line_for(&json, "\"ins_planted\"").contains("\"advisory\": false"),
+            "in:\n{}",
+            json
+        );
+        assert!(
+            line_for(&json, "\"ins_reads\"").contains("\"advisory\": true"),
             "in:\n{}",
             json
         );
@@ -7469,7 +7730,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         };
         let mut results: Vec<CheckResult> = Vec::new();
         check_event(&args, &event, &NearbyRecords::default(), &mut results);
-        assert_eq!(row_names(&results), vec![INS_READS, INS_SEQUENCE]);
+        assert_eq!(row_names(&results), vec![INS_PLANTED, INS_READS, INS_SEQUENCE]);
     }
 
     #[test]
@@ -7528,7 +7789,9 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert_eq!(r.expected, ">=2 reads with >=50bp inserted at chrA:5000");
         assert_eq!(r.observed, "3");
         assert!(r.pass);
-        assert!(!r.advisory);
+        // The one thing that moved, on purpose: since RF13 the row says how
+        // the aligner wrote the insertion and no longer decides.
+        assert!(r.advisory);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -7604,5 +7867,290 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
             report
         );
         assert_eq!(status_at(INS_READS), status_at(COVERAGE_RATIO));
+    }
+
+    // ── ins_planted (RF13) ─────────────────────────────────────────────────
+
+    /// `one_contig_spliced_record` with the BAM flags and MAPQ given: the
+    /// `ins_planted` fixture needs reads a usable-alignment filter would drop.
+    fn spliced_record_with(
+        name: &str,
+        start0: usize,
+        ops: &[(Kind, usize)],
+        bases: &[u8],
+        bam_flags: u16,
+        mapq: u8,
+    ) -> noodles::cram::Record {
+        use noodles::sam::alignment::record::cigar::Op;
+        use noodles::sam::alignment::record_buf::{Cigar, QualityScores, Sequence};
+
+        let flags = noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY;
+        let cigar: Cigar = ops.iter().map(|&(k, n)| Op::new(k, n)).collect();
+        let sequence = Sequence::from(bases.to_vec());
+        let quality_scores = QualityScores::from(vec![40u8; bases.len()]);
+        let features = noodles::cram::record::Features::from_cigar(
+            flags,
+            &cigar,
+            &sequence,
+            &quality_scores,
+        );
+        noodles::cram::Record::builder()
+            .set_bam_flags(noodles::sam::alignment::record::Flags::from(bam_flags))
+            .set_flags(flags)
+            .set_reference_sequence_id(0)
+            .set_read_length(bases.len())
+            .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+            .set_name(name)
+            .set_mapping_quality(
+                noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
+            )
+            .set_bases(sequence)
+            .set_quality_scores(quality_scores)
+            .set_features(features)
+            .build()
+    }
+
+    /// One indexed CRAM with six reads at [`INS_CARRIED_POS`], every one
+    /// carrying `carried_insertion()` whole as an `I` operation, so only their
+    /// names and flags tell them apart:
+    ///
+    /// - `ev0001_hap_000001` and `_000002`: event 1's own, MAPQ 60, unflagged;
+    /// - `ev0001_hap_000003`: event 1's own, **MAPQ 0 and duplicate-flagged**;
+    /// - `ev0001_hap_000004`: event 1's own, but **secondary**;
+    /// - `A00744:46:HV3C3DSXX:2:1104:13160:1000`: a read of the sample's own;
+    /// - `ev0002_hap_000001`: **another event's** read.
+    ///
+    /// For truth record `sim_ins_1`, `ins_planted` must count exactly the first
+    /// three.
+    fn planted_reads_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "ins_planted", &seq);
+        let header = one_contig_header(seq.len());
+
+        let carried = carried_insertion();
+        let flank = (TEST_READ_LEN - carried.len()) / 2;
+        let reads: [(&str, u16, u8); 6] = [
+            ("ev0001_hap_000001", 0, 60),
+            ("ev0001_hap_000002", 0, 60),
+            ("ev0001_hap_000003", 0x400, 0),
+            ("ev0001_hap_000004", 0x100, 60),
+            ("A00744:46:HV3C3DSXX:2:1104:13160:1000", 0, 60),
+            ("ev0002_hap_000001", 0, 60),
+        ];
+        // All six at one start, so every read carries the insertion at POS
+        // itself: `inserted_sequence_cram`'s `+ i` staggering would put read i's
+        // insertion i bases away, which on the cycling contig is a different
+        // junction and rightly carries nothing.
+        let start0 = INS_CARRIED_POS as usize - flank;
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        for (name, flags, mapq) in reads.iter() {
+            let mut bases = seq[start0..start0 + flank].to_vec();
+            bases.extend_from_slice(&carried);
+            bases.extend_from_slice(&seq[start0 + flank..start0 + 2 * flank]);
+            records.push(spliced_record_with(
+                name,
+                start0,
+                &[
+                    (Kind::Match, flank),
+                    (Kind::Insertion, carried.len()),
+                    (Kind::Match, flank),
+                ],
+                &bases,
+                *flags,
+                *mapq,
+            ));
+        }
+        let cram_path = write_indexed_cram(&dir, "ins_planted", &fasta_path, &header, &records);
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// Truth record `sim_ins_1` at [`INS_CARRIED_POS`], carrying `inserted`.
+    fn planted_event(inserted: &[u8]) -> TruthEvent {
+        TruthEvent {
+            sim_ins_number: Some(1),
+            ..ins_event_with_alt(INS_CARRIED_POS, inserted)
+        }
+    }
+
+    #[test]
+    fn test_ins_planted_counts_only_the_events_own_reads() {
+        let (dir, fasta, cram) = planted_reads_cram("planted_own");
+        let rows = ins_rows(&cram, &fasta, &planted_event(&carried_insertion()));
+        let r = named(&rows, INS_PLANTED);
+        // Event 1's three primary reads, the MAPQ 0 duplicate among them: how
+        // the aligner scored or flagged a read spike made is not the question.
+        // Not the secondary record, not the sample's read carrying the same
+        // bases, and not event 2's read.
+        assert_eq!(r.observed, "3", "{} / {}", r.expected, r.observed);
+        assert!(r.pass);
+        assert!(!r.advisory, "ins_planted is the INS event's counted row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ins_planted_passes_on_one_carrying_read() {
+        // Event 2 has one read in the fixture. With the sample's reads left
+        // out there is no background, so one of spike's own reads carrying the
+        // insertion is the planted event (MIN_PLANTED_READS).
+        let (dir, fasta, cram) = planted_reads_cram("planted_one");
+        let event = TruthEvent {
+            sim_ins_number: Some(2),
+            ..planted_event(&carried_insertion())
+        };
+        let rows = ins_rows(&cram, &fasta, &event);
+        let r = named(&rows, INS_PLANTED);
+        assert_eq!(r.observed, "1", "{} / {}", r.expected, r.observed);
+        assert!(r.pass, "one carrying read of spike's own is enough");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ins_planted_fails_a_truth_whose_inserted_letters_are_wrong() {
+        let (dir, fasta, cram) = planted_reads_cram("planted_wrong");
+        // Every inserted base swapped for a different one, as RF13's N2.
+        let wrong: Vec<u8> = carried_insertion()
+            .iter()
+            .map(|b| match b {
+                b'A' => b'C',
+                b'C' => b'G',
+                b'G' => b'T',
+                _ => b'A',
+            })
+            .collect();
+        let rows = ins_rows(&cram, &fasta, &planted_event(&wrong));
+        let r = named(&rows, INS_PLANTED);
+        assert_eq!(r.observed, "0", "{} / {}", r.expected, r.observed);
+        assert!(!r.pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ins_planted_is_not_evaluable_without_a_spike_id() {
+        let (dir, fasta, cram) = planted_reads_cram("planted_noid");
+        let event = TruthEvent {
+            sim_ins_number: None,
+            ..planted_event(&carried_insertion())
+        };
+        let rows = ins_rows(&cram, &fasta, &event);
+        let r = named(&rows, INS_PLANTED);
+        assert!(!r.pass, "no sim_ins_N ID, no way to know spike's reads");
+        assert!(r.observed.contains("id"), "{} / {}", r.expected, r.observed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ins_planted_is_not_evaluable_without_inserted_bases() {
+        let (dir, fasta, cram) = planted_reads_cram("planted_noalt");
+        let event = TruthEvent {
+            ins_alt: Some(b"<INS>".to_vec()),
+            ..planted_event(&carried_insertion())
+        };
+        let rows = ins_rows(&cram, &fasta, &event);
+        let r = named(&rows, INS_PLANTED);
+        assert!(!r.pass, "no bases, nothing to look for");
+        assert!(r.observed.contains("alt"), "{} / {}", r.expected, r.observed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_an_ins_probe_allows_two_flank_substitutions_and_no_inserted_one() {
+        let left = pseudo_random_bases(41, 31);
+        let right = pseudo_random_bases(43, 31);
+        let inserted = pseudo_random_bases(47, 60);
+        let probes = ins_junction_probes(&left, &inserted, &right);
+        // A read over the left junction only: the last 31 flank bases, then
+        // 40 inserted ones (not reaching the right junction).
+        let read = |edit: &dyn Fn(&mut Vec<u8>)| {
+            let mut r = left.clone();
+            r.extend_from_slice(&inserted[..40]);
+            edit(&mut r);
+            r
+        };
+        // Probe positions: flank bases left[16..31], inserted bases at 31..47.
+        let swap = |b: u8| if b == b'A' { b'C' } else { b'A' };
+        assert!(carries_ins_probe(&read(&|_| {}), &probes), "exact");
+        assert!(
+            carries_ins_probe(&read(&|r| { r[20] = swap(r[20]); r[25] = swap(r[25]); }), &probes),
+            "two flank substitutions: the sample's SNPs and errors"
+        );
+        assert!(
+            !carries_ins_probe(
+                &read(&|r| { r[18] = swap(r[18]); r[22] = swap(r[22]); r[27] = swap(r[27]); }),
+                &probes
+            ),
+            "three flank substitutions"
+        );
+        assert!(
+            !carries_ins_probe(&read(&|r| { r[35] = swap(r[35]); }), &probes),
+            "one substitution in an inserted base"
+        );
+        assert!(
+            carries_ins_probe(&revcomp_of(&read(&|_| {})), &probes),
+            "either orientation"
+        );
+    }
+
+    #[test]
+    fn test_a_short_insertions_wrong_letters_do_not_carry() {
+        // RF13's first attempt: a 4 bp insertion with wrong letters matched
+        // within a tolerance that spanned the inserted bases.
+        let left = pseudo_random_bases(53, 31);
+        let right = pseudo_random_bases(59, 31);
+        let inserted = b"GATC".to_vec();
+        let wrong = b"TCGA".to_vec();
+        let mut read = left.clone();
+        read.extend_from_slice(&inserted);
+        read.extend_from_slice(&right);
+        assert!(carries_ins_probe(&read, &ins_junction_probes(&left, &inserted, &right)));
+        assert!(!carries_ins_probe(&read, &ins_junction_probes(&left, &wrong, &right)));
+    }
+
+    #[test]
+    fn test_the_ins_rows_are_ins_planted_then_ins_reads_and_ins_sequence_advisory() {
+        let (dir, fasta, cram) = planted_reads_cram("planted_rows");
+        let rows = ins_rows(&cram, &fasta, &planted_event(&carried_insertion()));
+        let ins: Vec<(&str, bool)> = rows
+            .iter()
+            .filter(|r| r.check_name.starts_with("ins_"))
+            .map(|r| (r.check_name.as_str(), r.advisory))
+            .collect();
+        assert_eq!(
+            ins,
+            vec![(INS_PLANTED, false), (INS_READS, true), (INS_SEQUENCE, true)],
+            "ins_reads says how the aligner wrote it; it no longer decides (RF13)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_truth_events_reads_the_spike_event_number_from_the_id() {
+        let dir = fixture_dir("planted_ids");
+        let path = dir.join("truth_ins_ids.vcf");
+        std::fs::write(
+            &path,
+            "##fileformat=VCFv4.3\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+             chr1\t100\tsim_ins_7\tA\tAGGGG\t999\tPASS\tSVTYPE=INS;SVLEN=4\tGT\t0/1\n\
+             chr1\t500\treal_ins_5\tA\tAGGGG\t999\tPASS\tSVTYPE=INS;SVLEN=4\tGT\t0/1\n\
+             chr1\t900\tsim_ins_7x\tA\tAGGGG\t999\tPASS\tSVTYPE=INS;SVLEN=4\tGT\t0/1\n",
+        )
+        .unwrap();
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+        let numbers: Vec<Option<u32>> = events.iter().map(|e| e.sim_ins_number).collect();
+        assert_eq!(numbers, vec![Some(7), None, None]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_planted_read_prefix_spells_spikes_read_names() {
+        // `simulate.rs` names event N's tiled reads `format!("ev{:04}", N)` +
+        // `_hap_` + a counter; simulate's own test pins that the two agree.
+        assert_eq!(planted_read_prefix(1), "ev0001_hap_");
+        assert_eq!(planted_read_prefix(123), "ev0123_hap_");
     }
 }

@@ -2738,6 +2738,37 @@ mod tests {
     }
 
     #[test]
+    fn test_an_insertions_tiled_reads_carry_the_prefix_validate_looks_for() {
+        // `spike validate`'s `ins_planted` counts only the reads spike made for
+        // truth record `sim_ins_N`, by name (RF13). The name is built here and
+        // looked for there, so the two must agree.
+        let mut hap = make_haplotype(vec![
+            ref_segment(0, 2000),
+            novel_segment(100),
+            ref_segment(2000, 2000),
+        ]);
+        let pool = make_covering_pool(0, 6000, 1200);
+        let event = SimEvent::Insertion {
+            chrom: "chr1".to_string(),
+            pos: 2000,
+            ins_seq: Some(vec![b'G'; 100]),
+            ins_len: 100,
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.5),
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+        let out = simulate_event(
+            3, &event, &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, &mut rng,
+        )
+        .unwrap();
+        let prefix = crate::validate::planted_read_prefix(3);
+        assert!(!out.chimeric_pairs.is_empty());
+        for pair in &out.chimeric_pairs {
+            assert!(pair.name.starts_with(&prefix), "{} lacks {}", pair.name, prefix);
+        }
+    }
+
+    #[test]
     fn test_long_insertion_yields_reads_carrying_inserted_sequence() {
         // ref (A) [0,2000) | 1000 bp insertion (G) | ref (A) [2000,4000).
         let mut hap = make_haplotype(vec![
