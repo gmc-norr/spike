@@ -18,11 +18,21 @@
 >
 > **Added since the copy**, at the end of this file and from that same run: **T3 — measuring the
 > depth fold at any MAPQ** and **T7 — the sample's own non-SNP variants in event footprints (CR3
-> option B's scan)**. They are not among the six Codex findings the note below covers. Both are
-> decisions waiting for the human with nothing changed; both recommend option A — document the
-> limit now — and both say that a new threshold has to be locked on chromosomes other than 20,
-> because this run has now seen chr20's distribution. Their measurements are in `REVIEW.md` under
-> T3 and T7.
+> option B's scan)**. They are not among the six Codex findings the note below covers. Nothing was
+> changed for either.
+>
+> **T7** is a decision waiting for the human: a blanket footprint warning would fire on 38 of 40
+> ordinary chr20 loci, so it cannot be a warning as stated; the note recommends documenting the
+> exposure now and says any size threshold must be locked on chromosomes other than 20, because this
+> run has now seen chr20's distribution.
+>
+> **T3 is INCONCLUSIVE and recommends nothing.** Its first verdict — that five of CR2's six
+> depth-fold warnings would not have warned at any MAPQ — was **retracted** (`5574b15`): it rested on
+> a proxy measured in read-base coverage without the proper-pair requirement, while
+> `SIM_DEPTH_FOLD` is fragment coverage over proper pairs at or above `--min-mapq`. The direct
+> counterfactual, spike run at `--min-mapq 0`, gives **3 of 6**, below the plan's own 4-of-6 bar, so
+> the locked outcome rule is "propose nothing". The note now records the table and what a decidable
+> version of the question would need. Read the retraction in `REVIEW.md` before the note.
 
 # DESIGN-NOTES — the Codex findings that change spike's model or its defaults
 
@@ -496,84 +506,80 @@ would have to be given the donor BAM, which today it is not.
 
 ## T3 — measuring the depth fold at any MAPQ
 
-**Status: a decision for the human. Nothing was changed.** From the run after the CR4 and CR2
-census, 2026-09-26. The measurement is in REVIEW.md, "Result: T3 — mappability dominates, 5 of 6".
+**Status: INCONCLUSIVE. This note recommends nothing, and its earlier recommendation is withdrawn.**
+From the run after the CR4 and CR2 census, 2026-09-26. The measurement and the retraction are in
+REVIEW.md: "Result: T3 — mappability dominates, 5 of 6" followed by
+"RETRACTION: T3's verdict is withdrawn — the result is inconclusive, and T3 proposes nothing".
 
-### The measured problem
+**Read the retraction before anything else in this note.** The verdict "five of the six would not have
+warned at any MAPQ" rested on a proxy measured in the wrong units: `SIM_DEPTH_FOLD` is a ratio of
+**fragment** coverage over **proper pairs whose both mates pass `--min-mapq`**, over spike's own
+per-segment bins, while the proxy was `samtools depth` **read-base** coverage with **no proper-pair
+requirement** over a uniform grid. The locked plan declared them equivalent by borrowing spike's own
+1.5 threshold. They are not.
 
-`SIM_DEPTH_FOLD` is computed from the donor **pool**, which holds only proper pairs whose both
-mates pass `--min-mapq` (default 20). A 1 kb bin of low mappability therefore reads thin in the
-pool whether or not the library is thin there, and the fold counts that as a depth departure. CR2's
-own plan stated the limit before measuring and left it open.
+### What is actually measured, by the direct counterfactual
 
-Measured on the six duplications that warned in CR2's C4 — all 40 seeded spans were re-run and the
-same six warned at the same folds — with each event's worst bin compared against its own anchor
-window at two MAPQ floors:
+`simulate::depth_fold` is computed from the donor pool before anything is planted, so running spike
+with **`--min-mapq 0`** gives the fold at any MAPQ in spike's own units, over spike's own bins.
+Master's binary, `--seed 1`, the six duplications that warned in CR2's C4:
 
-- **Five of the six would not have warned at any MAPQ** (`fold_any` 1.01, 1.18, 1.21, 1.44, 1.47
-  against the same 1.5 threshold).
-- **Four of those five carry 27%–40% of their reads below MAPQ 20** in the worst bin, against
-  0.0%–0.2% in their own anchor. Event 33's bin is flat to within 1% at any MAPQ (45.0x against
-  45.3x) while the pool reads 42.1x against 63.5x and warns at 1.51.
-- **One of the six is a real depth dip** (event 39, `fold_any` 1.61): thin at both floors, only
-  4.6% low-MAPQ, and GC 0.593 against its anchor's 0.461 — the highest GC in the table.
-- **One of the six is neither** (event 2): 0.0% low-MAPQ and *deeper* than its anchor at both
-  floors, 1.44-fold at any MAPQ amplified to 1.62-fold by the pool's filter.
-- The control separates: over a uniform grid, the six warning events' `fold_any` median is 1.46
-  against the other 34's 1.24, and only 1 of the 34 exceeds 1.5.
+| n | event | fold at `--min-mapq 20` | fold at `--min-mapq 0` | still warns at 0? |
+| --- | --- | --- | --- | --- |
+| 2 | `dup:chr20:2516875-2526875` | 1.62 | **1.62** | **yes** |
+| 13 | `dup:chr20:23433622-23443622` | 1.71 | 1.35 | no |
+| 15 | `dup:chr20:25322805-25332805` | 2.46 | **1.70** | **yes** |
+| 33 | `dup:chr20:56072849-56082849` | 1.51 | 1.48 | no |
+| 34 | `dup:chr20:56107004-56117004` | 1.51 | 1.20 | no |
+| 39 | `dup:chr20:59348072-59358072` | 1.75 | 1.69 | **yes** |
 
-**Measured, not predicted: an any-MAPQ fold would fire on 2 of the 40 instead of 6.**
+**Three of six would go quiet at any MAPQ; three would still warn.** The locked verdict rule needed 4
+of 6 either way, so this is **inconclusive**, and the locked outcome rule for inconclusive is "report
+the table and say so. Propose nothing." Across all 40 spans, an any-MAPQ fold would fire on **3**
+(events 2, 15, 39) rather than 6 — not the 2 the withdrawn note claimed. Event 24, which that note
+named as the one non-warning event over the line, reads **1.49 at both floors** and fires at neither.
 
-### The governing principle
+Caveat, stated plainly: `--min-mapq 0` still requires a proper pair with its mate mapped, so this is
+spike's own metric with only the MAPQ floor removed, not "primary, non-duplicate at any MAPQ". It is
+*closer* to the counterfactual than the proxy was, not further, and dropping the proper-pair
+requirement too would move the folds further from 5 of 6, not back toward it.
 
-A warning should say something about the sample, not about the filter the simulator happens to
-apply to its own donor pool. Where the two differ, the user cannot act on the warning.
+### What survives the retraction, and is still measured
 
-### What would show the fix works, and what would show it does not
+- CR2's C4 reproduced whole: 40 spans ran, exactly 6 warned — events 2, 13, 15, 33, 34, 39 — at
+  1.62, 1.71, 2.46, 1.51, 1.51 and 1.75.
+- **The pool's filter does inflate some folds.** Two of the six fall materially when the floor is
+  removed: 1.71 → 1.35 and 1.51 → 1.20. That much of the original concern is real.
+- **Four of the six worst bins carry 27%–40% of their primary, non-duplicate reads below MAPQ 20**
+  (events 13, 15, 33, 34) against 0.0%–0.2% in their own anchors. Those are measured facts about
+  those loci whatever label is attached, and three of the four are among the three that go quiet.
+- Event 39's worst bin has **GC 0.593 against its anchor's 0.461**, the highest GC in the table, and
+  it is thin at both floors.
+- Event 2 is neither: 0.0% low-MAPQ and *deeper* than its anchor at both floors, and its fold does
+  not move at all when the floor is removed (1.62 → 1.62).
 
-- **Works:** on these 40 spans the warning fires on 2 rather than 6; event 33 (flat to 1% at any
-  MAPQ) goes quiet; event 39 (thin at both floors) still fires; and the `variable` review probe
-  still reports a fold of about 3.9, since its thin interior is thin at *every* MAPQ — that probe
-  is the regression test any change here must keep passing.
-- **Does not:** the `variable` probe's fold falls below 1.5, or a synthetic probe built with a
-  genuinely thin *and* well-mapped interior stops warning. Either means the new estimator has lost
-  the signal the old one had.
+### The governing principle, unchanged
 
-### Option A — leave the fold as it is, and say what it measures
+A warning should say something about the sample, not about the filter the simulator happens to apply
+to its own donor pool. Where the two differ, the user cannot act on the warning. **T3 did not settle
+how often they differ.**
 
-Keep `SIM_DEPTH_FOLD` on the pool. Add one sentence to README and to the warning text: the fold is
-measured over the reads spike can actually use, so a bin of low mappability contributes to it even
-when the library is even there, and a fold just above 1.5 on real data is more often mappability
-than depth.
+### What a decidable version of this question needs
 
-- **Cost:** a documentation change. No behaviour moves, no threshold moves, nothing to re-measure.
-- **What it does not fix:** the warning still fires about three times more often than the sample
-  warrants, and a user cannot tell which kind they have without doing T3's measurement themselves.
+Not a new option — a measurement. Run the six (or all forty) at `--min-mapq 0` **and** with the
+proper-pair requirement dropped, on **chromosomes other than 20**, and report how many folds cross
+1.5 under each. That is three flags' worth of runs, not a code change, and it is the work that would
+turn this into a choice. Until then there is nothing here to choose between: the honest state is that
+the pool's filter demonstrably inflates the fold for some events and demonstrably does not for
+others, in a ratio this run could not establish.
 
-### Option B — report both folds, the pool one and an any-MAPQ one
+### What may be said now without any new measurement
 
-Compute a second fold from primary, non-duplicate, non-QC-fail reads at **any** MAPQ over the same
-bins, write it as a second INFO field (`SIM_DEPTH_FOLD_ANY`), and warn on **that** one while
-keeping `SIM_DEPTH_FOLD` as it is. The two together say what T3 had to measure by hand: a large
-pool fold with a small any-MAPQ fold is mappability; both large is depth.
-
-- **Cost:** a second depth pass per bin over a read stream the pool does not hold, so the pool
-  cannot be reused — a separate BAM query per event, like T2's `coverage_any_mapq` row. Roughly the
-  size of T2.
-- **Risk:** it moves which events warn, and the standing choice says a warning may change but
-  nothing that passes today may start failing. A warning is only a log line and an INFO field, so
-  this stays inside the standing choice — but the *threshold* for the new fold would have to be
-  locked in its own plan before any any-MAPQ fold is seen, and T3's numbers above have already been
-  seen. **A new plan on other chromosomes is the honest way to set it.**
-- **What it does not fix:** nothing about the depth model. The tiling still scales every fragment by
-  one depth; that is CR2 option A, still open.
-
-### Recommendation
-
-**Option A now, option B only with a threshold locked on chromosomes other than 20.** T3's
-distribution is exactly the data a threshold must not be chosen from, and option A costs a sentence
-and removes the misreading that matters — that a 1.5-fold warning on real data means the sample's
-depth is uneven, when four times in six it means the bin is hard to map.
+One sentence of documentation, which is true under every reading above: the fold is measured over the
+reads spike can actually use, so a bin of low mappability contributes to it even when the library is
+even there. That is a statement of what the metric is, not a claim about how often it misleads, and
+it costs nothing. **Anything stronger — including any threshold for a second `SIM_DEPTH_FOLD_ANY`
+field — must be locked in a new plan on data this run has not seen.** T3 has now seen chr20's.
 
 ## T7 — the sample's own non-SNP variants in event footprints (CR3 option B's scan)
 
