@@ -47,6 +47,21 @@ struct TruthEvent {
     /// span, so `end == start` and the length cannot be read off the
     /// coordinates the way every other type's can. None for every other type.
     ins_len: Option<u64>,
+    /// For INS: the record's ALT column exactly as the truth VCF wrote it --
+    /// the anchor base and then the inserted sequence, or a symbolic `<INS>`
+    /// from a spike old enough not to have recorded the bases (CR7). None for
+    /// every other type.
+    ///
+    /// Deliberately **not** `alt_allele`. [`NearbyRecords::new`] selects the
+    /// records the small-variant path treats as edits by
+    /// `ref_allele.is_some() && alt_allele.is_some()`, and
+    /// [`NearbyRecords::inside`] applies each to the reference at its own
+    /// `start`; an INS's `start` is the VCF POS under the SV convention where a
+    /// small variant's is POS - 1, so an insertion put there would enter the
+    /// haplotype enumeration `allele_freq` votes against, one base off, and
+    /// move a non-advisory row. This field is read by [`INS_SEQUENCE`] and by
+    /// nothing else.
+    ins_alt: Option<Vec<u8>>,
     /// The census numbers spike recorded for this event, as INFO holds them.
     census: CensusInfo,
 }
@@ -295,13 +310,47 @@ const MIN_SPLIT_READS: usize = 2;
 /// The INS row's name: reads carrying the inserted sequence.
 const INS_READS: &str = "ins_reads";
 
+/// At least this many reads must carry an insertion's evidence -- an alignment
+/// that leaves the reference for [`INS_READS`], the inserted bases themselves
+/// for [`INS_SEQUENCE`]. Two matches [`MIN_SPLIT_READS`] and for the same
+/// reason: one clipped read is background anywhere, two at the same point are
+/// not. Shared rather than written twice, so the two rows cannot drift apart.
+const MIN_INS_READS: usize = 2;
+
+/// The advisory INS row's name: reads carrying the bases the truth record's
+/// own ALT names, not just an alignment that leaves the reference (CR9).
+///
+/// 12 characters against the Check column's `{:<18}`, so nothing moves;
+/// `test_the_ins_sequence_row_does_not_move_the_status_column` pins that.
+const INS_SEQUENCE: &str = "ins_sequence";
+
+/// Longest probe k-mer [`INS_SEQUENCE`] takes out of an insertion's ALT. Long
+/// enough to be specific in a read and short enough to sit inside one.
+const INS_KMER_LEN: usize = 31;
+
+/// Shortest probe k-mer [`INS_SEQUENCE`] will grade on. Below it the row is
+/// not evaluable rather than graded: a given random 12-mer is expected in
+/// about one 151 bp read in 10^5, an 8-mer in about one in 400, so a shorter
+/// k-mer would be found in unedited reads and the count would mean nothing.
+const MIN_INS_KMER_LEN: usize = 12;
+
+/// How far either side of POS [`INS_SEQUENCE`] reads the reference looking for
+/// its own probe k-mers. Finding one there makes the row not evaluable: an
+/// unedited read would match it.
+const INS_KMER_REF_PAD: u64 = 1_000;
+
+/// How far either side of POS [`INS_SEQUENCE`] collects reads: one read length
+/// on each side, so every read whose bases can reach the insertion point is
+/// queried and nothing further is.
+const INS_SEQUENCE_PAD: u64 = 150;
+
 /// The small-variant row's name: the allele fraction read off the pileup.
 const ALLELE_FREQ: &str = "allele_freq";
 
 /// The "no check applies to this event" fallback row's name (M11).
 const EVENT_CHECKED: &str = "event_checked";
 
-// The seven check-name constants above name every row `check_event` pushes,
+// The eight check-name constants above name every row `check_event` pushes,
 // and `print_usage` lists the same rows from the same constants, so a renamed
 // row cannot print one name and document another. The boundary is deliberate
 // and stops there: `insert_size`, `dup_rate` and `mean_mapq` are `run()`'s
@@ -396,6 +445,27 @@ fn check_event(
     if event.sv_type == "INS" {
         let r = check_ins_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
         results.push(check_outcome(&label, INS_READS, r, false));
+
+        // The same insertion, read rather than counted. `ins_reads` works from
+        // the CIGAR alone and never looks at a base, so an insertion of
+        // roughly the right length in roughly the right place passes it
+        // whatever it spells (CR9). This row takes the inserted bases out of
+        // the truth record's own ALT and looks for them in the reads.
+        //
+        // No row at all when the ALT recorded no sequence: a symbolic `<INS>`
+        // is an older spike's truth VCF, written before CR7's fix put the
+        // bases there, and that is not a failure of this run -- the same rule
+        // T1 applied to a truth record carrying no census field.
+        if let Some(inserted) = ins_alt_sequence(event) {
+            let r = check_ins_sequence(
+                &args.bam_path,
+                &args.ref_path,
+                event,
+                inserted,
+                args.min_mapq,
+            );
+            results.push(check_outcome(&label, INS_SEQUENCE, r, true));
+        }
     }
 
     // Allele frequency (meaningful for SNPs/small variants).
@@ -656,6 +726,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -673,6 +744,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -690,6 +762,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -710,6 +783,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len,
+                    ins_alt: Some(alt_col.as_bytes().to_vec()),
                     census: census_info,
                 });
             }
@@ -733,6 +807,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -762,6 +837,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: None,
                     alt_allele: None,
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -783,6 +859,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     ref_allele: Some(ref_allele),
                     alt_allele: Some(alt_allele),
                     ins_len: None,
+                    ins_alt: None,
                     census: census_info,
                 });
             }
@@ -1053,9 +1130,6 @@ fn check_ins_reads(
     event: &TruthEvent,
     min_mapq: u8,
 ) -> Result<CheckResult> {
-    // At least this many reads must carry it. Two matches `check_split_reads`:
-    // one clipped read is background anywhere, two at the same point are not.
-    const MIN_INS_READS: usize = 2;
     // How far from POS the alignment may leave the reference. An aligner
     // places the boundary within a few bases of the insertion point; 100 bp
     // covers that without reaching the next feature.
@@ -1087,6 +1161,168 @@ fn check_ins_reads(
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_INS_READS,
         advisory: false,
+    })
+}
+
+/// The bases one INS truth record says were inserted, or `None` when it
+/// recorded none.
+///
+/// The ALT column is a literal sequence when it does not begin with `<` and is
+/// longer than one base; its first base is the anchor VCF requires, so the
+/// inserted sequence is everything after it. A symbolic ALT (`<INS>`) and a
+/// bare anchor both mean the bases were not recorded, and the caller pushes no
+/// row for them.
+fn ins_alt_sequence(event: &TruthEvent) -> Option<&[u8]> {
+    let alt = event.ins_alt.as_deref()?;
+    if alt.len() <= 1 || alt.starts_with(b"<") {
+        return None;
+    }
+    Some(&alt[1..])
+}
+
+/// The probe k-mers of an insertion, in both orientations and without
+/// duplicates.
+///
+/// The **first** and **last** `k` bases, never the middle: a read anchored
+/// left of POS carries the insertion's beginning and one anchored right of it
+/// carries its end, while for an insertion longer than a read no read contains
+/// the middle at all -- a 2000 bp insertion's middle k-mer sits 1000 bases in,
+/// far past the reach of a 151 bp read. Both orientations, because a read's
+/// stored sequence is in reference orientation but the insertion may be read
+/// from either side.
+///
+/// One set serves both uses -- the reads and the reference guard -- so the
+/// guard covers exactly the k-mers a read is tested against and the two cannot
+/// disagree. For `inserted.len() == k` the first and last k-mers are the same
+/// sequence, and a palindromic k-mer is its own reverse complement, so the
+/// duplicates are dropped rather than probed twice.
+fn alt_probe_kmers(inserted: &[u8], k: usize) -> Vec<Vec<u8>> {
+    let upper = inserted.to_ascii_uppercase();
+    let mut probes: Vec<Vec<u8>> = Vec::new();
+    for kmer in [&upper[..k], &upper[upper.len() - k..]] {
+        let mut reverse = kmer.to_vec();
+        crate::extract::reverse_complement(&mut reverse);
+        for candidate in [kmer.to_vec(), reverse] {
+            if !probes.contains(&candidate) {
+                probes.push(candidate);
+            }
+        }
+    }
+    probes
+}
+
+/// True if `bases` holds any of `probes`, case-insensitively.
+fn holds_a_probe(bases: &[u8], probes: &[Vec<u8>]) -> bool {
+    let upper = bases.to_ascii_uppercase();
+    probes
+        .iter()
+        .any(|probe| upper.windows(probe.len()).any(|w| w == probe.as_slice()))
+}
+
+/// Check that reads at an INS breakpoint carry the bases the truth record's
+/// own ALT names (CR9).
+///
+/// [`check_ins_reads`] beside this row counts reads whose *alignment* leaves
+/// the reference near POS and reads no base at all, so an insertion of roughly
+/// the right length in roughly the right place passes it whatever it spells.
+/// CR7's fix put the inserted sequence into the truth VCF's ALT, so it can now
+/// be looked for: this is the first check here that verifies inserted sequence
+/// rather than a CIGAR.
+///
+/// `inserted` is the ALT past its anchor base, from [`ins_alt_sequence`]. Two
+/// probe k-mers of `k = min(inserted.len(), INS_KMER_LEN)` bases are taken from
+/// its two ends and a read supports the insertion if its bases hold either, in
+/// either orientation. The reads are the distinct names over
+/// `POS +/- INS_SEQUENCE_PAD` that [`usable_alignment`] admits -- the same
+/// filter `ins_reads` applies, reused rather than restated -- and the floor is
+/// the shared [`MIN_INS_READS`].
+///
+/// Two cases the row cannot answer, each a **failed** not-evaluable row rather
+/// than a silent pass (M10):
+///
+/// - `k < MIN_INS_KMER_LEN`: a k-mer that short is not specific enough inside a
+///   read, so a count of matches would say nothing about this insertion.
+/// - either probe k-mer already in the reference within [`INS_KMER_REF_PAD`] of
+///   POS: an unedited read would match it, so the count would mean nothing. A
+///   random insertion makes that vanishingly unlikely; an explicit one copied
+///   from nearby sequence does not.
+///
+/// The row is built non-advisory here and stamped by [`check_outcome`], which
+/// is the single source of that flag (T2's F1).
+fn check_ins_sequence(
+    bam_path: &str,
+    ref_path: &str,
+    event: &TruthEvent,
+    inserted: &[u8],
+    min_mapq: u8,
+) -> Result<CheckResult> {
+    let label = format_event_label(event);
+    // `load_truth_events` reads an INS as `start: vcf_pos`, so `start` is
+    // already the POS the truth record names -- the same position
+    // `check_ins_reads` scans around.
+    let pos = event.start;
+    let k = inserted.len().min(INS_KMER_LEN);
+    if k < MIN_INS_KMER_LEN {
+        return Ok(event_not_evaluable(
+            &label,
+            INS_SEQUENCE,
+            &format!(">={} with a >={}bp kmer", MIN_INS_READS, MIN_INS_KMER_LEN),
+            &format!("alt is {}bp", inserted.len()),
+            &format!(
+                "the ALT records {} inserted bases, fewer than the {} a probe k-mer \
+                 needs to be specific inside a read",
+                inserted.len(),
+                MIN_INS_KMER_LEN
+            ),
+        ));
+    }
+    let probes = alt_probe_kmers(inserted, k);
+    let expected = format!(">={} with a {}bp alt kmer", MIN_INS_READS, k);
+
+    // The reference first: a probe the reference already holds near POS would
+    // be matched by reads spike never touched.
+    let (_, window) = crate::reference::fetch_window(
+        ref_path,
+        &event.chrom,
+        pos.saturating_sub(INS_KMER_REF_PAD),
+        pos + INS_KMER_REF_PAD,
+    )?;
+    if holds_a_probe(&window, &probes) {
+        return Ok(event_not_evaluable(
+            &label,
+            INS_SEQUENCE,
+            &expected,
+            "kmer in ref",
+            &format!(
+                "the reference within {}bp of {}:{} already holds one of the ALT's own \
+                 {}bp k-mers, so an unedited read would match it",
+                INS_KMER_REF_PAD, event.chrom, pos, k
+            ),
+        ));
+    }
+
+    let mut names: HashSet<String> = HashSet::new();
+    for_each_alignment(
+        bam_path,
+        ref_path,
+        &event.chrom,
+        pos.saturating_sub(INS_SEQUENCE_PAD),
+        pos + INS_SEQUENCE_PAD,
+        min_mapq,
+        &mut |name, _align_start, _ops, seq| {
+            if holds_a_probe(seq, &probes) {
+                names.insert(String::from_utf8_lossy(name).into_owned());
+            }
+        },
+    )?;
+
+    Ok(CheckResult {
+        event_label: label,
+        check_name: INS_SEQUENCE.to_string(),
+        expected,
+        observed: format!("{}", names.len()),
+        pass: names.len() >= MIN_INS_READS,
+        advisory: false, // stamped by check_outcome
     })
 }
 
@@ -3249,6 +3485,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            ins_alt: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "DEL chr7:55000-56000 (EGFR)");
@@ -3267,6 +3504,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            ins_alt: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "INS chr7:55200 (EGFR)");
@@ -3574,6 +3812,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: None,
             alt_allele: None,
             ins_len: None,
+            ins_alt: None,
             census: CensusInfo::default(),
         }
     }
@@ -3676,6 +3915,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: None,
             alt_allele: None,
             ins_len: Some(300),
+            ins_alt: None,
             census: CensusInfo::default(),
         }
     }
@@ -3801,6 +4041,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             ref_allele: Some(reference.to_vec()),
             alt_allele: Some(alt.to_vec()),
             ins_len: None,
+            ins_alt: None,
             census: CensusInfo::default(),
         }
     }
@@ -6240,5 +6481,692 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         let pooled = named(&past_pad, "split_reads");
         assert_eq!(pooled.observed, "3", "the pooled row did not move either");
         assert!(pooled.pass, "the pooled row passes on either side of it");
+    }
+
+    // --- T6: the inserted bases the truth record names, found in the reads ---
+
+    /// Deterministic pseudo-random ACGT, `len` bases from `seed`.
+    ///
+    /// chrA cycles `ACGT` with period 4, so every 31-mer in it is a rotation of
+    /// `ACGT` repeated; an insertion has to bring a sequence of its own or the
+    /// reference guard would fire on it. A fixed seed keeps the fixture
+    /// identical run to run, and each test that depends on a k-mer being absent
+    /// asserts that rather than trusting the generator.
+    fn pseudo_random_bases(seed: u64, len: usize) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                b"ACGT"[((x >> 33) % 4) as usize]
+            })
+            .collect()
+    }
+
+    /// The reverse complement of `bases`, as a value.
+    fn revcomp_of(bases: &[u8]) -> Vec<u8> {
+        let mut out = bases.to_vec();
+        crate::extract::reverse_complement(&mut out);
+        out
+    }
+
+    /// The 60 bp insertion the reads at [`INS_CARRIED_POS`] carry whole.
+    fn carried_insertion() -> Vec<u8> {
+        pseudo_random_bases(11, 60)
+    }
+
+    /// A 2 kb insertion: longer than any read, so only its first and last
+    /// bases are ever inside one.
+    fn long_insertion() -> Vec<u8> {
+        pseudo_random_bases(13, 2_000)
+    }
+
+    /// An 8 bp insertion -- below [`MIN_INS_KMER_LEN`], so the row cannot
+    /// grade it.
+    fn short_insertion() -> Vec<u8> {
+        pseudo_random_bases(17, 8)
+    }
+
+    /// The bases of `long_insertion` a read at [`INS_LONG_MIDDLE_POS`] carries:
+    /// 60 out of the middle, reachable by no read of a real run.
+    fn long_middle() -> Vec<u8> {
+        long_insertion()[985..1_045].to_vec()
+    }
+
+    // The five insertion loci of `inserted_sequence_cram`, 3 kb apart, so that
+    // no locus's +/-150 read window or `ins_reads`'s +/-100 CIGAR window
+    // reaches another's reads.
+    const INS_CARRIED_POS: u64 = 5_000;
+    const INS_REVCOMP_POS: u64 = 8_000;
+    const INS_LONG_ENDS_POS: u64 = 11_000;
+    const INS_LONG_MIDDLE_POS: u64 = 14_000;
+    const INS_SHORT_POS: u64 = 17_000;
+
+    /// One single-end read of a one-contig chrA fixture with its CIGAR and its
+    /// bases given explicitly.
+    ///
+    /// [`one_contig_record`] slices its bases out of the reference and sets no
+    /// features, which is right for a read that matches; a read carrying an
+    /// insertion cannot be built that way, because CRAM stores a match as a
+    /// reference-relative feature and would hand back the reference's bases.
+    /// The bases therefore arrive through `Features::from_cigar` together with
+    /// the CIGAR that explains them, as `pairs_cram`'s paired records do.
+    fn one_contig_spliced_record(
+        name: &str,
+        start0: usize,
+        ops: &[(Kind, usize)],
+        bases: &[u8],
+    ) -> noodles::cram::Record {
+        use noodles::sam::alignment::record::cigar::Op;
+        use noodles::sam::alignment::record_buf::{Cigar, QualityScores, Sequence};
+
+        let flags = noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY;
+        let cigar: Cigar = ops.iter().map(|&(k, n)| Op::new(k, n)).collect();
+        let sequence = Sequence::from(bases.to_vec());
+        let quality_scores = QualityScores::from(vec![40u8; bases.len()]);
+        let features = noodles::cram::record::Features::from_cigar(
+            flags,
+            &cigar,
+            &sequence,
+            &quality_scores,
+        );
+        noodles::cram::Record::builder()
+            .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
+            .set_flags(flags)
+            .set_reference_sequence_id(0)
+            .set_read_length(bases.len())
+            .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+            .set_name(name)
+            .set_mapping_quality(
+                noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
+            )
+            .set_bases(sequence)
+            .set_quality_scores(quality_scores)
+            .set_features(features)
+            .build()
+    }
+
+    /// One indexed CRAM on the 20 kb cycling chrA holding five insertion loci
+    /// that differ only in *which bases* their reads carry, so that
+    /// `ins_reads` passes at every one of them and `ins_sequence` can only
+    /// differ by reading the bases:
+    ///
+    /// - [`INS_CARRIED_POS`]: three reads carrying the whole 60 bp
+    ///   `carried_insertion` as an `I` operation.
+    /// - [`INS_REVCOMP_POS`]: two reads carrying its **reverse complement**.
+    /// - [`INS_LONG_ENDS_POS`]: one read soft-clipping the **first** 60 bases
+    ///   of the 2 kb `long_insertion`, one the **last** 60.
+    /// - [`INS_LONG_MIDDLE_POS`]: two reads soft-clipping 60 bases out of that
+    ///   insertion's **middle**.
+    /// - [`INS_SHORT_POS`]: two reads carrying the 8 bp `short_insertion`.
+    ///
+    /// Every record is 100 bp, primary, mapped, unmarked, single-end and MAPQ
+    /// 60, so `usable_alignment` admits all of them at the default
+    /// `--min-mapq 20` and only the bases separate the loci.
+    fn inserted_sequence_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "ins_sequence", &seq);
+        let header = one_contig_header(seq.len());
+
+        // A read carrying `inserted` whole, anchored on both sides: an `I`
+        // operation at `pos`, which is what an aligner writes for an insertion
+        // shorter than a read.
+        let spanning = |name: &str, pos: u64, inserted: &[u8]| {
+            let flank = (TEST_READ_LEN - inserted.len()) / 2;
+            let start0 = (pos as usize) - flank;
+            let mut bases = seq[start0..start0 + flank].to_vec();
+            bases.extend_from_slice(inserted);
+            bases.extend_from_slice(&seq[start0 + flank..start0 + 2 * flank]);
+            one_contig_spliced_record(
+                name,
+                start0,
+                &[
+                    (Kind::Match, flank),
+                    (Kind::Insertion, inserted.len()),
+                    (Kind::Match, flank),
+                ],
+                &bases,
+            )
+        };
+        // A read anchored to the *left* of `pos` whose trailing 60 bases are
+        // soft-clipped: what an aligner writes for an insertion too long to
+        // anchor both sides of.
+        let clipped_right = |name: &str, pos: u64, carried: &[u8]| {
+            let start0 = (pos as usize) - 40;
+            let mut bases = seq[start0..start0 + 40].to_vec();
+            bases.extend_from_slice(carried);
+            one_contig_spliced_record(
+                name,
+                start0,
+                &[(Kind::Match, 40), (Kind::SoftClip, carried.len())],
+                &bases,
+            )
+        };
+        // The mirror image: anchored to the *right* of `pos`, leading bases
+        // clipped.
+        let clipped_left = |name: &str, pos: u64, carried: &[u8]| {
+            let start0 = pos as usize;
+            let mut bases = carried.to_vec();
+            bases.extend_from_slice(&seq[start0..start0 + 40]);
+            one_contig_spliced_record(
+                name,
+                start0,
+                &[(Kind::SoftClip, carried.len()), (Kind::Match, 40)],
+                &bases,
+            )
+        };
+
+        let carried = carried_insertion();
+        let long = long_insertion();
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        // In alignment order, so the CRAM is coordinate-sorted.
+        for i in 0..3u64 {
+            records.push(spanning(
+                &format!("carried{}", i),
+                INS_CARRIED_POS + i,
+                &carried,
+            ));
+        }
+        for i in 0..2u64 {
+            records.push(spanning(
+                &format!("revcomp{}", i),
+                INS_REVCOMP_POS + i,
+                &revcomp_of(&carried),
+            ));
+        }
+        records.push(clipped_right("long_first", INS_LONG_ENDS_POS, &long[..60]));
+        records.push(clipped_left(
+            "long_last",
+            INS_LONG_ENDS_POS,
+            &long[long.len() - 60..],
+        ));
+        for i in 0..2u64 {
+            records.push(clipped_right(
+                &format!("long_middle{}", i),
+                INS_LONG_MIDDLE_POS + i,
+                &long_middle(),
+            ));
+        }
+        for i in 0..2u64 {
+            records.push(spanning(
+                &format!("short{}", i),
+                INS_SHORT_POS + i,
+                &short_insertion(),
+            ));
+        }
+
+        let cram_path = write_indexed_cram(&dir, "ins_sequence", &fasta_path, &header, &records);
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// An INS truth event at 0-based `pos` whose ALT is the reference base
+    /// there followed by `inserted` -- the shape CR7's fix writes and
+    /// `load_truth_events` reads back.
+    fn ins_event_with_alt(pos: u64, inserted: &[u8]) -> TruthEvent {
+        let mut alt = vec![cycling_contig()[pos as usize]];
+        alt.extend_from_slice(inserted);
+        TruthEvent {
+            ins_len: Some(inserted.len() as u64),
+            ins_alt: Some(alt),
+            ..ins_event("chrA", pos)
+        }
+    }
+
+    /// The rows one INS event leaves behind on a fixture.
+    fn ins_rows(cram: &str, fasta: &str, event: &TruthEvent) -> Vec<CheckResult> {
+        let args = args_for(cram, fasta);
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, event, &NearbyRecords::default(), &mut results);
+        results
+    }
+
+    /// `expected` as the row builds it from the floor and `k`.
+    fn ins_sequence_expected(k: usize) -> String {
+        format!(">={} with a {}bp alt kmer", MIN_INS_READS, k)
+    }
+
+    #[test]
+    fn test_the_ins_sequence_row_passes_reads_carrying_the_truth_records_own_bases() {
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_pass");
+        let rows = ins_rows(
+            &cram,
+            &fasta,
+            &ins_event_with_alt(INS_CARRIED_POS, &carried_insertion()),
+        );
+
+        assert_eq!(row_names(&rows), vec![INS_READS, INS_SEQUENCE]);
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.expected, ins_sequence_expected(INS_KMER_LEN));
+        assert_eq!(r.observed, "3", "all three reads carry the inserted bases");
+        assert!(r.pass, "three reads is above the floor of {}", MIN_INS_READS);
+        assert!(r.advisory, "the row is always advisory");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_different_inserted_bases_fail_the_sequence_row_that_ins_reads_passes() {
+        // The point of the row, pinned on one input: the same reads, the same
+        // CIGARs, the same locus, two truth ALTs of the same length. This is
+        // C1's separation -- run A's BAM against run B's truth VCF -- in a
+        // unit test.
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_wrong");
+        let right = carried_insertion();
+        let wrong = pseudo_random_bases(29, right.len());
+        assert_eq!(wrong.len(), right.len(), "the two ALTs are the same length");
+        assert_ne!(wrong, right, "and they are different sequences");
+
+        let ok = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &right));
+        let bad = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &wrong));
+
+        // `ins_reads` cannot tell the two apart: it reads the CIGAR alone
+        // (CR9), and the CIGAR is the same.
+        let (a, b) = (named(&ok, INS_READS), named(&bad, INS_READS));
+        assert_eq!(a.expected, b.expected);
+        assert_eq!(a.observed, "3");
+        assert_eq!(b.observed, "3");
+        assert!(a.pass && b.pass, "ins_reads PASSes on both");
+
+        // `ins_sequence` does.
+        let a = named(&ok, INS_SEQUENCE);
+        let b = named(&bad, INS_SEQUENCE);
+        assert_eq!(a.observed, "3");
+        assert!(a.pass, "the truth record's own bases are in the reads");
+        assert_eq!(b.observed, "0", "no read carries the other sequence");
+        assert!(!b.pass, "so the row FAILs where ins_reads passed");
+        assert!(b.advisory, "and it is still advisory");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_reverse_complemented_alt_kmer_counts() {
+        // A read's stored sequence is in reference orientation, but the
+        // insertion may be read from either side, so both orientations count.
+        let inserted = carried_insertion();
+        let k = INS_KMER_LEN;
+        let carried_by_the_reads = revcomp_of(&inserted);
+        for probe in [&inserted[..k], &inserted[inserted.len() - k..]] {
+            assert!(
+                !carried_by_the_reads.windows(k).any(|w| w == probe),
+                "the reads at this locus must carry the probe in no other way \
+                 than reverse-complemented"
+            );
+        }
+
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_revcomp");
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_REVCOMP_POS, &inserted));
+
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.observed, "2", "both reverse-complemented reads count");
+        assert!(r.pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_only_the_first_and_last_bases_of_a_long_insertion_are_reachable() {
+        // Why the two probes are the first and last k bases and not the
+        // middle: for an insertion longer than a read, no read contains the
+        // middle at all. A 2000 bp insertion's middle k-mer sits 1000 bases
+        // in, ten times past the reach of a 100 bp fixture read (or a real
+        // 151 bp one).
+        let long = long_insertion();
+        let k = INS_KMER_LEN;
+        let middle = long_middle();
+        assert!(
+            middle.windows(k).any(|w| w == &long[985..985 + k]),
+            "these reads do carry a middle k-mer -- the row must still not \
+             count them"
+        );
+        for probe in [&long[..k], &long[long.len() - k..]] {
+            for form in [probe.to_vec(), revcomp_of(probe)] {
+                assert!(
+                    !middle.windows(k).any(|w| w == form.as_slice()),
+                    "and neither end's k-mer, in either orientation, is in the \
+                     middle 60 bases"
+                );
+            }
+        }
+
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_long");
+        let ends = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_LONG_ENDS_POS, &long));
+        let mid = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_LONG_MIDDLE_POS, &long));
+
+        let r = named(&ends, INS_SEQUENCE);
+        assert_eq!(r.expected, ins_sequence_expected(k), "k is capped at {}", k);
+        assert_eq!(
+            r.observed, "2",
+            "one read carries the first {} bases, one the last", k
+        );
+        assert!(r.pass);
+
+        let r = named(&mid, INS_SEQUENCE);
+        assert_eq!(r.observed, "0", "no read carries either end");
+        assert!(!r.pass, "so the row FAILs on the insertion's middle");
+        // And `ins_reads` passes at that same locus, so the FAIL is about the
+        // bases and not about there being no evidence of an insertion.
+        let r = named(&mid, INS_READS);
+        assert_eq!(r.observed, "2");
+        assert!(r.pass, "ins_reads sees two clipped reads either way");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_an_alt_that_records_no_sequence_gets_no_ins_sequence_row() {
+        // A symbolic `<INS>` did not record the bases, and an older spike's
+        // truth VCF must not become a FAIL for that -- the same rule T1
+        // applied to a missing census field. So: no row at all, not a failing
+        // one.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let carried = carried_insertion();
+        for (what, alt) in [
+            ("a symbolic <INS>", Some(b"<INS>".to_vec())),
+            ("a symbolic <DUP:TANDEM>", Some(b"<DUP:TANDEM>".to_vec())),
+            ("an anchor base alone", Some(b"A".to_vec())),
+            ("an empty ALT column", Some(Vec::new())),
+            ("no ALT carried at all", None),
+        ] {
+            let event = TruthEvent {
+                ins_alt: alt,
+                ..ins_event_with_alt(INS_CARRIED_POS, &carried)
+            };
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event, &NearbyRecords::default(), &mut results);
+            assert_eq!(
+                row_names(&results),
+                vec![INS_READS],
+                "{} records no sequence, so it gets no {} row",
+                what,
+                INS_SEQUENCE
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_insertion_below_the_kmer_bound_is_not_evaluable_and_advisory() {
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_short");
+        let short = short_insertion();
+        assert!(short.len() < MIN_INS_KMER_LEN, "8 bases, below the bound");
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_SHORT_POS, &short));
+
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(
+            r.expected,
+            format!(">={} with a >={}bp kmer", MIN_INS_READS, MIN_INS_KMER_LEN)
+        );
+        assert_eq!(r.observed, format!("alt is {}bp", short.len()));
+        assert!(!r.pass, "a check that cannot run is a FAILED check (M10)");
+        assert!(r.advisory, "and being advisory it costs nothing in the exit status");
+        // The reads are there and `ins_reads` counts them: what the row cannot
+        // do is grade an 8-mer, not find evidence.
+        let r = named(&rows, INS_READS);
+        assert_eq!(r.observed, "2");
+        assert!(r.pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_an_alt_kmer_already_in_the_reference_makes_the_row_not_evaluable() {
+        // The guard: an unedited read would match a probe the reference
+        // already holds, so the count would mean nothing. chrA cycles `ACGT`,
+        // so an insertion of `ACGT` repeated is exactly that case -- and an
+        // explicit insertion copied from nearby sequence is the real one.
+        let repeated: Vec<u8> = b"ACGT".repeat(15);
+        let k = INS_KMER_LEN;
+        assert!(
+            cycling_contig().windows(k).any(|w| w == &repeated[..k]),
+            "the reference really does hold this probe"
+        );
+
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_in_ref");
+        let guarded = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &repeated));
+        let r = named(&guarded, INS_SEQUENCE);
+        assert_eq!(r.expected, ins_sequence_expected(k));
+        assert_eq!(r.observed, "kmer in ref");
+        assert!(!r.pass, "not evaluable is a FAILED row (M10)");
+        assert!(r.advisory);
+
+        // The same locus with a sequence the reference has not got is graded,
+        // so the guard is about this ALT and not about the locus.
+        let graded = ins_rows(
+            &cram,
+            &fasta,
+            &ins_event_with_alt(INS_CARRIED_POS, &carried_insertion()),
+        );
+        assert!(named(&graded, INS_SEQUENCE).pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_ins_sequence_row_is_advisory_in_the_table_and_in_the_json() {
+        // An errored row is advisory too: `check_outcome` stamps both arms, so
+        // a BAM that cannot be read cannot leak a non-advisory FAIL into the
+        // exit status.
+        let rows = ins_rows(
+            "/nonexistent/no.bam",
+            "/nonexistent/no.fa",
+            &ins_event_with_alt(INS_CARRIED_POS, &carried_insertion()),
+        );
+
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.expected, "check runs");
+        assert!(!r.pass);
+        assert!(r.advisory, "an errored ins_sequence row is still advisory");
+        assert!(
+            !named(&rows, INS_READS).advisory,
+            "while the ins_reads row beside it is not"
+        );
+
+        assert_eq!(
+            failure_message(&rows, false).as_deref(),
+            Some("1/1 validation checks failed"),
+            "the advisory row is in neither the count nor the total by default"
+        );
+        assert_eq!(
+            failure_message(&rows, true).as_deref(),
+            Some("2/2 validation checks failed"),
+            "--strict counts it"
+        );
+
+        let report = text_report(&rows, false);
+        assert!(
+            line_for(&report, INS_SEQUENCE).ends_with("FAIL (advisory)"),
+            "in:\n{}",
+            report
+        );
+        assert!(
+            line_for(&report, INS_READS).ends_with("FAIL")
+                && !line_for(&report, INS_READS).ends_with("(advisory)"),
+            "in:\n{}",
+            report
+        );
+
+        let mut json: Vec<u8> = Vec::new();
+        print_results_json(&mut json, &rows, rows.len(), 0).unwrap();
+        let json = String::from_utf8(json).unwrap();
+        assert!(
+            line_for(&json, "\"ins_sequence\"").contains("\"advisory\": true"),
+            "in:\n{}",
+            json
+        );
+        assert!(
+            line_for(&json, "\"ins_reads\"").contains("\"advisory\": false"),
+            "in:\n{}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_the_ins_sequence_row_is_produced_for_ins_and_for_no_other_type() {
+        // The gate is the event's type, not whether an ALT happens to be
+        // carried: every event below carries one.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let alt = Some({
+            let mut a = vec![b'A'];
+            a.extend_from_slice(&carried_insertion());
+            a
+        });
+        for sv_type in ["DEL", "DUP", "INV", "BND", "SNP", "CNV"] {
+            let event = TruthEvent {
+                sv_type: sv_type.to_string(),
+                ins_alt: alt.clone(),
+                ..del_event("chrA", 5_000, 7_000)
+            };
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event, &NearbyRecords::default(), &mut results);
+            assert!(
+                !row_names(&results).contains(&INS_SEQUENCE),
+                "{} has no insertion, so it gets no {} row; got {:?}",
+                sv_type,
+                INS_SEQUENCE,
+                row_names(&results)
+            );
+        }
+
+        let event = TruthEvent {
+            ins_alt: alt,
+            ..ins_event_with_alt(INS_CARRIED_POS, &carried_insertion())
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &event, &NearbyRecords::default(), &mut results);
+        assert_eq!(row_names(&results), vec![INS_READS, INS_SEQUENCE]);
+    }
+
+    #[test]
+    fn test_the_ins_sequence_expectation_is_built_from_the_floor_and_the_kmer() {
+        // `expected` is derived, so raising the floor or the k-mer length
+        // cannot leave the string behind claiming the old one -- and it has to
+        // survive the 24-wide Expected column at both ends of k's range.
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_expected");
+
+        // An insertion longer than the cap: k is the cap.
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &long_insertion()));
+        assert_eq!(
+            named(&rows, INS_SEQUENCE).expected,
+            ins_sequence_expected(INS_KMER_LEN)
+        );
+
+        // A shorter one: k is the insertion's own length.
+        for len in [MIN_INS_KMER_LEN, 20, INS_KMER_LEN] {
+            let rows = ins_rows(
+                &cram,
+                &fasta,
+                &ins_event_with_alt(INS_CARRIED_POS, &pseudo_random_bases(31, len)),
+            );
+            assert_eq!(
+                named(&rows, INS_SEQUENCE).expected,
+                ins_sequence_expected(len),
+                "k follows the inserted length below the cap"
+            );
+        }
+
+        for k in [MIN_INS_KMER_LEN, INS_KMER_LEN] {
+            assert!(
+                ins_sequence_expected(k).len() <= 24,
+                "{:?} must survive the 24-wide Expected column",
+                ins_sequence_expected(k)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_ins_reads_row_is_unchanged_by_sharing_its_minimum() {
+        // Constraint 4: lifting `MIN_INS_READS` out of `check_ins_reads` to
+        // module scope must not change one character the non-advisory row
+        // prints, so the strings are pinned as literals here rather than
+        // against the constant they are built from.
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_unchanged");
+        let rows = ins_rows(
+            &cram,
+            &fasta,
+            &ins_event_with_alt(INS_CARRIED_POS, &carried_insertion()),
+        );
+
+        let r = named(&rows, INS_READS);
+        assert_eq!(r.check_name, "ins_reads");
+        assert_eq!(r.expected, ">=2 reads with >=50bp inserted at chrA:5000");
+        assert_eq!(r.observed, "3");
+        assert!(r.pass);
+        assert!(!r.advisory);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_truth_events_carries_an_ins_records_alt_and_nothing_elses() {
+        let vcf = "\
+##fileformat=VCFv4.3
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chrA\t5001\tsim_ins_1\tA\tAGGTT\t999\tPASS\tSVTYPE=INS;SVLEN=4;SIM_VAF=0.500\tGT\t0/1
+chrA\t6001\tsim_ins_2\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=200;SIM_VAF=0.500\tGT\t0/1
+chrA\t7001\tsim_del_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=8000;SIM_VAF=0.500\tGT\t0/1
+chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
+";
+        let dir = fixture_dir("ins_seq_truth");
+        let path = dir.join("truth.vcf");
+        std::fs::write(&path, vcf).unwrap();
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            events.iter().map(|e| e.sv_type.as_str()).collect::<Vec<_>>(),
+            vec!["INS", "INS", "DEL", "SNP"]
+        );
+        // The INS records carry their ALT column verbatim, symbolic or not.
+        assert_eq!(events[0].ins_alt.as_deref(), Some(b"AGGTT".as_slice()));
+        assert_eq!(events[1].ins_alt.as_deref(), Some(b"<INS>".as_slice()));
+        // And nothing else does.
+        assert_eq!(events[2].ins_alt, None);
+        assert_eq!(events[3].ins_alt, None);
+
+        // No other event type's parse moved: the small variant still carries
+        // its own REF and ALT, and the INS records still carry neither -- which
+        // is what keeps an insertion out of `NearbyRecords`, where it would be
+        // applied to the reference at its own `start` and move the
+        // non-advisory `allele_freq` row.
+        assert_eq!(events[3].ref_allele.as_deref(), Some(b"A".as_slice()));
+        assert_eq!(events[3].alt_allele.as_deref(), Some(b"T".as_slice()));
+        for e in &events[..3] {
+            assert_eq!(e.ref_allele, None, "{} carries no REF allele", e.sv_type);
+            assert_eq!(e.alt_allele, None, "{} carries no ALT allele", e.sv_type);
+        }
+        let nearby = NearbyRecords::new(&events);
+        assert_eq!(
+            nearby.inside(&events[3], 0, 20_000).len(),
+            0,
+            "only the small variant is a nearby record, and it is the event itself"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_ins_sequence_row_does_not_move_the_status_column() {
+        // 12 characters in an 18-wide Check column, so unlike
+        // `split_reads_each_end` this row costs the table nothing.
+        assert_eq!(INS_SEQUENCE, "ins_sequence");
+        assert_eq!(INS_SEQUENCE.len(), 12);
+        let report = text_report(
+            &[
+                row(COVERAGE_RATIO, true, false),
+                row(INS_READS, true, false),
+                row(INS_SEQUENCE, true, true),
+            ],
+            false,
+        );
+        let status_at = |name: &str| {
+            let line = line_for(&report, name);
+            line.find("PASS")
+                .unwrap_or_else(|| panic!("no status on {:?}", line))
+        };
+        assert_eq!(
+            status_at(INS_SEQUENCE),
+            status_at(COVERAGE_RATIO),
+            "the row must leave the Status column where every other row has it:\n{}",
+            report
+        );
+        assert_eq!(status_at(INS_READS), status_at(COVERAGE_RATIO));
     }
 }

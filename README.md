@@ -549,11 +549,11 @@ events it was given. Which check covers which type:
 | --- | --- |
 | DEL, DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` and `split_reads_each_end` |
 | INV, BND | `split_reads`, and the advisory `split_reads_each_end` |
-| INS | `ins_reads` |
+| INS | `ins_reads`, and the advisory `ins_sequence` |
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
-Four rows are **advisory**: printed and counted with the rest, but left out of
+Five rows are **advisory**: printed and counted with the rest, but left out of
 the exit status unless `--strict` is given (see below).
 
 `coverage_any_mapq` is `coverage_ratio` recomputed with **no MAPQ floor**. It
@@ -612,6 +612,49 @@ one row exactly **one** space separates Check from Expected, so `awk -F'  +'` or
 row splits into four fields and every other row into five. Nothing in this repo
 parses the table that way, so this costs nothing today. `--json` is the
 parseable form: use it rather than the text table.
+
+`ins_sequence` is `ins_reads` with the inserted bases actually read. It covers
+INS events, the same type `ins_reads` covers, and it is the first check here
+that verifies inserted **sequence** rather than a CIGAR: the inserted bases come
+out of the truth record's own ALT (the anchor base and then the insertion, which
+spike writes for a random sequence as well as an explicit one), and the row
+looks for them in the reads' own bases. Two probe k-mers are taken from the
+insertion, its **first** and **last** `k = min(inserted length, 31)` bases, and
+a read supports the insertion if its bases hold either one in either
+orientation. The reads counted are the distinct read names within 150 bp of POS
+that pass the same filter `ins_reads` applies -- primary, mapped, not a
+duplicate, not QC-fail, at `--min-mapq` or above -- and the minimum is the same
+two. Its `Expected` reads `>=2 with a <k>bp alt kmer` and its `Observed` is the
+supporting count. On the one-contig chrA CRAM this repo's own unit tests write
+-- `inserted_sequence_cram` in `src/validate.rs` -- graded once against the
+truth ALT the reads carry and once against a **different** sequence of the same
+length, the two rows read:
+
+```
+Event                               Check              Expected                  Observed        Status
+INS chrA:5000 (carried)             ins_reads          >=2 reads with >=50bp...  3               PASS
+INS chrA:5000 (carried)             ins_sequence       >=2 with a 31bp alt kmer  3               PASS (advisory)
+INS chrA:5000 (wrong_bases)         ins_reads          >=2 reads with >=50bp...  3               PASS
+INS chrA:5000 (wrong_bases)         ins_sequence       >=2 with a 31bp alt kmer  0               FAIL (advisory)
+```
+
+Two cases the row cannot answer, each reported as a **failed** row rather than a
+silent pass, and each costing nothing in the exit status because the row is
+advisory. An insertion of fewer than 12 bases gives a probe k-mer too short to
+mean anything inside a read -- a given random 12-mer is expected in about one
+151 bp read in 10^5, an 8-mer in about one in 400 -- so the row reads
+`Expected >=2 with a >=12bp kmer` and `Observed alt is <n>bp`. And if either
+probe k-mer is already in the **reference** within 1 kb of POS, an unedited read
+would match it and the count would mean nothing, so the row reads
+`Observed kmer in ref`. Both log a `WARN` naming the reason. A random insertion
+makes the second vanishingly unlikely; an explicit one copied from nearby
+sequence does not.
+
+A record whose ALT recorded **no sequence** gets **no row at all**, and that is
+not a failure: a symbolic `<INS>`, or a bare anchor base, is an older spike's
+truth VCF, written before the inserted sequence was put in the ALT, and there is
+nothing for this row to look for. The same rule the census rows below apply to a
+truth record carrying no census field.
 
 The other two advisory rows are the **census spike recorded**, and a record gets
 each one whenever it carries that row's field, whatever the event's type. `resistant` reports the record's
@@ -757,7 +800,41 @@ soft clip of that length once the threshold has reached 50. It works from the
 CIGAR alone -- the record's own sequence is never read -- so it does not
 establish that the inserted bases are the bases the truth VCF names. An
 insertion of roughly the right length in roughly the right place passes,
-whatever it spells. Like `split_reads` it is a count, not a fraction.
+whatever it spells. The advisory `ins_sequence` row beside it is the row that
+reads the bases. Like `split_reads` it is a count, not a fraction.
+
+`ins_sequence` establishes that at least **two** distinct read names within
+150 bp of POS carry, somewhere in their own bases, one of the two probe k-mers
+taken from the truth record's ALT -- its first and last `k = min(inserted
+length, 31)` bases -- in one orientation or the other. It is the first check
+here to read a base of inserted sequence rather than a CIGAR, and what it
+catches is the case `ins_reads` cannot see at all: an insertion of the right
+length in the right place spelling something else entirely, which fails this row
+and passes that one on the same input.
+
+What it does **not** establish is anything about *where* those bases are. It
+asks only that they are **present**: not that they are at the right offset, not
+that the insertion is in the orientation the truth record names, not that they
+occur the right number of times, and not at what allele fraction -- a read
+carrying the k-mer anywhere in its 151 bases counts, and like the two rows above
+it is a count without a denominator. Nor does it read the whole insertion. Only
+the first and last `k` bases are ever inside a read, so for a **2000 bp
+insertion it verifies 62 of 2000 bases** and says nothing whatever about the
+other 1938; the middle is unreachable by construction, which is why the probes
+are taken from the ends and not from the middle (a 2000 bp insertion's middle
+k-mer sits 1000 bases in, far past the reach of a 151 bp read). And it believes
+the file it reads: the inserted bases come from the truth VCF's ALT, so a truth
+VCF edited between the run that wrote it and the validation that reads it is
+taken at its word -- which is also what makes the row's own separation
+measurable, by validating one run's BAM against another run's truth VCF.
+
+Two inputs it declines rather than grades, both reported as failed rows and both
+harmless in the exit status because the row is advisory: an insertion of fewer
+than 12 bases, whose k-mer would be too short to be specific inside a read, and
+an ALT one of whose probe k-mers the reference already holds within 1 kb of POS,
+where an unedited read would match. A symbolic `<INS>` ALT recorded no sequence
+and gets no row at all. How often the row fails on correct real data is being
+measured separately and is not in this document yet: **PREDICTED (not run)**.
 
 `allele_freq` is the one per-event check that measures a fraction rather than
 counting evidence; the table below says what it can and cannot read off a truth
@@ -907,7 +984,10 @@ when it does not. Either counts, if it is at least `min(SVLEN, 50)` bases long
 and its reference boundary is within 100 bp of POS, and the check passes at
 two such reads (the same threshold `split_reads` uses: one clipped read is
 background anywhere, two at the same point are not). An INS record with no
-usable `SVLEN` has no length to look for and is a failed check.
+usable `SVLEN` has no length to look for and is a failed check. Nothing in this
+check reads a base; the advisory `ins_sequence` row beside it does, by looking
+for the truth record's own inserted bases in the reads (see
+[Validating the spike-in](#validating-the-spike-in)).
 
 A **soft clip only counts once the insertion is 50 bp or longer** -- the same
 cap `min(SVLEN, 50)` applies. A read that anchors both sides of a short
