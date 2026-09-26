@@ -9,6 +9,20 @@
 > (the user's choice, not a failing gate): `SIM_RESIST` in the truth VCF and a warning above
 > 0.10; plan, code and result in `REVIEW.md` under CR4. **CR2 option B**, the same way:
 > `SIM_DEPTH_FOLD` and a warning above 1.5; it fired on 6 of 40 ordinary chr20 DUPs.
+>
+> **Done in the run after those two censuses** (2026-09-26): the first rows of **CR9 option B**,
+> all of them advisory and all out of `spike validate`'s exit status unless the run's one new flag
+> `--strict` is given — `resistant` and `depth_fold`, read back from the two censuses (`d9cf476`),
+> `coverage_any_mapq` (`c18eb9b`), `split_reads_each_end` (`084104f`) and `ins_sequence`
+> (`02a2ecc`). Plans, code and results are in `REVIEW.md` under T1, T2, T5 and T6.
+>
+> **Added since the copy**, at the end of this file and from that same run: **T3 — measuring the
+> depth fold at any MAPQ** and **T7 — the sample's own non-SNP variants in event footprints (CR3
+> option B's scan)**. They are not among the six Codex findings the note below covers. Both are
+> decisions waiting for the human with nothing changed; both recommend option A — document the
+> limit now — and both say that a new threshold has to be locked on chromosomes other than 20,
+> because this run has now seen chr20's distribution. Their measurements are in `REVIEW.md` under
+> T3 and T7.
 
 # DESIGN-NOTES — the Codex findings that change spike's model or its defaults
 

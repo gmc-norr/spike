@@ -8,9 +8,20 @@
 > | NF2 | Fixed, `dc73bf1`: the adjacent probes pass `--allow-overlap`; the script runs to exit 0 with all 14 rows. |
 > | NF3 | Fixed, `395dcc7`: the last pid-only temp name in `truth.rs` is unique per test. |
 > | NF4 | Written down, `39b1aa1`: the README's Build section says one target dir per commit, and md5 the binaries. A practice, not code. |
-> | NF5 | Open (documented, not fixed). |
+> | NF5 | Not fixed; an advisory row added beside it, `084104f`: `split_reads_each_end` asks for two joining reads at *each* breakpoint, and failed 6 of 40 real deletions against the pooled row's 4. The pooled `split_reads` check itself is unchanged — its row and the run's exit status moved on none of the 40 — and the new row is blind when the breakpoints are 500 bp apart or less. |
 > | NF6 | Fixed, `d35f31b`: a type with no expected ratio gets no verdict (`N/A`, not a pass). |
 > | NF7 | Fixed in part, `2844aff`: the harness records every tool's version in `<outdir>/tool_versions.tsv`. It still pins none. |
+> | RF1 | Open. Out of that run's scope; the fix is `#[cfg(debug_assertions)]` on the three tests, or a refusal checked in both profiles. |
+> | RF2 | Fixed, this docs commit: both README round trips re-measured on this branch, `13/13 PASS` and `12/12 PASS`, both exit 0. The `5/6` and `3/6` "before the check existed" figures are historical and stay. |
+> | RF3 | Open. The shape of `summary` was not in T1's locked plan, and changing it is a default output change for existing `--json` parsers. |
+> | RF4 | Open. The `<=` comparison is what T1's plan locked, and no spike version writes a negative value. |
+> | RF5 | Open. T1's plan allowed the help text one new flag line; the footer sentences were added, extending the checks table was not ratified. README.md covers both rows. |
+> | RF6 | Open. The cause is in the aligner's representation, not in the check's arithmetic, and changing the default verdict is exactly the default change this run's standing choice forbids. |
+> | RF7 | Open. Adding the worst bin to `truth.vcf` for every event changes what spike emits; a per-event column in the run README would be the cheap fix, and it is a design decision rather than a defect. |
+> | RF8 | Open, and a decision for the human, recorded with its numbers. A coverage floor would make runs that succeed today start failing, and `--min-donor-depth` would be a new flag. |
+>
+> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26) and are written up at the end
+> of this file, under their own heading.
 
 # NEW-FINDINGS — found during this run, not fixed
 

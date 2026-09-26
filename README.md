@@ -77,7 +77,7 @@ needs:
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `474 passed; 2 failed; 1 ignored`, the
+  with all of them off PATH the suite is `525 passed; 2 failed; 1 ignored`, the
   two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
@@ -1009,21 +1009,24 @@ and merged with `merge.sh`: **21** reads carry the planted 300 bp insertion at
 chr20:39000000, against **0, 0, 0, 0 and 1** at five control positions in the
 same BAM where nothing was planted. Before this check existed, spike's own
 round trip could not succeed for insertions -- the same run scored `5/6 PASS`
-and exited **1** on the `event_checked` row, and now scores `6/6 PASS` and
-exits 0.
+and exited **1** on the `event_checked` row, and now scores `13/13 PASS` and
+exits 0. The total rose because seven of those thirteen rows are the advisory
+rows the two events now carry beside their own checks: the same run prints
+`Advisory: 7 checks, 7 PASS, 0 FAIL`.
 
 The same round trip works for small indels and MNVs. A run of
 `snp:chr20:39000000:TGG:T` (a 2 bp deletion), `snp:chr20:39100000:T:TCCGG` (a
 4 bp insertion) and `snp:chr20:39200000:AT:GC` (an MNV) on the same slice,
 aligned and merged the same way, scored **3/6 PASS and exited 1** with all
 three rows reading `N/A (indel or MNV)` -- a verdict reached before the BAM was
-opened -- and now scores **6/6 PASS, exit 0** at 0.40, 0.41 and 0.46 against a
-`SIM_VAF` of 0.50. The reads behind those fractions are **17, 19 and 13**
-carrying the variant at the three planted sites, against **0, 0, 0, 0 and 0**
-for each of them at five positions where nothing was planted (38600000,
-38900000, 39500000, 39750000, 40100000), where all fifteen checks read 0.00 and
-FAIL. The same three truth records against the **unspiked** BAM read 0.00, 0.00
-and 0.00 and all FAIL.
+opened -- and now scores **12/12 PASS, exit 0** at 0.40, 0.41 and 0.46 against
+a `SIM_VAF` of 0.50, the total again rising because six of the twelve rows are
+advisory (`Advisory: 6 checks, 6 PASS, 0 FAIL`). The reads behind those
+fractions are **17, 19 and 13** carrying the variant at the three planted
+sites, against **0, 0, 0, 0 and 0** for each of them at five positions where
+nothing was planted (38600000, 38900000, 39500000, 39750000, 40100000), where
+all fifteen checks read 0.00 and FAIL. The same three truth records against
+the **unspiked** BAM read 0.00, 0.00 and 0.00 and all FAIL.
 
 ### Controlling the read extraction region
 

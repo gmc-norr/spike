@@ -2864,14 +2864,14 @@ changed; **none was refuted**, and every number the review printed came back ide
 | ID | Priority | Finding | Status |
 | --- | --- | --- | --- |
 | CR1 | High | Nearby, non-overlapping events restore each other's deleted sequence | Confirmed, fixed |
-| CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note; option B's depth fold and warning done (not a gate) |
-| CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note; its fail-closed half fixed for `--gvcf` |
-| CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note; option B's census and warning done (not a gate) |
+| CR2 | High | One depth estimate flattens donor coverage and distorts dosage | Confirmed, design note; option B's depth fold and warning done (not a gate), and an advisory `depth_fold` row in `spike validate` (T1); T3 measured five of its six real warnings to be mappability rather than depth |
+| CR3 | High | Synthetic haplotypes erase background indels | Confirmed, design note; its fail-closed half fixed for `--gvcf`; T7 measured option B's footprint scan firing on 38 of 40 real footprints, so a blanket warning is not usable -- a design note went to the human instead |
+| CR4 | High for difficult loci | Filtered donor molecules remain resistant to the event | Confirmed, design note; option B's census and warning done (not a gate), and an advisory `resistant` row in `spike validate` (T1); T4 answered its own open question -- the warning does fire on real hard loci, at `SIM_RESIST` 0.995-0.998 |
 | CR5 | High for long INS | Exhausted placement retries admit novel-only fragments into a reference-overlap budget | Confirmed, fixed |
 | CR6 | High for translocations | Additive fusion evidence does not represent a balanced germline rearrangement | Confirmed, design note; relabelled (warning, help, README), not renamed |
 | CR7 | High for truth integrity | Genotypes, ploidy, and inserted sequence are not faithfully represented in truth | Confirmed, not fixed (insertion sequence, the AF caps and `af=het` fixed; input GT and ploidy still open) |
 | CR8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Confirmed, fixed |
-| CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, design note |
+| CR9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV correctness or clinical precision | Confirmed, design note; part of its option B now done as advisory rows -- inserted-sequence identity (T6), both junctions separately (T5) and the resistant fraction (T1); see "What remains" below |
 | CR-FRAG | Engineering | `stats.rs` accepts fragment lengths the generator never samples | Confirmed, fixed |
 | CR-BUILD | Engineering | The two tests needing `bcftools` mis-report when it is absent: one fails with an unrelated message, one passes over the wrong code path | Confirmed, fixed |
 
@@ -3260,10 +3260,24 @@ sensitivity or precision: a TP gain does not identify which event was added, pre
 a truth VCF of added events only is not a clinical precision, a no-call locus is not shown to
 be variant-free, and no genotype is compared.
 
-**What remains** is the validation overhaul R9 asks for -- separating genome truth, molecular
+**Done since, as advisory `spike validate` rows** -- none of them in the exit status unless
+`--strict` is given. **Inserted-sequence identity** is done: `ins_sequence` looks for the
+truth record's own inserted bases in the reads (T6). **The CR4 resistant fraction is
+reported**, as the `resistant` row, beside the CR2 depth fold as `depth_fold`; both are read
+back from the truth VCF the two censuses write rather than recomputed from the BAM (T1).
+**Both junctions are checked separately** rather than pooled: `split_reads_each_end` requires
+two joining reads at *each* breakpoint (T5, NF5) -- but it reads the same `SA:Z` entries the
+pooled row reads, so it is still only contig and position, **not** strand and **not** the
+CIGAR-implied breakpoint, and for an event whose breakpoints are 500 bp apart or less it
+degenerates into the pooled row. Beside those, `coverage_any_mapq` recomputes the coverage
+ratio with no MAPQ floor (T2) -- one number per event, not a profile.
+
+**What remains** is the rest of the overhaul R9 asks for -- separating genome truth, molecular
 truth, alignment evidence and caller output, with per-window depth profiles, strand- and
-CIGAR-aware junction checks, inserted-sequence identity and a donor-derived insert-size
-comparison. That is a Phase 3 design note, not a documentation change.
+CIGAR-aware junction checks and a donor-derived insert-size comparison. Nothing was done here
+about the per-window profiles or the insert-size comparison, and the latter also needs
+`validate` to be given the donor BAM, which today it is not. That is a Phase 3 design note,
+not a documentation change.
 
 ### CR-FRAG -- the fragment model and the generator use different ranges
 
