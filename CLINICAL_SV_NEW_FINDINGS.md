@@ -271,3 +271,66 @@
   depth is far below the event's any-MAPQ depth (which `SIM_DEPTH_FOLD` already half-says), or an
   opt-in `--min-donor-depth`, which would be a new flag and so out of this run. **It is a decision
   for the human**, recorded with the numbers above.
+
+### RF9 — `ins_sequence` fails every correct insertion shorter than 12 bases, and spike writes them
+
+- **Where:** `src/validate.rs`, `check_ins_sequence`: `k = min(len(inserted), 31)` and
+  `k < MIN_INS_KMER_LEN` (12) returns `event_not_evaluable`, whose `pass` is `false`. The verdict is
+  reached from the ALT alone, before any BAM read.
+- **What:** an insertion of fewer than 12 bases can never be checked — a k-mer that short is not
+  specific enough inside a 151 bp read — so the row reports *not evaluable*, which this codebase
+  treats as a failed row (M10, M11). `src/truth.rs`'s own tests pin spike writing `SVLEN=4`
+  insertions, so this is reachable on spike's own output, and under **`--strict`** a correct short
+  insertion exits 1.
+- **How I know:** measured through `scripts/slice_loop.sh` on the 35x HG002 BAM, two insertions at
+  each of 4, 8, 11, 12, 20 and 40 bp at seeded chr20 positions. `ins_sequence` FAILed on **6 of 6**
+  below 12 bp (`observed "alt is 4bp"`, `"alt is 8bp"`, `"alt is 11bp"`) and PASSed on **6 of 6** at
+  12 bp and above (observed 15, 19, 19, 21, 13, 11). Every one of the twelve runs was a correct
+  spike-in at exit 0.
+- **Severity:** Low by default — the row is advisory and out of the exit status. Medium for anyone who
+  turns `--strict` on with small insertions in their truth VCF.
+- **Not fixed:** 12 is what T6's plan locked, before any count was seen, and the alternative — a
+  silent PASS on a check that verified nothing — is the failure mode M10 and M11 exist to prevent.
+  The honest options are a third verdict that is neither PASS nor FAIL (a shape `CheckResult` does not
+  have), or leaving it and documenting it, which is what was done. **T6's C4 excluded this length
+  class**, which is why it took the final whole-branch review to find.
+
+### RF10 — the four advisory rows add three BAM region queries per DEL and DUP, re-reading the same windows
+
+- **Where:** `src/validate.rs`, `check_event`: the `coverage_any_mapq` row calls
+  `check_coverage_ratio` a second time with a MAPQ floor of 0, which re-queries the **same three
+  windows** the `coverage_ratio` row just read. `count_depth_in_region` applies the floor **per
+  record, after reading**, so one pass could accumulate both sums.
+- **What:** measured with `strace -e openat` on a one-DEL truth VCF, master opens the BAM 6 times and
+  the `.bai` 6 times; this branch opens each **9** times. Per event: DEL and DUP go from 5 to 8 region
+  queries, INS from 1 to 2 plus one 2 kb reference window, INV/BND and SNP unchanged. Wall clock for
+  one DEL against the 35x whole-genome BAM, whose `.bai` is 9.0 MB and is re-parsed on every open:
+  **0.245 s → 0.35 s, +43%**.
+- **How I know:** measured by the final whole-branch review. At `--min-mapq 0` the two coverage rows
+  are byte-identical except for the name, so there the three extra queries buy nothing at all.
+- **Severity:** Low. `spike validate` is off any hot path and the cost is per event, bounded, and
+  disclosed in T2's own "what this does not establish".
+- **Not fixed:** the shared-record-stream refactor was out of T2's locked scope and out of the final
+  fix pass's. It matters mainly as a trend: `check_split_reads` already accumulates two verdicts from
+  one query pair, with a comment saying that is what stops its two rows disagreeing about what
+  evidence exists, and the coverage pair does not follow it. The next advisory row on this mechanism
+  adds three more queries with no shared stream to join.
+
+### RF11 — the non-advisory `ins_reads` check failed a correct 40 bp insertion
+
+- **Where:** `src/validate.rs`, `check_ins_reads`. The check is **not** advisory, so it decides the
+  exit status.
+- **What:** on `ins:chr20:22180648:40` spiked into the 35x HG002 BAM and run through `align.sh`,
+  `merge.sh` and `spike validate`, `ins_reads` reported **`observed 0`** and FAILed, so the run exited
+  1 — while `ins_sequence` on the same run found **11** reads carrying the inserted bases and PASSed.
+  The insertion is there; the CIGAR-based check could not see it.
+- **How I know:** measured in the short-insertion sweep that produced RF9: 1 of the 12 runs, and the
+  only one of the twelve where the two INS rows disagree in that direction.
+- **Severity:** Medium, and of the same family as RF6: a **default** check with a false failure on
+  correct real input. It is also the first case measured in this project where the advisory row is
+  right and the default row is wrong.
+- **Not fixed:** the cause is in how bwa-mem2 represented that junction, not in the check's
+  arithmetic — `ins_reads` asks for an `I` operation or a soft clip of at least `min(SVLEN, 50)` bases
+  within 100 bp of POS — and changing a default check's verdict is the default change this run's
+  standing choice forbids. One event is also not a rate: the 24-insertion C4 set, at 50 bp and above,
+  had `ins_reads` pass 24 of 24.

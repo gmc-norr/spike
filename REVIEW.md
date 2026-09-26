@@ -4773,3 +4773,83 @@ a read depth across estimators -- every comparison is a ratio of two windows und
 of each ratio; false of the *threshold*, which was borrowed from the other estimator. A locked plan that
 compares a proxy against a constant taken from a different estimator has to justify the constant, not
 just the ratio.
+
+### The final whole-branch review, and what it measured that the per-task reviews could not
+
+Run on the whole branch `985e50f..HEAD`. It confirmed, structurally and by measurement, that the
+standing choice holds where it matters: the only changed Rust file is `src/validate.rs`, the one
+function in it reachable from the simulation path (`for_each_alignment`, called at `src/census.rs:93`)
+is byte-identical, `spike validate`'s exit status and non-advisory rows do not move on 64 correct real
+runs plus an all-error path, `spike --help` is byte-identical, `validate --help` differs only by
+`--strict` and its footer, no dependency changed, and the `#[test]` count only rose.
+
+It also found two things no single task could see. **The first overturned a result** and is written up
+above as T3's retraction. **The second** was a downstream verdict change, fixed in `27625d3`:
+
+#### The advisory census rows had disarmed `scripts/validate_pipeline.sh`'s only `spike validate` canary
+
+`scripts/validate_pipeline.sh` calls `note_failure` when `total == 0 || passed == 0`, and its own
+comment states the contract: "the harness only insists that it produced a parseable report with at
+least one passing check". Its snippet counted **every** row. `resistant` and `depth_fold` are read
+from the truth VCF and never touch the BAM, so they **PASS whatever the BAM is**. Measured on a valid,
+indexed, **header-only** merged BAM -- what a `merge.sh` that silently produced nothing leaves -- with
+a one-DEL truth VCF:
+
+```
+master's binary:   validate exit=1   passed=0 total=5   -> note_failure FIRES
+this branch:       validate exit=1   passed=2 total=9   -> NO failure noted
+                   the two passing rows: resistant 0.010 (advisory), depth_fold 1.11 (advisory)
+```
+
+`validate` still exits 1, but the pipeline swallows that with `|| true`, so `passed == 0` was its only
+signal -- and every spike-produced truth VCF carries numeric census fields, so the guard could no
+longer fire on spike's own output. T1's own pre-code analysis of this exact constraint considered only
+advisory rows that *fail*; the case it missed is advisory rows that **pass without measuring
+anything**. No test covered the guard, which is why four reviews and a documentation pass went past it.
+
+Fixed on both sides in `27625d3`: both of the pipeline's snippets now count non-advisory checks
+(`c.get('advisory', False)`, so an older binary's JSON still works), and `--json`'s `summary` object
+gained `counted_total`, `counted_pass`, `counted_fail` and `strict` **additively**, derived from the
+same filter `failure_message` uses, so a consumer can tell which rows the exit status counted.
+Re-measured on the same header-only BAM: `passed=0 total=5`, **the guard fires again**, and it stays
+quiet on the good recorded runs. A test pins it.
+
+#### Three measurements the final review made that no task had made
+
+- **`--strict`'s own false-failure rate, composed across all four rows: 8 of 64 correct real runs
+  (12.5%), against 4 of 64 (6.3%) by default.** On the 40 correct real DELs, the default exits 1 on 4
+  (all RF6's non-advisory `split_reads`) and `--strict` on 7, adding events 12 and 23
+  (`split_reads_each_end` 7/1) and 13 (`depth_fold` 1.71). On the 24 correct real INSs the default
+  exits 1 on none and `--strict` on 1 (event 13, `ins:chr20:23433622:500`, `depth_fold` 1.71 -- the
+  same donor locus and the same number as DEL event 13). Every task cleared its own bar (T2 0/40
+  against 8, T5 2/40 against 8, T6 0/24 against 4); **no plan set a bar for the flag, and nobody
+  composed the rows.** `--strict` is opt-in, new, and used by nothing in the repo, so nothing that
+  passes today fails -- but its rate is now measured and it is not zero.
+- **`ins_sequence` FAILs on every correct insertion shorter than 12 bases**, which is the one length
+  class T6's C4 excluded. `src/truth.rs` pins spike writing `SVLEN=4` insertions, so this is reachable
+  on spike's own output. Measured through the slice loop on the 35x HG002 BAM, two events at each of
+  4, 8, 11, 12, 20 and 40 bp:
+
+  ```
+  ins_sequence: present on 12 of 12 scored, FAIL on 6
+    FAIL: 4bp  observed="alt is 4bp"    FAIL: 4bp  observed="alt is 4bp"
+    FAIL: 8bp  observed="alt is 8bp"    FAIL: 8bp  observed="alt is 8bp"
+    FAIL: 11bp observed="alt is 11bp"   FAIL: 11bp observed="alt is 11bp"
+  ```
+
+  and it **PASSes 6 of 6 at 12, 20 and 40 bp** (observed 15, 19, 19, 21, 13, 11). The verdict is
+  *not evaluable*, which this codebase treats as a failed row (M10, M11) -- so it is honest, not a
+  false negative -- but under `--strict` a correct 4 bp insertion now exits 1. Filed as **RF9**;
+  README says so. The behaviour was **not** changed: 12 is what T6's plan locked.
+- **The cumulative per-event BAM cost.** `strace -e openat` on a one-DEL truth VCF: master opens the
+  BAM **6x** and the `.bai` **6x**; this branch opens each **9x**. Per event, DEL and DUP go from 5 to
+  8 region queries, INS from 1 to 2 plus one 2 kb reference window, INV/BND and SNP unchanged. Wall
+  clock for one DEL against the 35x whole-genome BAM (a 9.0 MB `.bai`, re-parsed per open):
+  **0.245 s -> 0.35 s, +43%**. The whole increase is the `coverage_any_mapq` row re-querying the *same
+  three windows* at a different MAPQ floor, and `count_depth_in_region` applies the floor per record
+  after reading, so one pass could accumulate both sums -- which `check_split_reads` already does for
+  its pair, in the same file, with a comment explaining why. At `--min-mapq 0` the two coverage rows
+  are byte-identical except the name, so the three extra queries buy nothing there at all. **Not
+  fixed:** validate is off any hot path and T2 disclosed the cost, but it is a named follow-up, and
+  the next advisory row on this mechanism adds three more queries with no shared record stream to add
+  it to. Filed as **RF10**.
