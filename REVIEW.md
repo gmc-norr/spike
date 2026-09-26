@@ -5729,3 +5729,43 @@ N5 null sites passing: 0 of 200
   inserted sequence. A sequencing error in the inserted bases would drop
   that read, and how often that empties the row at low VAF is **not measured**. That is a new
   rule, and it needs its own locked plan on fresh sites, since these have been seen.
+
+#### Plan: RF13 second attempt, the inserted bases exact (locked before K)
+
+**The one change to the row** (`scripts/rf13b_planted.py`). A 31-base window of a read carries a
+probe when:
+- every probe position holding an **inserted** base matches exactly;
+- at most 2 positions holding a **reference flank** base differ.
+
+The flank tolerance stays for the sample's SNPs and sequencing errors. `apply_variants` puts
+no sample SNP into inserted sequence (`src/haplotype.rs:612`). Everything else is as in the
+first plan: spike's own reads only, the same window, flags and probes, PASS at 1 or more,
+and the same not-evaluable cases.
+
+**The one change to the test.** N2 replaces **every** inserted base with a different base, so
+the wrong truth can never equal the right one. The first attempt drew random bases, which for
+a 1 or 2 bp insertion could be the right ones.
+
+**Smoke test, on data already seen**, with the shortest cases in it (the case file's new rule):
+
+| Run | Right letters | Wrong letters |
+| --- | --- | --- |
+| The first attempt's three failing 4 bp runs | 17, 22, 15 | 0, 0, 0 |
+| A fourth 4 bp run | 14 | 0 |
+| 45 bp at VAF 0.1 | 6 | 0 |
+| `h_46656268` (132 bp, real) | 26 | 0 |
+| RF11's 40 bp run | 12 | 0 |
+| New 1 bp and 2 bp runs at `rand` site 14005652 | 20, 17 | 0, 0 |
+
+**Sites** (`scripts/rf13b_sites.py`, fresh seeds, `scripts/rf13b_sites.tsv`). The script
+asserts that none is in `rf11_sites.tsv` or `rf13_sites.tsv`.
+- `rand`: 6 random sites.
+- `hg`: 12 real HG002 insertions, 6 of 1-19 bp and 6 of 50-300 bp. The short six are five
+  1 bp and one 4 bp `TATA`, and the long include tandem repeats (`TATATA...`, `ACACAC...`).
+- `null`: 200.
+
+**K** (`scripts/rf13b_k.sh`, master binary, 12 threads).
+- **Positives.** Each `rand` site at 1, 2, 4, 15, 45 and 300 bp (VAF 0.5) and 45 bp at
+  `af=0.1`: 42 runs. The 12 `hg` insertions at their own POS with their own bases: 12 runs.
+- **Criteria.** K+, K-, N1-N5, the check of the check and the outcome rules are as in the
+  first plan, with the new N2. Refuted if K+ or K- fails: no code.
