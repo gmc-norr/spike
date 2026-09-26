@@ -5383,3 +5383,79 @@ Plan `edd4ecf`, code `a0e17b9`.
   - The one real effect left: the step 1 "Sample depth" log line prints `30,5x` under `mawk`,
     since `printf` output does follow `LC_NUMERIC`. It is only logged.
   - No code change.
+
+## RF11 -- `ins_reads` does not count the clipped reads bwa-mem2 writes for a 20-49 bp insertion (2026-09-26)
+
+**Measured before this plan.** `ins:chr20:22180648:40` rerun through `scripts/slice_loop.sh` on
+the 35x HG002 BAM with master `b269427`: `ins_reads` observed **0** and FAILed, `ins_sequence`
+observed **11** and passed, and the run exited 1. All 11 reads that carry the inserted bases have
+MAPQ 60, and all 11 are **soft-clipped** at the insertion point (`106M45S` ... `101M50S` ending
+at POS, `58S93M` ... `36S115M` starting at POS+1). None has an `I` operation.
+
+**Cause.** `cigar_shows_insertion_near` counts a soft clip only once `min_len` reaches
+`INS_MAX_EVIDENCE_LEN` (50). Its comment says that below 50 "the aligner writes an `I`
+operation". That is not what bwa-mem2 does. With its default scoring an `n` bp insertion costs
+`6 + n` as an `I` and 5 as a clip, so any read with fewer than about `n` bases past the insertion
+on one side is clipped instead. N10 (`ad9881e`) set the floor at 50 after a **3 bp** clip
+threshold passed empty positions (1, 3, 0, 0, 1 reads at five sites). No length between 3 and
+50 was measured.
+
+**What the user asked** (2026-09-26): close the gap, after a test on empty sites shows that
+counting clips for 20-49 bp insertions does not make empty sites pass. Code only if it passes.
+
+#### Plan: RF11, a lower clip floor for `ins_reads` (locked before any count below)
+
+**Principle.** `ins_reads` should count the marks an aligner actually leaves for a correct
+insertion, and only marks an empty site does not also carry.
+
+**Change under test.** In `cigar_shows_insertion_near`, a soft clip counts when `op.len() >=
+min_len` and `min_len >= F`, with `F` lowered from 50 to one of `{20, 30, 40}`, and the pad
+kept at 100. `I` operations and everything else are unchanged.
+
+**Sites** (`scripts/rf11_sites.py`, fixed seeds, in `scripts/rf11_sites.tsv`). All are on
+chr20, at least 1,000 bp inside an HG002 stvar benchmark interval, and at least 1,000 bp from
+every HG002 T2T-Q100 variant whose REF and ALT differ by 10 bp or more (4,655 such variants),
+so HG002 itself puts no insertion or deletion inside the +/-100 bp window.
+- `null-rand`: 200 sites anywhere in the benchmark.
+- `null-rep`: 200 sites inside RepeatMasker Simple_repeat or Low_complexity intervals, where
+  aligners clip most. (The case file's RF8 rule: noise is measured where the rule is hardest,
+  not only at random.)
+- `k1`: 8 sites drawn like `null-rand`, at least 250 kb apart.
+
+Checked before locking: 0 sites within 1 kb of such a variant, and 200 of 200 `null-rep` sites
+inside a repeat interval.
+
+**The count** (`scripts/rf11_count.py`). A copy of `check_ins_reads` through `samtools view`:
+the same region, `usable_alignment` filter (MAPQ >= 20), CIGAR walk and distinct names. For each
+read it keeps the longest `I` and the longest clip within the pad.
+
+**K1, the correct insertions** (`scripts/rf11_k1.sh`). Each `k1` site at 20, 30, 40, 45 and
+49 bp, 40 runs, through `slice_loop.sh` on
+`data/giab_hg38/HG002/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam` with the
+master binary, 12 threads.
+
+**K2, the empty sites.** `rf11_count.py sites` on the same BAM, unedited.
+
+**Decision rule** (`scripts/rf11_score.py`).
+- **Null passes.** A site passes at length `L` when 2 or more reads qualify. Today's allowance
+  is the null passes of today's rule for a 50 bp insertion, `I` or clip >= 50. The fix at floor
+  `F` is at its worst for an `F` bp insertion, `I` or clip >= `F`.
+- **F qualifies** if its null passes are at most `max(2, today's at 50)` on **each** null set.
+  `F*` is the smallest qualifying `F`.
+- **The replica must match.** Its count with today's rule must equal `validate`'s `ins_reads`
+  observed on every K1 run that reached `validate`. Any mismatch means inconclusive.
+- **Inconclusive** if fewer than 36 of 40 K1 runs reach `validate`, the replica mismatches, or
+  today's `ins_reads` fails fewer than 3 of the K1 runs (too small to change a default for).
+  Then: no code, and the README gets option 2's note.
+- **Refuted** if no `F` qualifies, or the fix at `F*` passes under 95% of the K1 runs of at
+  least `F*` bp. Then: no code, and the README gets option 2's note.
+- **Supported** otherwise. Then the code change uses `F*`, written test first with mutation
+  checks.
+- **Check of the check.** After K1, the replica is rerun with MAPQ 0 instead of 20. It must
+  mismatch `validate` on at least one run, or the replica control is not shown to bite; that
+  would be reported.
+
+**Predictions, not used by the rule** (PREDICTED, not run). From the scoring above, the share
+of alt reads that still carry an `I` falls with length: about half at 20 bp, 15% at 40 bp,
+and near none at 49 bp. So today's `ins_reads` should fail rarely at 20-30 bp, sometimes at
+40 bp, and nearly always at 45-49 bp.
