@@ -1073,6 +1073,16 @@ So a FAIL on `ins_reads` for a 40-49 bp insertion usually means bwa-mem2 clipped
 the reads, not that the insertion is missing: look at `ins_sequence`. And a PASS
 at 50 bp or more is weaker evidence than two reads suggests.
 
+**Real variants fail these checks too** ("Realism probe" in `REVIEW.md`). Run on
+HG002's own BAM against GIAB's truth:
+- `split_reads` fails 12 of the pipeline's 20 real deletions.
+- `ins_reads` fails 47 of 112 real het insertions of 20-39 bp. spike's own
+  insertions of that size, at random unique sites, fail 0 of 16.
+
+So a FAIL on either row does not show that a spike-in is wrong. And spike's short
+insertions are easier to align than real ones (RF15 in
+`CLINICAL_SV_NEW_FINDINGS.md`).
+
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
 and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at
 chr20:39000000. Before this check existed, spike's own round trip could not

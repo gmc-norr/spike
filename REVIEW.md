@@ -5521,3 +5521,88 @@ Verdict:
   seen:
   - requiring the clips to share a breakpoint, within a few bp of each other;
   - making the default row read bases, as `ins_sequence` does (CR9's territory).
+
+## Realism probe -- today's checks on variants HG002 really carries (2026-09-26)
+
+**Why.** The user's principle: spike should model what happens in reality, and a difference
+from a real variant is a gap in the model. `spike validate` holds a spike-in to fixed rules
+about the aligner's output ("2 split reads naming the partner", "an `I` as long as the
+insertion"). Those rules were never taken from real variants. So this asks what they say about
+real variants, in HG002's own BAM, with GIAB's own truth. It is descriptive: no threshold was
+tuned, and no code changed.
+
+**What was run** (binary built from `b269427`, md5 `da8818724d916eda68aa9e20f29cad12`, on
+`data/giab_hg38/HG002/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam`):
+- `scripts/realism_probe.py` picks, from the T2T-Q100 chr20 VCF, the variants that are:
+  - inside the stvar benchmark, at least 1 kb from its edges;
+  - single-ALT, het or hom-alt;
+  - isolated: no other variant of 10 bp or more within 1 kb.
+
+  That gives 166 pure insertions of 20-49 bp (`real_ins.vcf`, md5
+  `0b4810d39b832aa48a02842edc9f0d23`) and 15 pure deletions of 500 bp or more (`real_del.vcf`,
+  md5 `447a2c8b43655691613aa0c5e5997dd7`), written as spike truth VCFs with `SIM_VAF` 0.5
+  (het) or 1.0 (hom).
+- The pipeline's 20 HG002 deletions, with the truth records from RF6's `real_events.sh` runs
+  on NA18488 (`pipeline20.vcf`, md5 `59e7ab3eb385bda79d3ad98c20c9dbdf`). This is the one set
+  seen both ways: HG002's real reads here, spike's reads there.
+- `spike validate --json` on the HG002 BAM for each, then `scripts/realism_score.py`, which
+  also reads RF6's pipeline runs and RF11's K1 runs:
+
+```
+== Real HG002 insertions, 20-49 bp, in HG002's own BAM
+  20-29 het: {'n': 77, 'ins_reads FAIL': 21, 'ins_sequence PASS': 34, 'ins_sequence not evaluable': 42, 'ins_sequence FAIL': 1}
+  20-29 hom: {'n': 26, 'ins_reads FAIL': 7, 'ins_sequence PASS': 17, 'ins_sequence not evaluable': 9}
+  30-39 het: {'n': 35, 'ins_reads FAIL': 26, 'ins_sequence PASS': 19, 'ins_sequence not evaluable': 16}
+  30-39 hom: {'n': 11, 'ins_reads FAIL': 6, 'ins_sequence not evaluable': 4, 'ins_sequence PASS': 7}
+  40-49 het: {'n': 11, 'ins_reads FAIL': 11, 'ins_sequence not evaluable': 5, 'ins_sequence PASS': 6}
+  40-49 hom: {'n': 6, 'ins_reads FAIL': 6, 'ins_sequence PASS': 1, 'ins_sequence not evaluable': 5}
+  aligner's I operations at those that FAIL: {'failing events under 40 bp': 60, 'with no I at all': 23, 'with an I in >= 2 reads, under 2 of them SVLEN long': 25}
+  exact copy beside POS: ins_reads FAIL 26 of 61
+  copy within 2*SVLEN: ins_reads FAIL 11 of 15
+  not a nearby copy: ins_reads FAIL 40 of 90
+
+== Spike-ins at random unique sites (RF11 K1), same BAM, het
+  20-29: ins_reads FAIL 0 of 8
+  30-39: ins_reads FAIL 0 of 8
+  40-49: ins_reads FAIL 14 of 24
+
+== Real HG002 deletions >= 500 bp, isolated, in HG002's own BAM
+  15 events, FAIL per check: {'coverage_any_mapq': 5, 'coverage_ratio': 1, 'split_reads': 9, 'split_reads_each_end': 9}
+
+== The pipeline's 20 deletions: HG002's real reads vs spike's reads on NA18488 (RF6)
+  real  (20): {'coverage_any_mapq': 4, 'coverage_ratio': 8, 'depth_fold': 10, 'resistant': 10, 'split_reads': 12, 'split_reads_each_end': 13}
+  spike (20): {'coverage_any_mapq': 6, 'coverage_ratio': 9, 'depth_fold': 10, 'resistant': 10, 'split_reads': 13, 'split_reads_each_end': 13}
+  split_reads: same verdict on 19 of 20
+  coverage_ratio: same verdict on 13 of 20
+```
+
+**What it shows.**
+- **The default checks fail real variants.** `split_reads` fails 12 of the pipeline's 20 real
+  deletions and 9 of the 15 isolated ones, all 9 at 0 reads. `ins_reads` fails 21 of 77 real
+  het insertions of 20-29 bp, 26 of 35 at 30-39 bp and 11 of 11 at 40-49 bp. A FAIL on these
+  rows is therefore not evidence that a spike-in is wrong.
+- **Deletions: spike's reads behave like the real ones at `split_reads`.** On the same 20
+  events, the verdict matches on 19 of 20. `coverage_ratio` matches on only 13 of 20.
+  - Not a clean comparison: spike's reads were spiked into NA18488, not HG002. NA18488 was
+    aligned with bwa 0.7.15, and it already carries several of these deletions itself (RF12).
+- **Insertions: spike's are cleaner than real ones.** At 20-39 bp, spike's random-letter
+  insertions at random unique sites fail `ins_reads` 0 of 16. HG002's real ones fail 47 of
+  112 (het). Of the 60 failing real ones under 40 bp:
+  - 23 have no `I` in any read;
+  - 25 have `I`s in two or more reads, but fewer than two as long as the insertion. The
+    aligner splits them, shortens them, or clips instead.
+
+  This is a gap in spike's model by the user's principle (RF15).
+  - **Not measured:** why. It is not "the inserted DNA copies its neighbour": real
+    insertions whose sequence is no nearby copy fail about as often (40 of 90) as exact
+    copies beside POS (26 of 61).
+  - Site context is untested. Real insertions are at their natural sites; spike's were at
+    random unique ones. A same-site transplant would separate the two.
+- **Reading letters is not enough on its own for short insertions.** On 42 of 77 real het
+  insertions of 20-29 bp, `ins_sequence` is not evaluable: a probe k-mer is already in the
+  reference near POS. This bears on RF13's fix.
+
+**Follow-ups.**
+- RF14 and RF15 are filed in `CLINICAL_SV_NEW_FINDINGS.md`.
+- The clean version of this probe is the user's HG001<->HG002 transplant plan. It needs their
+  NovaSeq BAMs, which are not on this machine.

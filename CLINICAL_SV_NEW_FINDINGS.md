@@ -22,8 +22,10 @@
 > | RF12 | **Scored around** (branch `rf12`, the user's choice: option 2). `validation_summary.tsv` gains `N_outside_bg`, `TP_outside_bg` and `Recall_outside_bg`: recall over the truth DELs the background's own Delly run does not recover, and `--min-recall` judges it. On the default run that is 0.7692 / 0.5385 / 0.4615 against 0.85 / 0.70 / 0.65. Four background DELs no short-read caller finds stay counted. See RF12 in `REVIEW.md`. |
 > | RF11 | Open; a fix was refuted before any code (branch `rf11`, "RF11" at the end of `REVIEW.md`). bwa-mem2 clips the reads of a 40-49 bp insertion, and `ins_reads` counts clips only from 50 bp: correct insertions fail 1 of 8 at 40 bp, 5 of 8 at 45 bp, 8 of 8 at 49 bp. Counting clips from 20, 30 or 40 bp makes more empty sites pass (RF13). The README says so. |
 > | RF13 | Open, found by RF11's test. `ins_reads` passes a 50 bp insertion that is not there at 12 of 200 random and 46 of 200 simple-repeat empty chr20 sites, measured with `spike validate`. |
+> | RF14 | Open. `spike validate` on HG002's own BAM: the default `split_reads` fails 12 of the pipeline's 20 real deletions, and `ins_reads` fails 47 of 112 real het insertions of 20-39 bp. A FAIL on these rows is not evidence that a spike-in is wrong. |
+> | RF15 | Open, a model gap. spike's 20-39 bp insertions fail `ins_reads` 0 of 16, real HG002 ones 47 of 112: the aligner writes real ones messily, spike's cleanly. Cause not yet measured. |
 >
-> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, RF13 from the RF11 work the same day, and all are written up at the end
+> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, RF13 from the RF11 work the same day, RF14 and RF15 from the realism probe after it, and all are written up at the end
 > of this file, under their own heading.
 
 # NEW-FINDINGS — found during this run, not fixed
@@ -396,3 +398,41 @@
   and each needs its own locked plan on fresh sites, since these have been seen:
   - requiring the clips to share a breakpoint;
   - making the default row read bases, as `ins_sequence` does.
+
+### RF14 — the default `split_reads` and `ins_reads` checks fail most real variants
+
+- **Where:** `src/validate.rs`, `split_reads` (DEL) and `ins_reads` (INS). Both are
+  non-advisory, so they decide the exit status.
+- **What:** both hold an event to a fixed rule about the aligner's output. A real variant,
+  in a real sample's own reads, often breaks that rule. So a FAIL on these rows does not show
+  that a spike-in is wrong.
+- **How I know:** `spike validate` on HG002's own 35x BAM, with GIAB T2T-Q100 truth ("Realism
+  probe" in `REVIEW.md`, `scripts/realism_probe.py` and `scripts/realism_score.py`):
+  - `split_reads` fails **12 of 20** of the pipeline's real deletions, and **9 of 15**
+    isolated real deletions of 500 bp or more, all 9 at 0 reads.
+  - `ins_reads` fails real het insertions: **21 of 77** at 20-29 bp, **26 of 35** at 30-39
+    bp, **11 of 11** at 40-49 bp.
+- **Severity:** Medium. These are default checks. They decide the exit status on evidence
+  that real variants also lack.
+- **Not fixed:** the user's principle is that the yardstick for "realistic" is real variants,
+  not a fixed rule. That points at CR9 and the transplant plan, not at a threshold.
+
+### RF15 — spike's short insertions are cleaner than real ones
+
+- **Where:** the insertion model: `SimEvent::Insertion` with `ins_seq: None` means random bases
+  (`src/types.rs`), placed wherever the event says.
+- **What:** in the same 35x HG002 BAM, and aligned with the same bwa-mem2, spike's 20-39 bp
+  insertions come out as one clean `I` of the full length. HG002's real ones often do not:
+  the aligner splits them, shortens them or clips.
+- **How I know:** `ins_reads` fails spike's het insertions at random unique sites **0 of 16**
+  at 20-39 bp (RF11's K1). It fails HG002's real ones **47 of 112**. Of the 60 real ones under
+  40 bp that fail, 23 have no `I` in any read, and 25 have `I`s but fewer than two as long as
+  the insertion.
+- **Severity:** Medium for anyone testing small-insertion calling: spike's insertions are
+  easier to find than real ones.
+- **Not fixed, cause not measured:**
+  - It is not "real inserted DNA copies its neighbour": 40 of 90 real insertions that are
+    no nearby copy fail too.
+  - It is not yet separated whether the site or the content drives it. spike's were at
+    random unique sites, the real ones at their own. A same-site transplant (the user's
+    HG001<->HG002 plan) would separate them.
