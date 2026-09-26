@@ -1864,7 +1864,8 @@ Options: `--region chr:beg-end` restricts the run to one window (it slices the
 background BAM, so the whole run stays small), `--max-events N` caps the number
 of truth DELs, `--min-events N` is the floor below which the run aborts
 (default 5), `--vafs "0.5 0.25 0.1"` sets the allele fractions, `--min-recall F`
-fails the run when any VAF recalls less than `F`, and `--min-gain N` is how many
+fails the run when any VAF's recall *outside the background control*
+(`Recall_outside_bg`, below) is less than `F`, and `--min-gain N` is how many
 truth events the highest VAF must recover *beyond the background control*
 (default 1). `--min-gain 0` is the weakest setting, not an off switch: the
 highest VAF must still at least match the control, and a run with no control to
@@ -1947,7 +1948,28 @@ events only**, so a call matching a real variant of the background sample is cou
 FP for being absent from a truth set that never described the background.
 Recall is the column that means something here — how many planted events the
 caller recovered — and even that is read against the background row rather than
-against zero, for the reason given above. The converse is no safer: a locus at
+against zero, for the reason given above. The last three columns do that reading
+for you (RF12). `N_outside_bg` is the number of truth DELs the background control
+does *not* recover, `TP_outside_bg` how many of those the spiked run recovered, and
+`Recall_outside_bg` the ratio. A truth DEL the background already carries leaves
+both sides, because recovering it says nothing about the spike-in. Measured on the
+default run (NA18488 chr20, 20 truth DELs):
+
+| VAF | Recall | Recall_outside_bg |
+| --- | --- | --- |
+| background | 0.3500 (7 of 20) | n/a |
+| 0.5 | 0.8500 | **0.7692** (10 of 13) |
+| 0.25 | 0.7000 | **0.5385** (7 of 13) |
+| 0.1 | 0.6500 | **0.4615** (6 of 13) |
+
+The exclusion is only as good as the control's caller. The background carries more
+of the truth DELs than Delly finds: 4 more (570-1527 bp, in repeats) show
+reduced depth in NA18488, and HG001's long-read calls confirm a deletion at each
+site, but no short-read caller tried finds them (Delly, Manta, TIDDIT,
+CNVpytor). Those 4 stay in `N_outside_bg`, so `Recall_outside_bg` can still count
+a background deletion as the spike-in's. On the default run it does: 2 of the 10
+at VAF 0.5 and 1 of the 7 at VAF 0.25 are among those 4, and none at VAF 0.1. See
+RF12 in `REVIEW.md`. The converse is no safer: a locus at
 which the caller made no call has not been shown to be variant-free. The run
 measures what this caller recovered from this background, not what is in it.
 

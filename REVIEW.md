@@ -5336,3 +5336,40 @@ spike-in, so it counts in neither the numerator nor the denominator.
 
   The verdict gates other than `--min-recall` are unchanged by construction (they use the old
   columns); the run's verdict and its failure list are reported as they come.
+
+#### Result: RF12 -- supported
+
+Plan `edd4ecf`, code `a0e17b9`.
+- **C1, passes.** Both tests were seen red first: no helper, and no columns. One was then
+  red for a fixture error of mine: the fixture gave 3 of 3, where the test meant 2 of 3. The
+  code was right, and the fixture was fixed. All four mutations redden a test:
+  - numerator-only exclusion;
+  - FN-side control events kept;
+  - a missing control read as empty;
+  - `--min-recall` on the overall recall.
+
+  `cargo test`: 536 passed, 1 ignored. The clippy set is identical to master's.
+- **C2, passes.** `scripts/validate_pipeline.sh --background-bam
+  data/validation/background/NA18488.chr20.noalt.bam` with a scratch outdir and spike `c0c9614`
+  ran end to end: exit 0, `VALIDATION PASSED`. The background control recovers 7 of 20. They
+  are exactly the Delly set measured before the plan (POS 1572827, 32723063, 32739555,
+  41277677, 62057603, 63093345, 63964828).
+
+  | VAF | TP of 20 | Recall | N_outside_bg | TP_outside_bg | Recall_outside_bg |
+  | --- | --- | --- | --- | --- | --- |
+  | 0.5 | 17 | 0.8500 | 13 | 10 | 0.7692 |
+  | 0.25 | 14 | 0.7000 | 13 | 7 | 0.5385 |
+  | 0.1 | 13 | 0.6500 | 13 | 6 | 0.4615 |
+
+  Recomputed directly from Truvari's `tp-base` and `fn` VCFs with `comm`, not the helper, at
+  every VAF:
+  - the base set is 20, 7 of them control TPs, so `N_outside_bg = 13`;
+  - `TP - TP_in_control` equals `TP_outside_bg`;
+  - all 7 control TPs are also TP in every spiked run.
+- **The known limit, measured.** The 4 depth-only background deletions (POS 48870950,
+  61943513, 63134604, 64127245) stay in `N_outside_bg`. At VAF 0.5, 2 of the 10 recovered
+  outside the background are among them (61943513 and 63134604); at 0.25 it is 1 of 7, and at
+  0.1 none. The README says so.
+- **Follow-up, not fixed.** `highest_vaf` compares decimals with plain `awk`, the same
+  `mawk` and decimal-comma trap as the case file's entry. With the default `--vafs` order
+  (0.5 first) the answer is right by luck.
