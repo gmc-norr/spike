@@ -165,7 +165,12 @@ def main(argv):
             if name == "null":
                 continue
             pos = int(pos)
-            spans = [(pos, int(end))] if name == "hg" else [(pos, pos + n) for n in (50, 300, 1000, 10000)]
+            if name == "hg":
+                spans = [(pos, int(end))]
+            elif name == "low":  # rf14b_sites.py: one 1000 bp deletion at VAF 0.1
+                spans = [(pos, pos + 1000)]
+            else:
+                spans = [(pos, pos + n) for n in (50, 300, 1000, 10000)]
             for s, e in spans:
                 j = probe(ref, chrom, s, e)
                 near_ref = fetch(ref, chrom, s - 1000, s + 1000) + "N" + fetch(ref, chrom, e - 1000, e + 1000)

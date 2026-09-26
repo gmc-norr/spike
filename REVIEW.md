@@ -6009,3 +6009,70 @@ N5 null sites passing: 0 of 200
 itself held everywhere spike plants by default. A next attempt needs a new locked plan on
 fresh sites. It must say what the row does on events spike would refuse, and it must measure
 the chance-zero rate at low VAF, not assume it. These sites have been seen.
+
+#### Plan: RF14 second attempt, the same row judged on what spike plants (locked before K)
+
+**The user's choice** (2026-09-26): option 1, a second attempt.
+
+**The row is unchanged** from the first plan, and so is `rf14_planted.py`. What changes is
+the test, for the two things the first attempt taught.
+- **Events spike would refuse.** Every run still passes `--allow-resistant`, as the pipeline
+  does. A run above `SIM_RESIST` 0.5 is an event spike refuses by default (RF8), because it
+  cannot plant it properly. So such a run is **judged apart**:
+  - the row need not pass it (on `chr20:7119236` its FAIL was true: none of spike's reads
+    crossed the join);
+  - it must not turn a pass of master's `split_reads` into a fail (GUARD below);
+  - its negatives are judged like every other run's (K-).
+- **Low VAF.** The first attempt saw 0 to 3 carriers at VAF 0.1 and did not measure how often
+  a correct one has none. This attempt adds 30 VAF 0.1 runs to measure it.
+- **Why this is not moving the goalposts.** The line at 0.5 is RF8's, set before this work.
+  The sites are fresh. The low-VAF bar is comparative: the row must fail fewer correct runs
+  than today's rule does, and it must never fail one that today's rule passes.
+
+**Sites** (`scripts/rf14b_sites.py`, seeds 20261031-3, `scripts/rf14b_sites.tsv`, md5
+`c3b1fc8fd922fa15388a0244d1d3350d`).
+- **Seen positions.** No site is within 2 kb of any of 1236 seen positions. That is the first
+  attempt's list, plus its 36 spans (`scripts/rf14_k_events.txt`) and its sites.
+- **`rand`.** 6 sites, drawn as before.
+- **`hg`.** 12 real HG002 deletions of 52 to 376 bp: 6 of the 62 fresh candidates at 50-299
+  bp, and 6 of the 11 at 300 bp or more.
+- **`low`.** 30 sites. They come from the same draw as `rand` (36 positions, at least 250 kb
+  apart), so each is as clean as a `rand` site.
+- **`null`.** 200 sites.
+- **From the reference alone** (`rf14_planted.py sites`):
+  - 0 of 198 negatives are indistinguishable (66 spans x N2a, N2b, N3).
+  - The join is within 2 substitutions of the reference near a breakpoint at **10 of the 12**
+    real sites: 0 at 5, 1 at 2, 2 at 3.
+  - At the `rand` and `low` spans that distance is 8 to 13.
+
+**K** (`scripts/rf14b_k.sh`, the same master build `4e2126fc`, 12 threads,
+`--allow-resistant`). Scored by `scripts/rf14b_score.py`, which prints each verdict below.
+- **Runs.**
+  - `rand` at 50, 300, 1000 and 10000 bp, VAF 0.5: 24 runs.
+  - `hg` at their own POS and END, VAF 0.5: 12 runs.
+  - `low`, 1000 bp at `af=0.1`: 30 runs.
+- **K+.** Of the 36 VAF 0.5 runs, at least 32 reach `validate`, and at least 24 of those are
+  at `SIM_RESIST` 0.5 or below. All but at most 1 of those 24 or more carry.
+- **LOW.** Take the `low` runs that reach `validate` at `SIM_RESIST` 0.5 or below; there must
+  be at least 20, or LOW is inconclusive.
+  - The row must fail **fewer** of them than master's `split_reads` does.
+  - The row's failure count and its 95% Wilson interval are reported. That is the measured
+    chance-zero rate at VAF 0.1.
+- **GUARD.** On every run that reaches `validate`: no run where master's `split_reads` passes
+  and the row has 0 carriers.
+- **K-.** As in the first plan: N1, N2a, N2b, N3 and N4 have 0 carriers on every run that
+  reaches `validate`, resistant and low-VAF runs included, unless indistinguishable. N5 is 0
+  of the 200 `null` sites.
+- **Reported, not judged.**
+  - Carriers on the runs above 0.5.
+  - The check of the check on the `hg` slices.
+- **The scorer can go red.** On the first attempt's runs, with the tolerance set to exact
+  match, it prints `K+ ... FAIL` (2 misses) and `GUARD ... FAIL` (3 runs). With the row as
+  locked it prints K+, GUARD and K- as PASS, and LOW as inconclusive (5 judged).
+- **Outcome.**
+  - K+, LOW, GUARD and K- all pass: supported, then code.
+  - Any one fails: refuted, with no code.
+  - LOW inconclusive: no code; it is reported, and the user decides.
+
+**C, after code.** As in the first plan (C1 mutations, C2 replica equality, C3 exit
+statuses). C3 also covers this attempt's and the first attempt's K runs.
