@@ -560,3 +560,79 @@ pool fold with a small any-MAPQ fold is mappability; both large is depth.
 distribution is exactly the data a threshold must not be chosen from, and option A costs a sentence
 and removes the misreading that matters — that a 1.5-fold warning on real data means the sample's
 depth is uneven, when four times in six it means the bin is hard to map.
+
+## T7 — the sample's own non-SNP variants in event footprints (CR3 option B's scan)
+
+**Status: a decision for the human. Nothing was changed.** From the run after the CR4 and CR2
+census, 2026-09-26. The measurement is in REVIEW.md, "Result: T7 — supported. A blanket warning
+would fire on 38 of 40".
+
+### The measured problem
+
+CR3 option B proposes rejecting footprints that contain variation `SampleCopies` cannot represent —
+the sample's own indels and SVs, since it stores one base per reference position. Measured over the
+40 seeded 10 kb spans on chr20, each footprint the span ± 2 kb, against HG002's own T2T-Q100 chr20
+calls, counting only records HG002 carries (`GT` not `0/0`, `0|0`, `./.`, `.|.`):
+
+| scan restricted to | seeded 40 spans | 40 random benchmark windows |
+| --- | --- | --- |
+| **any non-SNP record** | **38 of 40 (95.0%)** | **40 of 40 (100.0%)** |
+| any length change ≥ 2 bp | 30 of 40 (75.0%) | 31 of 40 (77.5%) |
+| any ≥ 6 bp | 20 of 40 (50.0%) | 25 of 40 (62.5%) |
+| any ≥ 21 bp | 13 of 40 (32.5%) | 10 of 40 (25.0%) |
+| **any > 50 bp (SV-sized)** | **4 of 40 (10.0%)** | 7 of 40 (17.5%) |
+
+Non-SNP records per footprint: min 0, median 5, max 23. A 77.8% SNP share across 896 carried
+records, so the filter is excluding the large majority. The random-window control (seed 20260926,
+fixed before the draw) is 5 percentage points from the seeded list, so this is a property of chr20
+and not of `cr4_placements.py`.
+
+### The governing principle
+
+A check is only worth having if its two answers are both reachable on real input. At 95% the blanket
+scan has one answer.
+
+### What would show a fix works, and what would show it does not
+
+- **Works:** on these 40 spans the chosen rule fires on a minority; the `dup_homdel` probe (CR3's own
+  case, a homozygous 2 bp background deletion under a het DUP, measured falling from AF 1.0 to
+  **0.360**) still fires; and no ordinary benchmark locus is refused.
+- **Does not:** `dup_homdel` stops firing, or the rule refuses a locus whose only unsupported record
+  is a 1 bp indel that demonstrably does not distort the event.
+
+### Option A — no scan; document the exposure, and keep the size distribution beside it
+
+State in README, where `--gvcf` and the sample-haplotype path are documented, that an event's
+footprint on real data essentially always contains the sample's own non-SNP variation — measured at
+38 of 40 on chr20 — and that `SampleCopies` represents none of it, so a background indel under an
+event is reported at a lower allele fraction than it has (CR3's 1.0 → 0.360). Publish the size table
+above so a user can judge their own locus.
+
+- **Cost:** a documentation change. Nothing fails that passes today.
+- **What it does not fix:** nothing. The distortion stays, silently, and a user who has not read the
+  note cannot tell it is happening.
+
+### Option B — a size-restricted **advisory** row, never a rejection
+
+Count the sample's carried non-SNP records inside each footprint **above a size threshold**, write
+the count and the largest length change into the truth VCF, and report it as one more **advisory**
+`spike validate` row on the mechanism T1, T2, T5 and T6 built. **Not a rejection and not a default
+failure**: at any threshold low enough to catch CR3's 2 bp case it fires on 75% of real loci, and a
+rejection there would refuse 30 of 40 ordinary benchmark spans.
+
+- **Cost:** roughly the size of T6 — one more source of truth (the `--gvcf` input, or a new optional
+  sample-VCF input, which would be a **new flag** and therefore out of the kind of run this was), one
+  INFO field, one advisory row.
+- **Risk, and it is the reason this is a decision and not a task:** the threshold must be locked
+  before its distribution is seen, and **T7 has now seen chr20's**. Locking it honestly needs a new
+  plan on other chromosomes, exactly as T3's note says for the any-MAPQ depth fold.
+- **What it does not fix:** the indel model itself. Representing a background indel under an event is
+  CR3 option A, still open.
+
+### Recommendation
+
+**Option A now.** Option B's only defensible threshold is one chosen on data this run has not looked
+at, and the measurement that would justify a particular size — how much a 1 bp, a 5 bp and a 50 bp
+background indel each distort an event's measured allele fraction — has been done exactly once, for
+one 2 bp deletion at one locus. That measurement, repeated across sizes, is the work that turns this
+into a decidable question; the scan is the easy part.

@@ -3419,7 +3419,7 @@ the exit status.
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
 | T6 | INS sequence identity, advisory | Supported, done (`02a2ecc`) |
-| T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Plan locked |
+| T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Supported: fires on 38 of 40 |
 
 The real-data loop every measuring step uses is `scripts/slice_loop.sh` (`ab61c6c`): one event
 on a ±100 kb slice of the 35x HG002 BAM, through spike, `align.sh`, `merge.sh` and
@@ -4605,3 +4605,69 @@ class is the obvious variant of option B and its rate is the number that would d
   scanner from POS and `len(REF)` rather than delegated to a flag whose default differs by version.
 - *A command that fails must not read as a count of zero.* T3's census returned 0.0 everywhere from a
   samtools option that did not exist. The scanner raises on a non-zero exit.
+
+#### Result: T7 -- supported. A blanket warning would fire on 38 of 40
+
+Measurement only; no production code changed. `scripts/t7_footprint_variants.py` and
+`scripts/t7_random_windows.py`, against `GRCh38_HG2-T2TQ100-V1.1_chr20.vcf.gz` (208,757 chr20
+records, one sample `HG002`, `GT:AD`) with `bcftools` 1.9.
+
+```
+events=40 footprints with at least one carried non-SNP record=38 (95.0%)
+non-SNP records per footprint: min 0 median 5 max 23
+  class      1bp: fires on 33 of 40 footprints (82.5%), 77 records in all
+  class    2-5bp: fires on 27 of 40 footprints (67.5%), 71 records in all
+  class   6-20bp: fires on 17 of 40 footprints (42.5%), 33 records in all
+  class  21-50bp: fires on 10 of 40 footprints (25.0%), 14 records in all
+  class    >50bp: fires on 4 of 40 footprints (10.0%), 4 records in all
+```
+
+**38 of 40 is at or above the locked bar of 36, so the claim is supported: a warning on "this
+footprint holds one of the sample's own non-SNP variants" would fire on nearly every event and
+carries no information.** The two footprints that hold none are
+`del:chr20:33730010-33740010` and `del:chr20:55991008-56001008`.
+
+**Both controls pass.**
+
+- **Control 1, is the filter excluding anything?** Across the 40 footprints, **896 carried records,
+  of which 199 non-SNP -- a 77.8% SNP share**. The non-SNP test removes the large majority, so the
+  199 are not an artefact of a filter that filters nothing.
+- **Control 2, is the seeded list representative?** 40 random 14 kb windows inside the same SV
+  benchmark BED, seed **20260926** written into the plan before the draw (list md5
+  `ada41f3c0192d3701c8fe6cd1bb9fabc`): **40 of 40 (100.0%)** fire, with a 80.1% SNP share and a
+  median of 4 non-SNP records per window. The seeded list's 95.0% is **5 percentage points** from the
+  random windows' 100.0%, well inside the locked 20. **The conclusion is about chr20, not about
+  `cr4_placements.py`'s list** -- if anything the seeded spans are slightly *cleaner* than an average
+  benchmark window.
+
+**Restricting the scan by size is what would make it usable, and here is the measured cost of each
+cut** -- derived from the same table, with no new threshold chosen:
+
+| scan restricted to | seeded 40 spans | random 40 windows |
+| --- | --- | --- |
+| any non-SNP record | **38 of 40 (95.0%)** | 40 of 40 (100.0%) |
+| any length change >= 2 bp | 30 of 40 (75.0%) | 31 of 40 (77.5%) |
+| any >= 6 bp | 20 of 40 (50.0%) | 25 of 40 (62.5%) |
+| any >= 21 bp | 13 of 40 (32.5%) | 10 of 40 (25.0%) |
+| any > 50 bp (SV-sized) | **4 of 40 (10.0%)** | 7 of 40 (17.5%) |
+
+A 1 bp indel inside the footprint is nearly universal (82.5%) and an SV-sized one is not (10.0%).
+So the question CR3 option B has to answer is not "does the footprint hold unsupported variation" --
+it essentially always does -- but **"how large a mis-representation is tolerable"**, and that is a
+different question with a different answer.
+
+**What this does and does not settle.** It settles that the scan **cannot be a blanket warning**: at
+95% it would be noise, and as a *rejection* it would refuse 38 of 40 ordinary benchmark loci, which
+would break every run that works today. It does **not** measure how much any of those records
+actually distorts an event -- CR3's own measurement, the homozygous 2 bp background deletion falling
+from AF 1.0 to **0.360** under a het DUP, is the only such number this project has, and it is one
+record of one size at one locus. The design note (`CLINICAL_SV_DESIGN_NOTES.md`, "T7 -- the sample's
+own non-SNP variants in event footprints") carries two options and this table.
+
+**Measurement hygiene.** Overlap is computed in the scanner from POS and `len(REF)`: `bcftools` 1.9
+has no `--regions-overlap` and its default changed between versions, so delegating it would have made
+the count depend on the tool's version. The query window is widened by 60 kb so a record starting
+before the footprint still comes back -- this VCF holds REF strings over 1,500 bases. The scanner
+raises on a non-zero exit, after T3's census returned 0.0 everywhere from an option that did not
+exist. `GT` is read from column 10 and `0/0`, `0|0`, `./.` and `.|.` are all excluded, so every
+counted record is one HG002 carries.
