@@ -151,7 +151,10 @@ class Probe:
                 "depths": self.depths(destination, donor, [(12000, 14000), (19000, 21000)]),
                 "baseline_depths": [75, 18.75 if label == "dup_variable" else 75],
             }
-        destination = self.run("del_lowmap", lowmap, ["del:chrT:10000-14000;af=1"])
+        # Half the lowmap pairs are uneditable (SIM_RESIST 0.5005), which spike
+        # refuses since RF8; the probe measures what happens when it is told not to.
+        destination = self.run("del_lowmap", lowmap, ["del:chrT:10000-14000;af=1"],
+                               ["--allow-resistant"])
         self.results["del_lowmap"] = {
             "depth": self.depths(destination, lowmap_records, [(11000, 13000)])[0],
             "baseline_depth": 75,

@@ -62,7 +62,10 @@ def main(out_dir, spike_new, spike_base):
     for name, bam in bams.items():
         for tag, event in (("del", DEL), ("dup", DUP)):
             label = f"{name}_{tag}"
-            run = probe.run(label, bam, events=(event,))
+            # About half the lowmap pairs are uneditable, which spike refuses
+            # since RF8; T1 measures the census on the run it is told to make.
+            extra = ("--allow-resistant",) if name == "lowmap" else ()
+            run = probe.run(label, bam, events=(event,), extra=extra)
             truth = run / "truth.vcf"
             info = [l for l in truth.read_text().splitlines() if not l.startswith("#")]
             for field in ("SIM_RESIST", "SIM_DEPTH_FOLD"):

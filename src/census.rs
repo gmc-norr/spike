@@ -127,6 +127,35 @@ pub fn depth_fold_warning(label: &str, fold: &DepthFold) -> Option<String> {
     ))
 }
 
+/// Above this resistant share spike refuses the event (RF8) unless told
+/// `--allow-resistant`. Locked in the RF8 plan before any chr1 share was
+/// measured.
+pub const REFUSE_ABOVE: f64 = 0.5;
+
+/// The refusal for an event whose resistant share is above [`REFUSE_ABOVE`],
+/// unless `allow` is set.
+///
+/// The resistant reads are never removed or replaced, so the event that
+/// reaches the reads is about `VAF x (1 - share)`: above one half they carry
+/// less than half of what the truth record would claim (RF8).
+pub fn refusal(label: &str, census: &Census, allow: bool) -> Option<String> {
+    if allow || census.fraction() <= REFUSE_ABOVE {
+        return None;
+    }
+    Some(format!(
+        "{}: {} of {} reads over it ({:.1}%) are ones spike cannot edit (below \
+         --min-mapq, not a proper pair, or a mate that fails a filter), so the reads \
+         would carry less than half of the event truth.vcf would claim. spike stops \
+         rather than write that record (RF8). If most of them are below --min-mapq, \
+         lowering it lets spike edit them; or pass --allow-resistant to simulate it \
+         anyway, and truth.vcf records the share as SIM_RESIST.",
+        label,
+        census.resistant,
+        census.counted,
+        census.fraction() * 100.0,
+    ))
+}
+
 /// The warning for an event whose resistant share is above [`WARN_ABOVE`].
 pub fn warning(label: &str, census: &Census) -> Option<String> {
     if census.fraction() <= WARN_ABOVE {
@@ -252,6 +281,31 @@ mod tests {
         assert!(w.contains("DEL chr1:101-200"), "{}", w);
         assert!(w.contains("11 of 100"), "{}", w);
         assert!(w.contains("--min-mapq"), "{}", w);
+    }
+
+    #[test]
+    fn test_census_refuses_only_above_half() {
+        let at = |counted, resistant| {
+            refusal("DEL chr1:101-200", &Census { counted, resistant }, false)
+        };
+        assert_eq!(at(100, 50), None, "0.5 is not above 0.5");
+        assert_eq!(at(100, 11), None, "above WARN_ABOVE is a warning, not a refusal");
+        assert_eq!(at(0, 0), None);
+        // CR4's lowmap probe: 1038 of 2074 is 0.5005.
+        let r = at(2074, 1038).expect("0.5005 is above 0.5");
+        assert!(r.contains("DEL chr1:101-200"), "{}", r);
+        assert!(r.contains("1038 of 2074"), "{}", r);
+        assert!(r.contains("--allow-resistant"), "{}", r);
+        assert!(r.contains("--min-mapq"), "{}", r);
+        assert!(r.contains("SIM_RESIST"), "{}", r);
+    }
+
+    #[test]
+    fn test_allow_resistant_lifts_the_refusal() {
+        // RF8's locus, del:chr20:27100000-27110000 on the 35x HG002 BAM.
+        let census = Census { counted: 5749, resistant: 5731 };
+        assert!(refusal("DEL chr20:27100001-27110000", &census, false).is_some());
+        assert_eq!(refusal("DEL chr20:27100001-27110000", &census, true), None);
     }
 
     /// A one-contig BAM (`chrA`, 3000 bp) of 100 bp proper pairs, read 2
