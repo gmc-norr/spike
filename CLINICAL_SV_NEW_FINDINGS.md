@@ -18,7 +18,7 @@
 > | RF5 | Open. T1's plan allowed the help text one new flag line; the footer sentences were added, extending the checks table was not ratified. README.md covers both rows. |
 > | RF6 | Open. The cause is in the aligner's representation, not in the check's arithmetic, and changing the default verdict is exactly the default change this run's standing choice forbids. |
 > | RF7 | Open. Adding the worst bin to `truth.vcf` for every event changes what spike emits; a per-event column in the run README would be the cheap fix, and it is a design decision rather than a defect. |
-> | RF8 | Open, and a decision for the human, recorded with its numbers. A coverage floor would make runs that succeed today start failing, and `--min-donor-depth` would be a new flag. |
+> | RF8 | **Fixed** (branch `rf8`, the user's choice: refuse by default). spike refuses an event whose `SIM_RESIST` is above 0.5 and lists every such event at once; `--allow-resistant` restores the old behaviour byte for byte. Plan, code and result are under "RF8" at the end of `REVIEW.md`. Real SV sites hit it far more often than random spots (6 of `validate_pipeline.sh`'s 20 vs 0 of 40 on chr1), so that script passes the flag and counts them. |
 >
 > RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26) and are written up at the end
 > of this file, under their own heading.

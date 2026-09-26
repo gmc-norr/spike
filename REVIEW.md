@@ -5000,3 +5000,40 @@ own benchmark.
 **Verdict:** supported as locked. **Not yet decided:** whether the refusal stays on by
 default now that it is known to stop `validate_pipeline.sh`. That is the user's call.
 README and the "What spike refuses" table wait on it.
+
+#### Follow-up: the user kept the default refusal (option 1), with two changes
+
+**The decision** (2026-09-26): keep the refusal on by default, and fix what it broke.
+
+- **Every refused event is named at once.** Once one event is refused, the rest are counted but
+  not simulated, and the error lists them all, so a multi-event input can drop them in one pass.
+  - `census::refusal` is now one line per event; `census::refusal_message` wraps the lines.
+  - Test first: seen red on a stub returning `None`. The mutation "keep only the first line"
+    reddens it.
+  - On `validate_pipeline.sh`'s own spike command (NA18488, its 20 DELs, VAF 0.5, seed 42),
+    the error names all six, and the output directory is left empty.
+- **`validate_pipeline.sh` passes `--allow-resistant`**, then logs how many events have
+  `SIM_RESIST` above 0.5.
+  - Its step 2 and step 3 were run on their own, from the script's own functions: exit 0,
+    and `6 of 20` at each of VAF 0.5, 0.25 and 0.1.
+  - Its VAF 0.5 output (R1, R2, `replaced_reads.txt`, `events.bed`, and `truth.vcf` without
+    `##fileDate`) is byte-identical to master's binary on the same command.
+  - How the harness should *score* those six is still open.
+- **Found while checking that count.** Under `mawk` it read **0 of 20**, under `gawk` 6 of 20.
+  This machine's `LC_NUMERIC` is `sv_SE.UTF-8`, which has a decimal comma, and `mawk` converts
+  `"0.776"` to 0 under it. The count now runs as `LC_ALL=C awk`, and both give 6. Line 567's
+  logged sample depth has the same cause (`12,3x` under `mawk`): cosmetic, and not changed.
+
+**Re-run on the final binary** (md5 `5ec1f7f5ff23303dfdda2aadcb3e9660`):
+- **C1:** 6 of 6 refused, and no output file written.
+- **C2:** with the flag, 30 of 30 files match master's (real md5s; two different events'
+  R1s do differ, so the comparison can go red).
+- **Lowmap probe:** refused; with the flag, identical to master. The uniform probe is
+  identical all three ways.
+- **C3:** 40 of 40 chr1 runs x 5 files are "same", with and without the flag.
+- **Mutations:** `>=`, removed and flag-ignored each still redden a test.
+- **Suite:** `cargo test` 534 passed, 1 ignored.
+- **Clippy:** 12 distinct warning lines, identical to master's (with file names; the earlier
+  count of 9 was without them).
+- **CLI reference:** the README's copy matches `spike --help` apart from the one description
+  line it has never carried.

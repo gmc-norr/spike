@@ -62,3 +62,17 @@ what was claimed, what the claim actually rested on, and which gate would have c
   **Rule for this repo: a noise test for a new default is drawn from what the rule will
   actually see. For spike, that is known SV sites, and the repo's own harnesses first. A
   random placement is a control, not the population.**
+
+## 2026-09-26 -- a count that read 0 under mawk and 6 under gawk
+
+- **What almost shipped.** `validate_pipeline.sh` was to log how many events have
+  `SIM_RESIST` above 0.5, using `awk ... substr(...) + 0 > 0.5`.
+- **What it rested on.** That `awk` reads `0.776` as a number. This machine's `LC_NUMERIC` is
+  `sv_SE.UTF-8`, which has a decimal comma. `mawk` honours it, so every value became 0 and the
+  count was 0, with exit 0. `gawk`, the default `awk` here, ignores it and printed 6.
+- **How it was caught.** The script's own comment claimed mawk support, so the count was run
+  under both. The two disagreed.
+- **Which gate would have caught it.** Gate D question 2: a check must be shown to go red, or
+  here, to be non-zero where it must be. **Rule for this repo: a script that parses decimals
+  with `awk` runs it as `LC_ALL=C awk`. This machine's locale uses a decimal comma, and `mawk`
+  turns every such number into 0 silently.**
