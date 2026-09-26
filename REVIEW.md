@@ -5769,3 +5769,50 @@ asserts that none is in `rf11_sites.tsv` or `rf13_sites.tsv`.
   `af=0.1`: 42 runs. The 12 `hg` insertions at their own POS with their own bases: 12 runs.
 - **Criteria.** K+, K-, N1-N5, the check of the check and the outcome rules are as in the
   first plan, with the new N2. Refuted if K+ or K- fails: no code.
+
+#### Result: RF13 second attempt -- supported; code `12ee5a1`
+
+**K** (`scripts/rf13b_k.sh` with the master binary, md5 `da8818724d916eda68aa9e20f29cad12`;
+`scripts/rf13b_planted.py k` and `null`):
+
+```
+K+ runs reaching validate: 54 of 54
+K+ carriers >= 1: 54 of 54  (min 2, median 17)
+K- negatives with a carrier: 0 of 216 []
+check of the check, hg sites' unspiked slice with the name filter off: [('h_10977902', 73), ('h_16812284', 32), ('h_17197186', 18), ('h_207202', 36), ('h_2659082', 44), ('h_39326085', 59), ('h_4085893', 33), ('h_4802882', 24), ('h_51832908', 18), ('h_6364542', 30), ('h_63847301', 59), ('h_804804', 41)]
+N5 null sites passing: 0 of 200
+```
+
+- **K+.** All 54 runs reached `validate`, and all 54 have 2 to 37 of spike's reads carrying the
+  insertion. That covers the 1, 2 and 4 bp random ones, the 6 at VAF 0.1 (2 to 9 carriers),
+  and the 12 real HG002 insertions: five 1 bp, `TATA`, and tandem repeats up to 172 bp.
+- **K-.** 0 of 216, and N5 0 of 200.
+- **The check of the check.** With the name filter off, HG002's own reads carry at 12 of 12
+  real sites.
+
+**C, after code** (new binary md5 `4e2126fcc81bee41e22843f77abf45e9`, its own target dir):
+- **C1.** Tests were written first, and seen failing for the missing feature.
+  - Every mutation the plan lists reddens a test: the name filter, the ID match, tolerance
+    0, tolerance 3, and `ins_reads` counted.
+  - So do four more: inserted bases tolerated like flank ones, secondary records counted, a
+    MAPQ/duplicate filter, and a different read-name prefix. The last also reddens the
+    `simulate.rs` test that ties the two modules' naming together.
+  - A pass mark of 2 reddened nothing at first. The fixture always had 3 carriers, so
+    `test_ins_planted_passes_on_one_carrying_read` was added, and it reddens.
+  - Six old tests pinned `ins_reads` as the counted INS row, and were updated to the new
+    rows.
+  - 547 pass in debug and in release. Clippy is unchanged at 15 warnings, none new.
+  - `tests::test_merge_script_aborts_when_original_bam_does_not_match_replaced_reads` failed
+    once in a full parallel run and passed alone and in every later run. It is untouched here,
+    and it looks flaky.
+- **C2.** `scripts/rf13b_c2.py`: the Rust row's observed count equals the replica's on
+  **162 of 162** (54 runs x own truth, N2, N3).
+- **C3.** On the 54 correct insertions, master's validate exited 0 on 42 and the new one on
+  **54**. The 12 that moved are every 45 bp run, 6 at VAF 0.5 and 6 at 0.1, which
+  `ins_reads` failed.
+- **RF13 itself, with the new binary.** On 200 fresh empty sites with `sim_ins_N` IDs and a
+  60 bp ALT, `ins_planted` passes 0 and `ins_reads` (advisory now) passes 10. The run exits 1.
+
+**A change a user can see.** A truth VCF with a symbolic `<INS>` ALT, which spike wrote
+before CR7, or one from another tool without `sim_ins_N` IDs, now fails its insertions with
+a not-evaluable `ins_planted` row. The plan locked this. The README says so.

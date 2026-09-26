@@ -21,7 +21,7 @@
 > | RF8 | **Fixed** (branch `rf8`, the user's choice: refuse by default). spike refuses an event whose `SIM_RESIST` is above 0.5 and lists every such event at once; `--allow-resistant` restores the old behaviour byte for byte. Plan, code and result are under "RF8" at the end of `REVIEW.md`. Real SV sites hit it far more often than random spots (6 of `validate_pipeline.sh`'s 20 vs 0 of 40 on chr1), so that script passes the flag and counts them. |
 > | RF12 | **Scored around** (branch `rf12`, the user's choice: option 2). `validation_summary.tsv` gains `N_outside_bg`, `TP_outside_bg` and `Recall_outside_bg`: recall over the truth DELs the background's own Delly run does not recover, and `--min-recall` judges it. On the default run that is 0.7692 / 0.5385 / 0.4615 against 0.85 / 0.70 / 0.65. Four background DELs no short-read caller finds stay counted. See RF12 in `REVIEW.md`. |
 > | RF11 | Open; a fix was refuted before any code (branch `rf11`, "RF11" at the end of `REVIEW.md`). bwa-mem2 clips the reads of a 40-49 bp insertion, and `ins_reads` counts clips only from 50 bp: correct insertions fail 1 of 8 at 40 bp, 5 of 8 at 45 bp, 8 of 8 at 49 bp. Counting clips from 20, 30 or 40 bp makes more empty sites pass (RF13). The README says so. |
-> | RF13 | Open; one fix refuted before any code (branch `rf13`, "RF13" at the end of `REVIEW.md`). A row counting only spike's own reads for the event (`ins_planted`) passed 53 of 53 correct insertions and 0 of 200 empty sites, but its 2-substitution tolerance let a wrong truth match on 3 of 6 insertions of 4 bp. Found by RF11's test: `ins_reads` passes a 50 bp insertion that is not there at 12 of 200 random and 46 of 200 simple-repeat empty chr20 sites. |
+> | RF13 | **Fixed** (branch `rf13`, code `12ee5a1`; plan, result and a first refuted attempt under "RF13" at the end of `REVIEW.md`). The INS row that decides is now `ins_planted`: spike's own reads for the event, carrying its bases. It passed 54 of 54 correct insertions (1-300 bp, VAF 0.1, 12 real HG002 ones) and 0 of 216 wrong truths and 0 of 200 empty sites. `ins_reads` is advisory. |
 > | RF14 | Open. `spike validate` on HG002's own BAM: the default `split_reads` fails 12 of the pipeline's 20 real deletions, and `ins_reads` fails 47 of 112 real het insertions of 20-39 bp. A FAIL on these rows is not evidence that a spike-in is wrong. |
 > | RF15 | Open, a model gap. spike's 20-39 bp insertions fail `ins_reads` 0 of 16, real HG002 ones 47 of 112: the aligner writes real ones messily, spike's cleanly. Cause not yet measured. |
 >
@@ -403,6 +403,11 @@
   within 2 substitutions, passed 53 of 53 correct insertions (4-300 bp, VAF 0.5 and 0.1, and 11
   real HG002 insertions) and 0 of 200 empty sites. But on 3 of 6 insertions of 4 bp, a truth with
   the wrong letters matched too. A next attempt would require the inserted bases exactly.
+- **Fixed (2026-09-26), second attempt, code `12ee5a1`.** The inserted bases must match exactly;
+  only the reference bases may differ (at most 2). On fresh sites: 54 of 54 correct insertions
+  carry, 0 of 216 wrong truths and 0 of 200 empty sites do. `ins_planted` decides an insertion
+  now and `ins_reads` is advisory, so the silent PASS at empty sites no longer reaches the exit
+  status.
 
 ### RF14 — the default `split_reads` and `ins_reads` checks fail most real variants
 
