@@ -10,6 +10,7 @@ mod extract;
 mod fastq;
 mod haplotype;
 mod loh;
+mod origin;
 mod reference;
 mod simulate;
 mod stats;
