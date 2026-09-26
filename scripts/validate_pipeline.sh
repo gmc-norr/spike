@@ -154,7 +154,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --vafs \"<v1 v2 ...>\"     Allele fractions [default: ${VAFS[*]}]"
             echo "  --max-events <N>         Use at most N truth DELs (0 = all)"
             echo "  --min-events <N>         Abort if fewer than N DELs survive [default: 5]"
-            echo "  --min-recall <F>         Fail the run if any VAF recalls < F"
+            echo "  --min-recall <F>         Fail the run if any VAF recalls < F, counting only"
+            echo "                           the truth DELs the background control misses"
             echo "  --min-gain <N>           The highest VAF must recover N more truth"
             echo "                           events than the unspiked background control"
             echo "                           [default: 1; 0 only asks it to match the"
@@ -358,6 +359,39 @@ beats_background_control() {
     [[ "$control_tp" =~ ^[0-9]+$ ]] || return 2
     [[ "$gain" =~ ^[0-9]+$ ]] || return 2
     (( tp >= control_tp + gain ))
+}
+
+# Recall over the truth DELs the background control does *not* recover (RF12).
+#
+# The background carries many of the truth DELs itself, so the caller recovers
+# those with no spike-in at all. An event the control recovers leaves the
+# numerator and the denominator alike, whichever side the spiked run put it on.
+# The events are the spiked run's base side -- tp-base plus fn, everything
+# Truvari scored -- keyed on CHROM, POS and ID.
+#
+# That exclusion is only as good as the control's caller. Measured on NA18488
+# chr20: Delly recovers 7 of the 20 truth DELs in the unspiked background, and 4
+# more that the background's depth and HG001's long reads show it carries stay
+# counted, because no short-read caller tried (Delly, Manta, TIDDIT, CNVpytor)
+# finds them.
+#
+# Prints "<n_outside> <tp_outside> <recall_outside>", recall "N/A" when nothing
+# is left to score. Prints nothing (and exits non-zero) when either directory's
+# files are missing or unreadable: a missing control is not an empty exclusion.
+recall_outside_background() {
+    python3 - "$1" "$2" <<'ROB' 2>/dev/null
+import gzip, os, sys
+spiked, control = sys.argv[1], sys.argv[2]
+def keys(path):
+    with gzip.open(path, 'rt') as f:
+        return {tuple(l.split('\t')[:3]) for l in f if l.strip() and not l.startswith('#')}
+background = keys(os.path.join(control, 'tp-base.vcf.gz'))
+tp = keys(os.path.join(spiked, 'tp-base.vcf.gz'))
+fn = keys(os.path.join(spiked, 'fn.vcf.gz'))
+n = len((tp | fn) - background)
+k = len(tp - background)
+print(f'{n} {k} {k / n:.4f}' if n else f'{n} {k} N/A')
+ROB
 }
 
 # Refuse to write into a directory whose contents git tracks. The default used
@@ -1040,7 +1074,9 @@ step8_summarize() {
     local best_vaf
     best_vaf="$(highest_vaf)"
 
-    printf "VAF\tN_truth\tN_delly\tTP\tFP\tFN\tRecall\tPrecision\tF1\tSpike_validate\n" \
+    # The last three columns score recall over the truth DELs the background
+    # control does not recover (RF12; see recall_outside_background).
+    printf "VAF\tN_truth\tN_delly\tTP\tFP\tFN\tRecall\tPrecision\tF1\tSpike_validate\tN_outside_bg\tTP_outside_bg\tRecall_outside_bg\n" \
         > "$summary_tsv"
 
     # The background control goes in first: every row below it has to be read
@@ -1056,9 +1092,9 @@ step8_summarize() {
         if [[ -f "${OUTDIR}/background_control/delly.vcf.gz" ]]; then
             c_calls=$("$BCFTOOLS" view -H "${OUTDIR}/background_control/delly.vcf.gz" 2>/dev/null | wc -l)
         fi
-        printf "background\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        printf "background\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
             "$c_truth" "$c_calls" "$c_tp" "$c_fp" "$c_fn" \
-            "$c_recall" "$c_precision" "$c_f1" "n/a" \
+            "$c_recall" "$c_precision" "$c_f1" "n/a" "n/a" "n/a" "n/a" \
             >> "$summary_tsv"
     fi
 
@@ -1069,6 +1105,7 @@ step8_summarize() {
         local n_truth=0 n_calls=0
         local tp=0 fp=0 fn=0 recall="N/A" precision="N/A" f1="N/A"
         local spike_pass="N/A"
+        local n_out="N/A" tp_out="N/A" recall_out="N/A" outside=""
 
         # Truth count
         n_truth=$(count_records "${spike_out}/truth.vcf")
@@ -1096,9 +1133,20 @@ step8_summarize() {
                     note_failure "VAF=${vaf} (highest): truvari recovered $tp of $n_truth truth DELs but the unspiked background alone recovers $control_tp — the spike-in contributed $((tp - control_tp)), need at least $MIN_GAIN (--min-gain)"
                 fi
             fi
-            if [[ -n "$MIN_RECALL" ]] \
-                && awk -v r="$recall" -v m="$MIN_RECALL" 'BEGIN{exit !(r<m)}'; then
-                note_failure "VAF=${vaf}: recall $recall below --min-recall $MIN_RECALL"
+            if outside=$(recall_outside_background "$truvari_out" \
+                    "${OUTDIR}/background_control/truvari") && [[ -n "$outside" ]]; then
+                read -r n_out tp_out recall_out <<< "$outside"
+            fi
+            # --min-recall judges the recall outside the background (RF12): a
+            # truth DEL the background already carries is recovered for free.
+            # LC_ALL=C: mawk reads decimals by LC_NUMERIC, and under a decimal
+            # comma both sides become 0 and the floor never fires.
+            if [[ -n "$MIN_RECALL" ]]; then
+                if [[ "$recall_out" == "N/A" ]]; then
+                    note_failure "VAF=${vaf}: --min-recall $MIN_RECALL has no recall outside the background control to judge (no control, or it recovers every truth DEL)"
+                elif LC_ALL=C awk -v r="$recall_out" -v m="$MIN_RECALL" 'BEGIN{exit !(r<m)}'; then
+                    note_failure "VAF=${vaf}: recall outside the background control $recall_out ($tp_out of $n_out) below --min-recall $MIN_RECALL"
+                fi
             fi
         elif [[ "$vaf" == "$best_vaf" ]]; then
             # The gate above sits inside the branch, so a highest VAF with no
@@ -1126,9 +1174,10 @@ step8_summarize() {
             fi
         fi
 
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
             "$vaf" "$n_truth" "$n_calls" "$tp" "$fp" "$fn" \
             "$recall" "$precision" "$f1" "$spike_pass" \
+            "$n_out" "$tp_out" "$recall_out" \
             >> "$summary_tsv"
     done
 

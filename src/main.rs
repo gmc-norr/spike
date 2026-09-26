@@ -3308,6 +3308,168 @@ done"#,
         );
     }
 
+    /// Truvari's base-side output for one run: `tp-base.vcf.gz` and
+    /// `fn.vcf.gz` under `dir`, each holding the named `sim_del_*` records.
+    /// Written as plain text; the caller gzips them in its bash snippet.
+    fn write_truvari_base(dir: &std::path::Path, tp: &[u32], fn_: &[u32]) {
+        std::fs::create_dir_all(dir).unwrap();
+        let vcf = |ids: &[u32]| {
+            let mut s = String::from(
+                "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            );
+            for id in ids {
+                s.push_str(&format!(
+                    "chr20\t{}\tsim_del_{}\tA\t<DEL>\t.\tPASS\tSVTYPE=DEL\n",
+                    id * 1000,
+                    id
+                ));
+            }
+            s
+        };
+        std::fs::write(dir.join("tp-base.vcf"), vcf(tp)).unwrap();
+        std::fs::write(dir.join("fn.vcf"), vcf(fn_)).unwrap();
+    }
+
+    #[test]
+    fn test_validate_pipeline_recall_leaves_out_what_the_background_recovers() {
+        // RF12: the truth DELs are common, so the background sample carries
+        // several of them and the caller recovers those with no spike-in at
+        // all. Recall is scored over the rest: an event the background control
+        // recovers leaves the numerator *and* the denominator, whichever side
+        // the spiked run put it on. Spiked TP {1,2,3}, FN {4,5}; control TP
+        // {1,4} -> 3 events outside the background, 2 of them recovered.
+        let dir = scratch_dir("validate_pipeline_outside_bg");
+        write_truvari_base(&dir.join("spiked"), &[1, 2, 3], &[4, 5]);
+        write_truvari_base(&dir.join("control"), &[1, 4], &[2, 3, 5]);
+        // A control that recovers every truth event leaves nothing to score.
+        write_truvari_base(&dir.join("control_all"), &[1, 2, 3, 4, 5], &[]);
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"script="$1"; d="$2"; shift 2; source "$script"
+gzip -f "$d"/*/*.vcf
+echo "scored=$(recall_outside_background "$d/spiked" "$d/control")"
+echo "all_in_bg=$(recall_outside_background "$d/spiked" "$d/control_all")"
+rc=0; out=$(recall_outside_background "$d/spiked" "$d/no_control") || rc=$?
+echo "missing=[$out] rc=$rc""#,
+            )
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&dir)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "sourcing validate_pipeline.sh and calling recall_outside_background \
+             must work:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+        assert!(
+            stdout.contains("scored=3 2 0.6667"),
+            "events the control recovers must leave both sides of the recall:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("all_in_bg=0 0 N/A"),
+            "nothing outside the background is no recall, not 0 or 1:\n{}",
+            stdout
+        );
+        // A missing control is not an empty exclusion set: that would score
+        // every background event as the spike-in's own.
+        assert!(
+            stdout.contains("missing=[] rc=1"),
+            "a missing control must yield nothing and a non-zero status:\n{}",
+            stdout
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_summary_scores_recall_outside_the_background() {
+        // Step 8 writes the recall outside the background beside the old
+        // columns, and --min-recall judges that number. The spiked run's
+        // overall recall (0.8, from summary.json) clears 0.7; its recall
+        // outside the background (2 of 3) does not.
+        let dir = scratch_dir("validate_pipeline_outside_bg_summary");
+        let truth_vcf = "##fileformat=VCFv4.2\n\
+                         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+                         chr20\t1000\tsim_del_1\tA\t<DEL>\t.\tPASS\tSVTYPE=DEL\n";
+        let summary = |tp: u32, recall: &str| {
+            format!(
+                "{{\"TP-base\": {}, \"FP\": 0, \"FN\": 1, \"recall\": {}, \
+                 \"precision\": 1.0, \"f1\": 0.9}}",
+                tp, recall
+            )
+        };
+        let spike_out = dir.join("spike_vaf_0.5");
+        write_truvari_base(&spike_out.join("truvari"), &[1, 2, 3], &[4, 6]);
+        std::fs::write(spike_out.join("truth.vcf"), truth_vcf).unwrap();
+        std::fs::write(spike_out.join("truvari/summary.json"), summary(4, "0.8")).unwrap();
+        let control = dir.join("background_control/truvari");
+        write_truvari_base(&control, &[1, 4], &[2, 3, 6]);
+        std::fs::write(control.join("summary.json"), summary(2, "0.4")).unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"script="$1"; root="$2"; shift 2; source "$script"
+gzip -f "$root"/spike_vaf_0.5/truvari/*.vcf "$root"/background_control/truvari/*.vcf
+VAFS=(0.5)
+MIN_GAIN=1
+OUTDIR="$root"
+for floor in 0.7 0.6; do
+    MIN_RECALL=$floor
+    FAILURES=()
+    rc=0
+    msg=$( { step8_summarize >/dev/null; step9_verdict; } 2>&1 ) || rc=$?
+    echo "floor=$floor rc=$rc"
+    printf '%s\n' "$msg" | sed "s/^/floor=$floor /"
+done
+cat "$root/validation_summary.tsv""#,
+            )
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&dir)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "driving step 8 and 9 over a fabricated outdir must not error \
+             out:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+        assert!(
+            stdout.contains("\tN_outside_bg\tTP_outside_bg\tRecall_outside_bg"),
+            "the summary header must name the three new columns:\n{}",
+            stdout
+        );
+        // Spiked TP {1,2,3}, FN {4,6}; control TP {1,4}: 3 outside, 2 found.
+        assert!(
+            stdout.lines().any(|l| l.starts_with("0.5\t") && l.ends_with("\t3\t2\t0.6667")),
+            "the VAF row must end with the recall outside the background:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.lines().any(|l| l.starts_with("background\t") && l.ends_with("\tn/a\tn/a\tn/a")),
+            "the background row has nothing outside itself to score:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("floor=0.7 rc=1") && stdout.contains("floor=0.6 rc=0"),
+            "--min-recall must judge the recall outside the background (0.6667), \
+             not the overall 0.8:\n{}",
+            stdout
+        );
+    }
+
     #[test]
     fn test_validate_pipeline_records_each_tools_version() {
         // Truvari's matching flags have changed meaning between versions, so
