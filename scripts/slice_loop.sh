@@ -57,7 +57,13 @@ echo $? > "$out/validate.exit"
   --reference "$ref" --json "$@" > "$out/validate.json" 2> "$out/validate.json.log"
 echo $? > "$out/validate.json.exit"
 
-# Keep the disk use down: the merged BAM is the only large file and it has been
-# scored by the time we get here. `--keep-merged` in EXTRA is not a validate flag,
-# so a caller that needs it keeps it by copying before calling again.
+# A second binary, given as $BEFORE_SPIKE in the environment, is validated against
+# the SAME merged BAM. That is what a "the default did not move" check needs: two
+# binaries on one alignment, not two alignments.
+if [ -n "${BEFORE_SPIKE:-}" ]; then
+  "$BEFORE_SPIKE" validate --bam "$out/run/merged.bam" --truth "$out/run/truth.vcf" \
+    --reference "$ref" --json "$@" > "$out/validate.before.json" 2> "$out/validate.before.log"
+  echo $? > "$out/validate.before.exit"
+fi
+
 rm -f "$out/run/merged_tmp.bam" "$out/run/outside.bam"

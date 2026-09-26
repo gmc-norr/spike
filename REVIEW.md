@@ -3417,7 +3417,7 @@ the exit status.
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
-| T5 | Split reads at each breakpoint (NF5), advisory | Plan locked |
+| T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
 | T6 | INS sequence identity, advisory | Not started |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
 
@@ -4216,3 +4216,113 @@ entry, so neither checks strand, the CIGAR-implied breakpoint, sequence, or alle
 CR9's documented limit, unchanged. The per-end row is strictly stricter than the pooled one, so its
 failure count can only be greater than or equal to it; C4 measures by how much, and RF6's 4 of 40
 is the floor, not the baseline to beat.
+
+#### Result: T5 -- supported
+
+Code `084104f`, reviewed and fixed in `764cba9`. Binaries, each in its own target dir and md5'd
+(NF4): base `985e50f` `2dd58097…`, before-T5 (`6026fa3`'s code) `68fa912b…`, T5 `084104f`
+`341a56a2…`, T5 fixed `764cba9` `ab45463e…`. `scripts/slice_loop.sh` and `scripts/real_events.sh`
+gained a `BEFORE_SPIKE` hook so a second binary is validated against **the same merged BAM** --
+which is what a "the default did not move" check needs: two binaries on one alignment, not two
+alignments.
+
+- **C1 pass -- it rejects one-sided evidence.** `test_the_each_end_row_fails_evidence_that_all_sits_at_one_breakpoint`,
+  on a fixture where three reads join the left breakpoint to the right and nothing joins back:
+
+  ```
+  split_reads           >=2 joining chrA:12001   observed "3"    PASS   (non-advisory)
+  split_reads_each_end  >=2 at each end          observed "3/0"  FAIL   (advisory)
+  ```
+
+  The two rows disagree on one input, which is the point of the row. The fixture's partner window
+  is deliberately **not** empty -- reads are there, pointing elsewhere -- so the test distinguishes
+  "no read there" from "nothing joining back".
+- **C2 pass -- it accepts correct controls, synthetic and real.** The `uniform` merged probe:
+  `split_reads_each_end >=2 at each end 27/14 PASS (advisory)`. The real control
+  `del:chr20:1136743-1146743` through `scripts/slice_loop.sh`: `16/13 PASS (advisory)`, in a
+  `Result: 9/9 PASS`, exit 0.
+- **C3 pass -- the default is unchanged, and the pooled row did not move on any of the 40.**
+
+  ```
+  compared 40 events, missing reports []
+  pooled split_reads rows or exit statuses that MOVED: 0
+  ```
+
+  Every one of the 40 real runs was validated by both binaries against **its own** merged BAM, and
+  the pooled row's `expected`, `observed`, `pass` and `advisory` and the run's exit status were
+  compared field by field. Nothing moved. On the `uniform` merged probe the non-advisory rows are
+  byte-identical to master's binary's (`diff` empty); `spike --help` is byte-identical to master's
+  and `validate --help` to T1's -- no flag added.
+- **C4 pass -- the extra false-failure rate is 2 of 40 (5 percentage points), against a bar of 8.**
+
+  ```
+  events=40 scored=40 refused_by_spike=0 no_report=0
+  split_reads: present on 40 of 40 scored, FAIL on 4
+    FAIL: 15, 25, 33, 34 -- each observed=0
+  split_reads_each_end: present on 40 of 40 scored, FAIL on 6
+    FAIL: 12 del:chr20:22180648-22190648 observed=7/1
+    FAIL: 15 del:chr20:25322805-25332805 observed=0/0
+    FAIL: 23 del:chr20:46213373-46223373 observed=7/1
+    FAIL: 25 del:chr20:49921688-49931688 observed=0/0
+    FAIL: 33 del:chr20:56072849-56082849 observed=0/0
+    FAIL: 34 del:chr20:56107004-56117004 observed=0/0
+  ```
+
+  `6 - 4 = 2`. Four of the six are RF6's own pooled failures, where no `SA:Z` evidence exists at
+  either end; the **two the row adds are exactly NF5's pathology on real data** -- events 12 and 23,
+  each with **7 joining reads at one breakpoint and 1 at the other**, both of which the pooled row
+  passes at `observed 8`. NF5 was a reading of the code; this is it happening twice in forty
+  correct real deletions.
+- **C5 pass -- the gates.** `cargo test`: `511 passed; 0 failed; 1 ignored` (T2 left 502; 9 added,
+  none removed). Clippy `13` (bin) / `14` (test), unchanged.
+
+**The reviewer found a blind zone, measured it, and it is now documented and pinned.** Both queries
+use the same `pad = 500`, and the SA test at the partner window asks whether the entry lands within
+500 bp of `here`. **For an event whose breakpoints are 500 bp apart or less, a read sitting only at
+the left breakpoint whose `SA:Z` names the right one satisfies both tests**, so the two name sets
+become the same set and the row degenerates into the pooled row. Measured, with nothing at all at the
+partner breakpoint:
+
+```
+DEL chrA:10001-10100 (short100)     split_reads_each_end  >=2 at each end  3/3  PASS (advisory)
+DEL chrA:10001-10501 (span_500)     split_reads_each_end  >=2 at each end  3/3  PASS (advisory)
+DEL chrA:14001-14502 (span_501)     split_reads_each_end  >=2 at each end  3/0  FAIL (advisory)
+```
+
+The boundary is exactly `END - POS == pad`. It matters concretely:
+`scripts/validate_pipeline.sh` sets `MIN_DEL_SIZE=500`, so the pipeline's smallest admissible
+deletion sits **on** the boundary, and spike itself puts no floor on SV size. **The window was not
+changed** -- the plan locked reusing `pad`, and changing it is CR9's overhaul, not T5's. What changed
+is that README no longer claims the guarantee the code does not give, and two fixture junctions
+(span 500 and span 501) pin the degeneracy and its boundary, so a future change to `pad` reddens a
+test.
+
+**The row's cosmetic cost, as decided in the plan and as it prints.** `split_reads_each_end` is 20
+characters against a `{:<18}` Check column, so its own later columns sit two characters right:
+
+```
+DEL chrT:10000-14000 (unknown)      split_reads        >=2 joining chrT:14001    41              PASS
+DEL chrT:10000-14000 (unknown)      split_reads_each_end >=2 at each end           27/14           PASS (advisory)
+```
+
+The reviewer found a consequence nobody had noticed: **every other column is truncated one below its
+width**, so before T5 every column boundary in every row had at least two spaces, and a reader
+splitting on runs of two-or-more spaces worked. This row is the first content ever to overflow its
+column, so on that row exactly one space separates Check from Expected, and such a reader merges two
+fields there. Nothing in this repo parses the table that way -- `scripts/real_events_score.py` chose
+`--json` for exactly this reason -- so it is latent, and README now says so and names `--json` as the
+parseable form.
+
+**Also fixed in `764cba9`**, from the reviewer's Minor list: the fixture's record builder was a
+near-verbatim second copy of another fixture's (extracted into a shared `one_contig_record`); the
+error was formatted twice; `check_split_reads` recomputed a label the caller already held (and
+**nothing pinned either split row's `event_label`** -- passing a wrong label left the suite fully
+green, so two assertions were added and the mutation now reddens); the `SPLIT_READS` constant was
+half-applied; `line_for`'s substring match is a trap now that `split_reads` is a **prefix** of
+`split_reads_each_end`; and `084104f`'s own commit body says "Seven deliberate mutations" while
+listing eight -- corrected in `764cba9`'s body rather than by amending history.
+
+**What T5 does not establish.** Both rows read only the contig and position of an `SA:Z` entry, so
+neither checks strand, the CIGAR-implied breakpoint, sequence, or allele fraction -- CR9's documented
+limit, unchanged. The row is strictly stricter than the pooled one, so RF6's 4 of 40 is its floor:
+of its six failures, four are the pooled check's own and only two are its own contribution.

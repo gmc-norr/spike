@@ -18,6 +18,8 @@ cp "$events" "$out/events.txt"
 one() { bash "$HERE/slice_loop.sh" "$OUT/$1" "$SPIKE" "$BAM" "$REF" "$2" "$THREADS"; }
 export -f one
 export HERE="$here" OUT="$out" SPIKE="$spike" BAM="$bam" REF="$ref" THREADS="$threads"
+# BEFORE_SPIKE, if set, is validated against each run's own merged BAM too.
+export BEFORE_SPIKE="${BEFORE_SPIKE:-}"
 nl -nln -w1 -s' ' "$out/events.txt" | xargs -P "$parallel" -L 1 bash -c 'one "$0" "$1"'
 
 # The merged BAMs are the only large files and each has been scored by now.
