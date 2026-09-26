@@ -11,7 +11,7 @@
 > | NF5 | Not fixed; an advisory row added beside it, `084104f`: `split_reads_each_end` asks for two joining reads at *each* breakpoint, and failed 6 of 40 real deletions against the pooled row's 4. The pooled `split_reads` check itself is unchanged — its row and the run's exit status moved on none of the 40 — and the new row is blind when the breakpoints are 500 bp apart or less. |
 > | NF6 | Fixed, `d35f31b`: a type with no expected ratio gets no verdict (`N/A`, not a pass). |
 > | NF7 | Fixed in part, `2844aff`: the harness records every tool's version in `<outdir>/tool_versions.tsv`. It still pins none. |
-> | RF1 | Open. Out of that run's scope; the fix is `#[cfg(debug_assertions)]` on the three tests, or a refusal checked in both profiles. |
+> | RF1 | **Fixed**, `25b3405`: the three length checks in `write_truth_vcf` are `assert_eq!` now, a refusal checked in both profiles. `cargo test` and `cargo test --release` both pass 536. |
 > | RF2 | Fixed, this docs commit: both README round trips re-measured on this branch, `13/13 PASS` and `12/12 PASS`, both exit 0. The `5/6` and `3/6` "before the check existed" figures are historical and stay. |
 > | RF3 | Open. The shape of `summary` was not in T1's locked plan, and changing it is a default output change for existing `--json` parsers. |
 > | RF4 | Open. The `<=` comparison is what T1's plan locked, and no spike version writes a negative value. |
@@ -143,8 +143,16 @@
   `test result: ok. 476 passed; 0 failed; 1 ignored`.
 - **Severity:** Low for correctness; Medium for anyone who runs the suite in release and reads
   the failure as a real defect.
-- **Not fixed:** out of that run's scope. The fix is either `#[cfg(debug_assertions)]` on the
-  three tests or a refusal checked in both profiles.
+- **Fixed, `25b3405`:** the refusal is checked in both profiles. The three checks were
+  `debug_assert_eq!`, so a release build (how spike ships) compiled them out, and a
+  short slice would have written a wrong `truth.vcf` without a word. They are
+  `assert_eq!` now.
+  - Before: `cargo test --release` failed the three tests with "did not panic".
+  - After: `cargo test` and `cargo test --release` both give `536 passed; 0 failed`.
+  - Mutation: turning each check back into `debug_assert_eq!` fails exactly its own
+    test under `--release`.
+  - A real run cannot trip them. `main` fills the three slices together per event,
+    and its one skipping `continue` (RF8) always bails before the truth VCF is written.
 
 ### RF2 — README's `spike validate` row counts are stale measurements
 
