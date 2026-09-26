@@ -1139,8 +1139,9 @@ step8_summarize() {
             fi
             # --min-recall judges the recall outside the background (RF12): a
             # truth DEL the background already carries is recovered for free.
-            # LC_ALL=C: mawk reads decimals by LC_NUMERIC, and under a decimal
-            # comma both sides become 0 and the floor never fires.
+            # LC_ALL=C is the repo's rule for awk on decimals. This compare is
+            # right without it too: mawk 1.3.4 reads `-v` values in the C locale,
+            # and only input fields by LC_NUMERIC (measured under sv_SE).
             if [[ -n "$MIN_RECALL" ]]; then
                 if [[ "$recall_out" == "N/A" ]]; then
                     note_failure "VAF=${vaf}: --min-recall $MIN_RECALL has no recall outside the background control to judge (no control, or it recovers every truth DEL)"

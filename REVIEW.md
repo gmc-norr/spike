@@ -5370,6 +5370,16 @@ Plan `edd4ecf`, code `a0e17b9`.
   61943513, 63134604, 64127245) stay in `N_outside_bg`. At VAF 0.5, 2 of the 10 recovered
   outside the background are among them (61943513 and 63134604); at 0.25 it is 1 of 7, and at
   0.1 none. The README says so.
-- **Follow-up, not fixed.** `highest_vaf` compares decimals with plain `awk`, the same
-  `mawk` and decimal-comma trap as the case file's entry. With the default `--vafs` order
-  (0.5 first) the answer is right by luck.
+- **Follow-up, checked and withdrawn.** This said `highest_vaf` has the same `mawk` and
+  decimal-comma trap as the case file's entry, and is right only because 0.5 comes first. That
+  was a prediction. Measured under `mawk 1.3.4` with `LC_NUMERIC=sv_SE.UTF-8`, it picks the
+  highest VAF in all 7 orders tried, including `0.1 0.25 0.5`, `0.05 0.1` and `.5 0.25`.
+  - Why: it passes the values with `awk -v`, and `mawk` reads `-v` values in the C locale.
+    Only fields read from input go through `LC_NUMERIC`.
+  - The check can go red: a mutant that feeds the same values as input picks 0.1 from
+    `0.1 0.25 0.5` under `mawk`.
+  - The `--min-recall` compare is the same case (0.4615 < 0.7 fires, 0.7692 < 0.7 does not,
+    without `LC_ALL=C`). Its comment said "both sides become 0"; that is corrected.
+  - The one real effect left: the step 1 "Sample depth" log line prints `30,5x` under `mawk`,
+    since `printf` output does follow `LC_NUMERIC`. It is only logged.
+  - No code change.

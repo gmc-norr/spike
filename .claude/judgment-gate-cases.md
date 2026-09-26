@@ -77,6 +77,22 @@ what was claimed, what the claim actually rested on, and which gate would have c
   with `awk` runs it as `LC_ALL=C awk`. This machine's locale uses a decimal comma, and `mawk`
   turns every such number into 0 silently.**
 
+## 2026-09-26 -- a locale bug predicted in `highest_vaf` that was not there
+
+- **Claimed.** After the entry above, REVIEW.md filed `highest_vaf` in `validate_pipeline.sh`
+  as having the same trap, right today only because 0.5 comes first in `--vafs`. RF12's
+  `--min-recall` comment said the same of its compare: "both sides become 0".
+- **What it rested on.** Pattern-matching on the entry above, not a run. Both compares pass
+  their decimals with `awk -v`. `mawk 1.3.4` reads `-v` values in the C locale. Only fields
+  read from input, and `printf` output, go through `LC_NUMERIC`.
+- **How it was caught.** The fix was to start with a failing test. Run under `mawk` with
+  `LC_NUMERIC=sv_SE.UTF-8`, the function was right in all 7 orders tried. A mutant that feeds
+  the same values as input picked 0.1 from `0.1 0.25 0.5`, so the harness could go red.
+- **Which gate would have caught it.** Gate D question 3 (*did I measure it, or infer it?*).
+  A follow-up in REVIEW.md is a durable claim. **Rule for this repo: a locale claim says how
+  the number gets into awk. Under mawk, input fields and `printf` output follow `LC_NUMERIC`;
+  `-v` values do not. `LC_ALL=C awk` stays the rule, because it is right either way.**
+
 ## 2026-09-26 -- RF6: a junction probe built from the reference, on reads that carry the sample
 
 - **What the plan set out to show.** A 31-base probe `ref[start-15, start) + ref[end, end+16)`
