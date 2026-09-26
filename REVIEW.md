@@ -5606,3 +5606,87 @@ tuned, and no code changed.
 - RF14 and RF15 are filed in `CLINICAL_SV_NEW_FINDINGS.md`.
 - The clean version of this probe is the user's HG001<->HG002 transplant plan. It needs their
   NovaSeq BAMs, which are not on this machine.
+
+## RF13 -- an insertion row that asks whether spike's own reads are there (2026-09-26)
+
+**Background.**
+- **RF13.** Today's non-advisory `ins_reads` passes an absent 50 bp insertion at 12 of 200
+  random and 46 of 200 simple-repeat empty sites. Two clipped reads within 100 bp happen by
+  chance.
+- **RF11.** Lowering its clip floor trades that for false FAILs. No floor works.
+- **The realism probe.** `ins_reads` fails 47 of 112 *real* HG002 het insertions of 20-39 bp.
+  `ins_sequence` is not evaluable on 42 of 77 real ones of 20-29 bp, because the letters are
+  already in the reference nearby.
+- **The user's principle.** Two questions, kept apart:
+  - *Was the event planted?* Answered from the reads spike made.
+  - *Is it realistic?* Answered against real variants, not a fixed rule.
+- **The user's choice** (2026-09-26): option 1, spike's own reads decide.
+
+#### Plan: RF13, `ins_planted` (locked before any count below)
+
+**Principle.** The default INS row asks whether the reads spike made for the event are in the
+BAM at the truth record's position, carrying its bases. How the aligner wrote them does not
+matter.
+
+**The row** (`scripts/rf13_planted.py` is its replica, run before any Rust).
+- **Whose reads.** The truth ID is `sim_ins_N`; spike names that event's reads `evNNNN_hap_*`.
+  Both are numbered `i + 1` over the same event list (`simulate.rs`, `truth.rs`). No other
+  read counts.
+- **Which records.** Those over POS +/- 150 (`INS_SEQUENCE_PAD`) that are not secondary or
+  supplementary. MAPQ, duplicate, QC-fail and unmapped flags do not exclude a record.
+- **Carrying.** The probes are two 31-base junction probes from the event's own haplotype
+  `ref[..POS] + INS + ref[POS..]`: `hap[POS-15, POS+16)` and `hap[POS+L-16, POS+L+15)`.
+  - A read carries if any 31-base window of it is within **2 substitutions** of a probe, in
+    either orientation.
+  - Two, because spike puts the sample's SNPs on the event copy and errors on every read (case
+    file, RF6).
+  - The insertion point is POS as spike inserts it. Checked on RF11's run: the reads' matched
+    bases end at 1-based POS.
+- **Verdict.** PASS at **1** or more carrying reads. The sample's reads are excluded, so
+  there is no background to rise above.
+- **Not evaluable (FAIL).** When the ALT has no bases or the ID is not `sim_ins_N`. spike's
+  own truth always spells the bases (`build_haplotype` stores generated ones back).
+- **The other rows.** `ins_reads` becomes **advisory**: how the aligner wrote it.
+  `ins_sequence` stays advisory. `ins_planted` is the INS event's one counted row.
+
+**Smoke test, on data already seen** (RF11's 40 bp run): 13 carriers on `merged.bam` (where
+`ins_reads` observed 0), and 0 on the unspiked `slice.bam`.
+
+**Sites** (`scripts/rf13_sites.py`, fresh seeds, `scripts/rf13_sites.tsv`; 0 shared with
+RF11's).
+- `rand`: 6 random benchmark sites, isolated.
+- `hg`: 12 real HG002 insertions of 76-216 bp, isolated, with their own bases.
+  - 5 of the 12 begin with 31 bases already in the reference within 2 x SVLEN, and 1 is a
+    whole nearby copy.
+  - That is the case `ins_sequence` cannot judge.
+- `null`: 200 random benchmark sites.
+
+**K, before code** (`scripts/rf13_k.sh`, master binary, 35x HG002 BAM, 12 threads):
+- **Positives.** Each `rand` site at 4, 15, 30, 45, 80 and 300 bp (VAF 0.5), and at 45 bp with
+  `af=0.1`: 42 runs. Each `hg` insertion at its own POS with its own bases (VAF 0.5): 12 runs.
+- **K+.** At least 50 of the 54 reach `validate`, and all but at most 1 of those that do have
+  1 or more carriers.
+- **K-.** On every positive run, each of these must have **0** carriers:
+  - N1: the unspiked `slice.bam`;
+  - N2: the truth ALT replaced by random bases of the same length;
+  - N3: POS + 1000, still inside spike's 2 kb haplotype flank, so spike's reads are there;
+  - N4: the ID renumbered to the next event.
+  - N5: 0 of the 200 `null` sites pass on the unedited BAM, with a 60 bp random ALT as
+    `sim_ins_1`.
+- **Check of the check.** On the `hg` runs' unspiked slices, with the name filter off, HG002's
+  own reads must carry. That shows the filter is what keeps them out.
+- **Reported, not judged.** `ins_reads`'s verdict on the positives, and on N1 and N3.
+- **Outcome.** Refuted if K+ or K- fails: no code, and the finding is recorded. Otherwise, code.
+
+**C, after code.**
+- **C1, tests first.** Each of these mutations must redden a test:
+  - dropping the name filter (a sample read carrying the bases counts);
+  - dropping the ID match (another event's reads count);
+  - tolerance 0 (a SNP in the probe loses the read);
+  - tolerance 3;
+  - `ins_reads` back to non-advisory.
+
+  Full suite in debug and release, and no new clippy warning.
+- **C2.** The Rust row's observed count equals the replica's on every K positive and on
+  N2 and N3.
+- **C3.** On the K positives, the new exit status is reported beside master's.
