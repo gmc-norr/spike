@@ -3429,7 +3429,7 @@ the exit status.
 | --- | --- | --- |
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
-| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
+| T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | **Inconclusive** (5-of-6 verdict retracted; spike's own fold at `--min-mapq 0` gives 3 of 6) |
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
 | T6 | INS sequence identity, advisory | Supported, done (`02a2ecc`) |
@@ -4685,3 +4685,75 @@ before the footprint still comes back -- this VCF holds REF strings over 1,500 b
 raises on a non-zero exit, after T3's census returned 0.0 everywhere from an option that did not
 exist. `GT` is read from column 10 and `0/0`, `0|0`, `./.` and `.|.` are all excluded, so every
 counted record is one HG002 carries.
+
+#### RETRACTION: T3's verdict is withdrawn -- the result is inconclusive, and T3 proposes nothing
+
+Raised by the final whole-branch review and **verified independently before accepting it**.
+
+**What was claimed.** "Mappability dominates, 5 of 6", with the label *mappability* defined in the
+locked plan as "this bin would not have warned had the fold been counted at any MAPQ".
+
+**What the claim actually rested on.** A proxy. `fold_any` is a ratio of `samtools depth` **read-base**
+coverage with **no proper-pair requirement**; `SIM_DEPTH_FOLD` is a ratio of **fragment** coverage over
+**proper pairs whose both mates pass `--min-mapq`** (`simulate::estimate_coverage_at` counts
+`pool.pairs`), taken over spike's own per-segment bins rather than a uniform grid. Different units over
+different bins. The plan's sentence "1.5 is not a new number ... So 'mappability' means exactly *this
+bin would not have warned had the fold been counted at any MAPQ*" asserted an equivalence between the
+two that does not hold. **The unit gap is visible in T3's own table**: every anchor has
+`anc_pool / anc_any` between 1.31 and 1.40 -- the insert-to-read-length ratio -- which is impossible if
+one were a subset of the other.
+
+**The direct measurement, which needs no proxy.** `simulate::depth_fold` is computed from the donor
+pool and the anchor before anything is planted, so running spike with **`--min-mapq 0`** yields "the
+fold counted at any MAPQ" in spike's own units, over spike's own bins. Master's binary
+(`2dd58097…`), `--seed 1`, the same six events:
+
+| n | event | fold at `--min-mapq 20` | fold at `--min-mapq 0` | still warns at 0? | T3's proxy `fold_any` | T3's label |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2 | `dup:chr20:2516875-2526875` | 1.62 | **1.62** | **YES** | 1.44 | mappability -- **wrong** |
+| 13 | `dup:chr20:23433622-23443622` | 1.71 | 1.35 | no | 1.21 | mappability -- right |
+| 15 | `dup:chr20:25322805-25332805` | 2.46 | **1.70** | **YES** | 1.47 | mappability -- **wrong** |
+| 33 | `dup:chr20:56072849-56082849` | 1.51 | 1.48 | no | 1.01 | mappability -- right |
+| 34 | `dup:chr20:56107004-56117004` | 1.51 | 1.20 | no | 1.18 | mappability -- right |
+| 39 | `dup:chr20:59348072-59358072` | 1.75 | 1.69 | **YES** | 1.61 | real_depth -- right |
+
+**3 of 6 would go quiet at any MAPQ, 3 would still warn.** The locked verdict rule is "mappability
+dominates at 4 of 6 or more, real depth dominates at 4 or more, otherwise **inconclusive**", and the
+locked outcome rule for inconclusive is "report the table and say so. **Propose nothing.**"
+
+So: **T3 is inconclusive.** The 5-of-6 verdict is withdrawn.
+
+Two further numbers the retraction corrects:
+
+- The note claimed "an any-MAPQ fold would fire on **2 of the 40** instead of 6". Measured directly:
+  **3 of 40** (events 2, 15 and 39). And event 24, which the proxy put at 1.60 and the note named as
+  the one non-warning event over the line, has a **fold of 1.49 at both floors** and fires at neither.
+- The note claimed event 33's bin is "flat to within 1% at any MAPQ ... Nothing is wrong with that
+  locus". Its fold at `--min-mapq 0` is **1.48** -- under the line, but by two hundredths, not by a
+  hundredth of a percent.
+
+**What survives, unchanged and still measured.** CR2's C4 reproduced whole (40 ran, exactly 6 warned,
+events 2/13/15/33/34/39 at 1.62/1.71/2.46/1.51/1.51/1.75). The anchor identification and the agreement
+between the measured pool depths and spike's own `scaled_by` and `worst_depth` to within a tenth of an
+x. The MAPQ<20 shares in the worst bins -- 0.000, 0.340, 0.271, 0.299, 0.397, 0.046 -- which are
+measured facts about those loci whatever label is attached. Event 39's GC of 0.593 against its anchor's
+0.461. And that the pool's filter **does** inflate the fold for some events: 1.71→1.35, 1.51→1.20.
+
+**What does not survive.** Any sentence of the form "*n* of the six would not have warned at any MAPQ"
+with *n* = 5, and the recommendation built on it.
+
+**Why the caveat in `--min-mapq 0` does not rescue the original claim.** `--min-mapq 0` still requires a
+proper pair with its mate mapped, so it is not literally "primary, non-duplicate at any MAPQ" either --
+it is spike's own metric with only the MAPQ floor removed. That is *closer* to the counterfactual than
+the proxy, not further: it is measured in spike's units over spike's bins, and it is the change a
+"measure the fold at any MAPQ" option would most plausibly make. If anything, dropping the proper-pair
+requirement as well would move the folds further, not back toward 5 of 6.
+
+**The gate that would have caught this**, recorded in `.claude/judgment-gate-cases.md`: the plan's Gate A
+step 5 asked what must be true of the inputs and answered it for three things -- that the six were the
+right six, that the worst bin was the bin the fold used, and that `scaled_by` is a fragment depth. It
+recorded that third fact and then **reasoned past it**, noting "no measurement here is compared against
+a read depth across estimators -- every comparison is a ratio of two windows under one estimator". True
+of each ratio; false of the *threshold*, which was borrowed from the other estimator. A locked plan that
+compares a proxy against a constant taken from a different estimator has to justify the constant, not
+just the ratio.
