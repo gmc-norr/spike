@@ -306,6 +306,35 @@ print(f'{tp} {fp} {fn} {recall:.4f} {precision:.4f} {f1:.4f}')
 PY
 }
 
+# The pass/total that `spike validate`'s own exit status is computed from, read
+# off one `--json` report: its **non-advisory** checks.
+#
+# An advisory row (`resistant`, `depth_fold`, `coverage_any_mapq`,
+# `split_reads_each_end`, `ins_sequence`) reports what spike recorded rather
+# than deciding anything, and `spike validate` leaves those rows out of its exit
+# status unless `--strict` is given. Counting them here would disarm step 5's
+# guard: `resistant` and `depth_fold` are read from the truth VCF and never
+# touch the BAM, so they PASS whatever the BAM is -- a header-only merged.bam,
+# what a silently-empty merge leaves behind, then yields two passing rows and
+# `passed == 0` can no longer fire.
+#
+# `.get('advisory', False)`: an older spike's JSON has no such key, and every
+# row of it is then counted exactly as it always was.
+#
+# Prints "<counted_pass> <counted_total> <advisory_total>". Prints nothing (and
+# exits non-zero) when the file is missing or unparseable, which both callers
+# read as a failure rather than as a pass.
+spike_validate_counts() {
+    python3 - "$1" <<'SVC' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1]))
+checks = d.get('checks', [])
+counted = [c for c in checks if not c.get('advisory', False)]
+n_pass = sum(1 for c in counted if c.get('pass', False))
+print(f'{n_pass} {len(counted)} {len(checks) - len(counted)}')
+SVC
+}
+
 # The highest allele fraction in --vafs: the run's best case, and the one the
 # background control and the verdict gate are scored against.
 highest_vaf() {
@@ -782,7 +811,12 @@ step5_spike_validate() {
         log "  VAF=${vaf}: validating..."
         # spike validate exits non-zero when any single check fails, which is
         # expected for a cross-sample spike-in; the harness only insists that it
-        # produced a parseable report with at least one passing check.
+        # produced a parseable report in which at least one of the checks that
+        # decide `spike validate`'s own exit status -- the non-advisory ones --
+        # passed. The advisory rows are deliberately not counted here: two of
+        # them (`resistant`, `depth_fold`) are read back from the truth VCF and
+        # pass whatever the BAM holds, so counting them would let a header-only
+        # merged.bam satisfy this guard.
         "$SPIKE" validate \
             --bam "${spike_out}/merged.bam" \
             --truth "${spike_out}/truth.vcf" \
@@ -792,24 +826,18 @@ step5_spike_validate() {
             2>"${spike_out}/spike_validate.log" || true
 
         local summary
-        summary=$(python3 -c "
-import json
-d = json.load(open('${spike_out}/spike_validate.json'))
-checks = d.get('checks', [])
-passed = sum(1 for c in checks if c.get('pass', False))
-print(f'{passed} {len(checks)}')
-" 2>/dev/null || echo "")
+        summary=$(spike_validate_counts "${spike_out}/spike_validate.json" || echo "")
 
         if [[ -z "$summary" ]]; then
             note_failure "VAF=${vaf}: spike validate produced no parseable JSON (see ${spike_out}/spike_validate.log)"
             continue
         fi
 
-        local passed total
-        read -r passed total <<< "$summary"
-        log "  VAF=${vaf}: spike validate: ${passed}/${total} checks passed"
+        local passed total advisory
+        read -r passed total advisory <<< "$summary"
+        log "  VAF=${vaf}: spike validate: ${passed}/${total} non-advisory checks passed (${advisory} advisory rows not counted)"
         if [[ "$total" -eq 0 || "$passed" -eq 0 ]]; then
-            note_failure "VAF=${vaf}: spike validate passed ${passed}/${total} checks"
+            note_failure "VAF=${vaf}: spike validate passed ${passed}/${total} non-advisory checks"
         fi
     done
 }
@@ -1063,18 +1091,21 @@ step8_summarize() {
             note_failure "VAF=${vaf} (highest): no truvari summary at ${truvari_out}/summary.json, so this run measured nothing that could be attributed to the spike-in"
         fi
 
-        # Spike validate results
+        # Spike validate results: the same non-advisory pass/total step 5's
+        # guard reads, so this column and the verdict cannot disagree. The
+        # advisory rows are reported beside it as `(+Nadv)` rather than folded
+        # in, since they are not what either number is about; an unparseable or
+        # missing report leaves the column at its "N/A".
         if [[ -f "${spike_out}/spike_validate.json" ]]; then
-            spike_pass=$(python3 -c "
-import json
-try:
-    d = json.load(open('${spike_out}/spike_validate.json'))
-    checks = d.get('checks', [])
-    passed = sum(1 for c in checks if c.get('pass', False))
-    print(f'{passed}/{len(checks)}')
-except Exception:
-    print('N/A')
-" 2>/dev/null || echo "N/A")
+            local counts s_pass s_total s_adv
+            counts=$(spike_validate_counts "${spike_out}/spike_validate.json" || echo "")
+            if [[ -n "$counts" ]]; then
+                read -r s_pass s_total s_adv <<< "$counts"
+                spike_pass="${s_pass}/${s_total}"
+                if [[ "$s_adv" -gt 0 ]]; then
+                    spike_pass="${spike_pass}(+${s_adv}adv)"
+                fi
+            fi
         fi
 
         printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \

@@ -202,9 +202,13 @@
   spiked into the 35x HG002 BAM at the default AF and run through `align.sh`, `merge.sh` and
   `spike validate`, the check reported `observed 0` on **4 of the 40** -- events 15
   (`chr20:25322805-25332805`), 25 (`chr20:49921688-49931688`), 33 (`chr20:56072849-56082849`) and
-  34 (`chr20:56107004-56117004`). Each of those four runs exits 1 although nothing about the
-  spike-in is wrong: the other checks pass, `coverage_ratio` reads 0.46-0.54 against an expected
-  0.50, and the census rows are quiet.
+  34 (`chr20:56107004-56117004`). Each of those four runs exits 1 on that row alone: every other
+  **non-advisory** check passes, `coverage_ratio` reads 0.46-0.54 against an expected 0.50, and
+  `resistant` reads 0.027, 0.040, 0.055 and 0.083 against its `<=0.100`. The census is **not**
+  quiet on all four: event 15's `depth_fold` reads **2.46** and is an advisory FAIL, while 25, 33
+  and 34 read 1.19, 1.33 and 1.20 and pass. That row is advisory and out of the exit status, so it
+  is not why any of the four exits 1 -- `split_reads` is -- but event 15 is a donor-depth outlier
+  as well as a split-read miss, so only three of the four are otherwise unremarkable.
 - **How I know:** measured in T2's C4, and reproduced on **master's binary** for event 34 to rule
   out T2 as the cause: `split_reads >=2 joining chr20:561... 0 FAIL`, `Result: 4/5 PASS`, exit 1.
 - **Severity:** Medium. `spike validate`'s exit status is what `scripts/validate_pipeline.sh` and
@@ -213,7 +217,12 @@
   to represent some other way produces no evidence at all.
 - **Not fixed:** the cause is in the aligner's representation, not in the check's arithmetic, and
   changing the check's verdict for the default case is exactly the default change this run's
-  standing choice forbids. **It is also the baseline T5 must be judged against:** a
+  standing choice forbids. The reasoning does not rest on the four runs being unremarkable
+  everywhere else: event 15 carries an advisory `depth_fold` FAIL of its own (2.46), and 4 of 40
+  still exit 1 whatever the census says, because `split_reads` decides that on its own. What the
+  census does change is the **unexplained** share: 3 of 40 (7.5%) of these runs fail
+  `split_reads` with nothing else flagged at all, and on the fourth a reader has a second number
+  to look at. **It is also the baseline T5 must be judged against:** a
   per-breakpoint split-read row can only be stricter than a pooled one, so T5's bar has to allow
   for these four before anything about T5's own rate can be read.
 

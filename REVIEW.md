@@ -3321,8 +3321,18 @@ with a large sub-read-length or >1500 bp tail (amplicon, degraded/FFPE) would se
 
 ### CR-BUILD -- the `bcftools` test dependency is undeclared
 
-**Measured.** With `bcftools` off PATH the suite is `420 passed; 1 failed; 1 ignored`. The
-failure is
+**Every suite count in this section is what CR-BUILD measured at its own commit**, on the test
+set as it stood then and under the two tests' names as they were then. Both have since been
+renamed: `test_a_gvcf_read_that_fails_says_loh_is_skipped` is now
+`test_a_gvcf_read_that_fails_says_the_run_stops`, and
+`test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup` is now
+`test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_stop_not_the_pileup`. Read the numbers
+below as a dated record and not as a live claim -- the **live** no-bcftools count is in
+`README.md` under `### Test-time prerequisites`, and on this branch it is
+`529 passed; 2 failed; 1 ignored`, the same two failures.
+
+**Measured at that commit.** With `bcftools` off PATH the suite was `420 passed; 1 failed;
+1 ignored`. The failure is
 `loh::tests::test_a_renamed_gvcf_that_cannot_be_read_warns_about_the_skip_not_the_pileup`
 (`src/loh.rs:1435`), and its message is `assertion left == right failed: []` -- it never
 mentions `bcftools`.
@@ -3358,7 +3368,8 @@ bcftools message: the environment check does not mask real bugs.
 
 **The other tests.** Beyond `bash`, `bcftools` is the only external binary the suite needs.
 Measured with `samtools`, `bcftools`, `bwa-mem2`, `bgzip` and `tabix` all off PATH:
-`446 passed; 2 failed; 1 ignored` -- the two failures being this test and the sibling below,
+`446 passed; 2 failed; 1 ignored` at that commit -- the two failures being this test and the
+sibling below,
 both now naming `bcftools`. The generated-script tests in `main.rs` run `bash`, but write
 their own stub `samtools` and stub aligner onto the script's PATH. `README.md` now states the
 test-time tools under `### Test-time prerequisites`.
@@ -3380,8 +3391,8 @@ The second is `src/loh.rs:377`'s spawn context, not the `bcftools exited with st
 `src/loh.rs:418` the test exists to pin. A test that reports `ok` while exercising the wrong
 code path is a false pass, and a verification that reddens nothing is a finding here, so it
 gets the same `require_bcftools()` -- same probe, same message, nothing skipped or weakened.
-It now fails when `bcftools` is absent, which takes the no-bcftools suite to **`446 passed;
-2 failed; 1 ignored`**, both failures naming the tool:
+It now fails when `bcftools` is absent, which takes the no-bcftools suite, at that commit, to
+**`446 passed; 2 failed; 1 ignored`**, both failures naming the tool:
 
 ```
 thread 'loh::tests::test_a_gvcf_read_that_fails_says_loh_is_skipped' panicked at src/loh.rs:1452:9:
@@ -3413,8 +3424,8 @@ calls in `scripts/validate_pipeline.sh`'s `step8_summarize` sit behind
 `test_validate_pipeline_verdict_fails_when_the_highest_vaf_has_no_truvari` never spawns it.
 `vcf_input.rs` and `reference.rs` read their `.gz` inputs in-process through `noodles::bgzf`,
 not through a tool. Measured end to end with the whole pixi bin directory (`bcftools`,
-`samtools`, `bwa-mem2`) off PATH: `446 passed; 2 failed; 1 ignored`, the two failures being
-exactly this pair.
+`samtools`, `bwa-mem2`) off PATH: `446 passed; 2 failed; 1 ignored` at that commit, the two
+failures being exactly this pair.
 
 ## The steps after the CR4 and CR2 census (2026-09-25)
 

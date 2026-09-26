@@ -3010,6 +3010,112 @@ esac
     }
 
     #[test]
+    fn test_validate_pipeline_counts_only_the_non_advisory_checks() {
+        // The harness's one `spike validate` canary is step 5's
+        // `passed == 0`, and `spike validate` exits 1 into a `|| true`, so that
+        // count is the whole signal. Two advisory rows (`resistant`,
+        // `depth_fold`) are read back from the truth VCF and never touch the
+        // BAM, so they pass whatever the BAM is: on a valid, indexed,
+        // header-only merged.bam -- what a `merge.sh` that silently produced
+        // nothing leaves -- a one-DEL truth VCF yields exactly the nine rows
+        // below, two of them passing. Counting every row made `passed` 2 and
+        // the guard went quiet; counting the non-advisory rows makes it 0
+        // again.
+        let dir = scratch_dir("validate_pipeline_advisory");
+        let report = dir.join("spike_validate.json");
+        std::fs::write(
+            &report,
+            r#"{
+  "summary": { "total": 9, "pass": 2, "fail": 7, "counted_total": 5, "counted_pass": 0, "counted_fail": 5, "strict": false },
+  "checks": [
+    { "event": "DEL chr20:1000-2000 (x)", "check": "coverage_ratio", "expected": "0.50", "observed": "0.00", "pass": false, "advisory": false },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "coverage_any_mapq", "expected": "0.50", "observed": "0.00", "pass": false, "advisory": true },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "split_reads", "expected": ">=2", "observed": "0", "pass": false, "advisory": false },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "split_reads_each_end", "expected": ">=2 at each end", "observed": "0/0", "pass": false, "advisory": true },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "resistant", "expected": "<=0.100", "observed": "0.010", "pass": true, "advisory": true },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "depth_fold", "expected": "<=1.50", "observed": "1.11", "pass": true, "advisory": true },
+    { "event": "[global]", "check": "insert_size", "expected": "mean 50-1000, sd 5-300", "observed": "no reads", "pass": false, "advisory": false },
+    { "event": "[global]", "check": "dup_rate", "expected": "<50%", "observed": "no reads", "pass": false, "advisory": false },
+    { "event": "[global]", "check": "mean_mapq", "expected": ">20", "observed": "no reads", "pass": false, "advisory": false }
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        // An older spike's report: no `advisory` key anywhere, so every row is
+        // counted exactly as it always was.
+        let old = dir.join("old_spike_validate.json");
+        std::fs::write(
+            &old,
+            r#"{
+  "summary": { "total": 3, "pass": 1, "fail": 2 },
+  "checks": [
+    { "event": "DEL chr20:1000-2000 (x)", "check": "coverage_ratio", "expected": "0.50", "observed": "0.50", "pass": true },
+    { "event": "DEL chr20:1000-2000 (x)", "check": "split_reads", "expected": ">=2", "observed": "0", "pass": false },
+    { "event": "[global]", "check": "mean_mapq", "expected": ">20", "observed": "no reads", "pass": false }
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"script="$1"; report="$2"; old="$3"; shift 3; source "$script"
+echo "advisory_only=$(spike_validate_counts "$report")"
+read -r passed total adv <<< "$(spike_validate_counts "$report")"
+if [[ "$total" -eq 0 || "$passed" -eq 0 ]]; then echo "guard=FIRES"; else echo "guard=quiet"; fi
+echo "old_spike=$(spike_validate_counts "$old")"
+echo "missing=[$(spike_validate_counts "$report.nope" || true)]"
+printf '%s' '{"checks": [' > "$report.bad"
+echo "truncated=[$(spike_validate_counts "$report.bad" || true)]""#,
+            )
+            .arg("_")
+            .arg(validate_pipeline_script())
+            .arg(&report)
+            .arg(&old)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "sourcing validate_pipeline.sh and calling spike_validate_counts \
+             must work:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
+        );
+        // Five non-advisory rows, none passing; four advisory rows beside them.
+        assert!(
+            stdout.contains("advisory_only=0 5 4"),
+            "a report whose only passing rows are advisory must count 0 of 5 \
+             passing:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("guard=FIRES"),
+            "step 5's `passed == 0` guard must fire on that report:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("old_spike=1 3 0"),
+            "an older spike's JSON has no `advisory` key and every row of it is \
+             counted:\n{}",
+            stdout
+        );
+        // A missing or truncated report prints nothing, which step 5 reads as
+        // "no parseable JSON" -- never as a pass.
+        assert!(
+            stdout.contains("missing=[]") && stdout.contains("truncated=[]"),
+            "a missing or unparseable report must yield no counts:\n{}",
+            stdout
+        );
+    }
+
+    #[test]
     fn test_validate_pipeline_verdict_needs_the_spike_in_to_beat_the_background() {
         // The harness's verdict gate. The truth DELs are common HG002
         // variants, so the background sample carries several of them and a

@@ -77,7 +77,7 @@ needs:
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `525 passed; 2 failed; 1 ignored`, the
+  with all of them off PATH the suite is `529 passed; 2 failed; 1 ignored`, the
   two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
@@ -684,9 +684,23 @@ error that run exits with counts the six real checks alone (`1/6 validation
 checks failed`), so a run that failed one check before these rows existed still
 exits with exactly that. `--strict` counts every row instead (`2/8 validation
 checks failed`), and the summary line then reads `(in the exit status:
---strict)`. A truth VCF carrying no census prints no `Advisory:` line at all. In
-`--json` every check object carries `"advisory": true` or `"advisory": false`
-beside its `"pass"`.
+--strict)`. A truth VCF carrying no census prints no `resistant` and no
+`depth_fold` row, and its non-advisory rows and its exit status are exactly what
+they were before either row existed -- an older spike's truth VCF is not a FAIL.
+The advisory rows that do not read the census still print beside them, so such a
+report does still carry an `Advisory:` line: measured on a one-DEL truth VCF with
+both census INFO fields and both census header lines stripped, the report prints
+`coverage_any_mapq` and `split_reads_each_end` and the line reads `Advisory: 2
+checks, 2 PASS, 0 FAIL`. In `--json` every check object carries `"advisory":
+true` or `"advisory": false` beside its `"pass"`, and the `summary` object
+carries `counted_total`, `counted_pass`, `counted_fail` and `strict` beside
+`total`, `pass` and `fail`: the three original keys are over every row printed,
+while the `counted_*` trio is over the rows the exit status is computed from --
+the non-advisory rows, or every row under `--strict` -- so a consumer can tell
+which rows that status counted. `scripts/validate_pipeline.sh` is such a
+consumer: its step-5 guard insists on at least one *non-advisory* check passing,
+because `resistant` and `depth_fold` are read back from the truth VCF and pass
+whatever the BAM holds.
 
 #### What each check establishes, and what it does not
 
@@ -1021,28 +1035,36 @@ below the cap, the same five positions give **0, 0, 0, 0, 0**, while genuinely
 planted 3 bp and 12 bp insertions still find 12 reads each and PASS.
 
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
-and merged with `merge.sh`: **21** reads carry the planted 300 bp insertion at
-chr20:39000000, against **0, 0, 0, 0 and 1** at five control positions in the
-same BAM where nothing was planted. Before this check existed, spike's own
-round trip could not succeed for insertions -- the same run scored `5/6 PASS`
-and exited **1** on the `event_checked` row, and now scores `13/13 PASS` and
-exits 0. The total rose because seven of those thirteen rows are the advisory
-rows the two events now carry beside their own checks: the same run prints
-`Advisory: 7 checks, 7 PASS, 0 FAIL`.
+and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at
+chr20:39000000. Before this check existed, spike's own round trip could not
+succeed for insertions -- the same recipe scored `5/6 PASS` and exited **1** on
+the `event_checked` row -- and this run scores `13/13 PASS` and exits 0. The
+total rose because seven of those thirteen rows are the advisory rows the two
+events now carry beside their own checks: the same run prints `Advisory: 7
+checks, 7 PASS, 0 FAIL`. Its control is from an **earlier** run of the same
+recipe, which read **21** reads at chr20:39000000 against **0, 0, 0, 0 and 1**
+at five control positions in the same BAM where nothing was planted; the
+re-measured run above was not re-run against those five positions, so the 14 and
+the `13/13` are one run, and the 21 and those five controls are the other.
 
 The same round trip works for small indels and MNVs. A run of
 `snp:chr20:39000000:TGG:T` (a 2 bp deletion), `snp:chr20:39100000:T:TCCGG` (a
 4 bp insertion) and `snp:chr20:39200000:AT:GC` (an MNV) on the same slice,
 aligned and merged the same way, scored **3/6 PASS and exited 1** with all
 three rows reading `N/A (indel or MNV)` -- a verdict reached before the BAM was
-opened -- and now scores **12/12 PASS, exit 0** at 0.40, 0.41 and 0.46 against
-a `SIM_VAF` of 0.50, the total again rising because six of the twelve rows are
-advisory (`Advisory: 6 checks, 6 PASS, 0 FAIL`). The reads behind those
-fractions are **17, 19 and 13** carrying the variant at the three planted
-sites, against **0, 0, 0, 0 and 0** for each of them at five positions where
-nothing was planted (38600000, 38900000, 39500000, 39750000, 40100000), where
-all fifteen checks read 0.00 and FAIL. The same three truth records against
-the **unspiked** BAM read 0.00, 0.00 and 0.00 and all FAIL.
+opened -- and now scores **12/12 PASS, exit 0** at **0.50, 0.53 and 0.42**
+against a `SIM_VAF` of 0.50, the total again rising because six of the twelve
+rows are advisory (`Advisory: 6 checks, 6 PASS, 0 FAIL`). Those three fractions
+and that total are one run, measured together. The controls beside them are from
+an **earlier** run of the same three records, which read 0.40, 0.41 and 0.46
+off **17, 19 and 13** reads carrying the variant at the three planted sites,
+against **0, 0, 0, 0 and 0** for each of them at five positions where nothing
+was planted (38600000, 38900000, 39500000, 39750000, 40100000), where all
+fifteen checks read 0.00 and FAIL, and where the same three truth records
+against the **unspiked** BAM read 0.00, 0.00 and 0.00 and all FAIL. The
+re-measured run above was not re-run against those five positions or against the
+unspiked BAM, so do not read its fractions and those controls as one
+measurement.
 
 ### Controlling the read extraction region
 

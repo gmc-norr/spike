@@ -82,15 +82,26 @@ def main(bam, chrom_len, stride="100000", window="10000", workers="8"):
               f'{r["any_depth"]:.2f}\t{int(r["eligible"])}')
 
     by_low = sorted(eligible, key=lambda r: r["low_share"])
+    # How many windows share the extreme value, printed rather than left
+    # implicit: dozens of windows tie at low_share 0.0000, and "the three
+    # easiest" is then the three lowest-coordinate of a tie, not three windows
+    # the measurement picked out. A tie is a fact about chr20, so say it.
+    ties = lambda value: sum(1 for r in eligible if r["low_share"] == value)  # noqa: E731
     print()
+    hardest = by_low[-1]["low_share"] if by_low else float("nan")
+    easiest = by_low[0]["low_share"] if by_low else float("nan")
+    print(f"# ties at the extremes: {ties(hardest)} eligible window(s) at the highest "
+          f"low_share {hardest:.4f}, {ties(easiest)} at the lowest {easiest:.4f}")
+    print("# a tie is broken by coordinate (the sort is stable), so a tied pick is "
+          "the lowest-coordinate member of the tie and not a measured extreme")
     print("# THREE HARDEST (highest low_share among eligible)")
     for r in reversed(by_low[-3:]):
         print(f'HARD\t{CHROM}:{r["start"]}-{r["end"]}\tlow_share={r["low_share"]:.4f}\t'
-              f'any_depth={r["any_depth"]:.2f}\tn={r["n"]}')
+              f'any_depth={r["any_depth"]:.2f}\tn={r["n"]}\ttied_with={ties(r["low_share"]) - 1}')
     print("# THREE EASIEST (lowest low_share among eligible) -- the control")
     for r in by_low[:3]:
         print(f'EASY\t{CHROM}:{r["start"]}-{r["end"]}\tlow_share={r["low_share"]:.4f}\t'
-              f'any_depth={r["any_depth"]:.2f}\tn={r["n"]}')
+              f'any_depth={r["any_depth"]:.2f}\tn={r["n"]}\ttied_with={ties(r["low_share"]) - 1}')
 
 
 if __name__ == "__main__":

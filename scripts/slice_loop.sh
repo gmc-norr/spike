@@ -9,6 +9,7 @@
 #
 # Writes, under OUT_DIR:
 #   slice.bam(.bai)      the sliced donor
+#   slice.exit           samtools view's exit status for the slice itself
 #   run/                 spike's output, plus sim.bam and merged.bam
 #   spike.exit           spike's exit status        spike.log
 #   align.log merge.log
@@ -16,6 +17,16 @@
 #   validate.log         its log (stderr)
 #   validate.exit        its exit status
 # The caller scores those; nothing here judges anything.
+#
+# `slice.exit` and `spike.exit` are separate files on purpose: a failed slice --
+# a wrong BAM path, a contig name this BAM does not carry -- is a failure of this
+# harness, and writing it into `spike.exit` made the scorer report it as "spike
+# declined this event". A run whose slice failed leaves `slice.exit` non-zero and
+# **no** `spike.exit` at all, which is a different state from spike refusing.
+#
+# Every report this run could write is deleted before anything runs: `align.sh`
+# or `merge.sh` failing leaves the previous run's `validate.json` in place
+# otherwise, and the scorer would score the old report as this run's.
 #
 # EXTRA... is passed to `spike validate` (e.g. --strict, --json).
 set -uo pipefail
@@ -33,11 +44,23 @@ lo=$(( start > PAD ? start - PAD : 1 ))
 hi=$(( end + PAD ))
 
 mkdir -p "$out"
+# A rerun must not be scorable on the last run's reports (see the note above).
+rm -f "$out/spike.exit" "$out/slice.exit" \
+      "$out/validate.txt" "$out/validate.log" "$out/validate.exit" \
+      "$out/validate.json" "$out/validate.json.log" "$out/validate.json.exit" \
+      "$out/validate.before.json" "$out/validate.before.log" "$out/validate.before.exit"
+rm -rf "$out/run"
+
 samtools view -@ "$threads" -b -o "$out/slice.bam" "$bam" "$chrom:$lo-$hi" \
-  > "$out/slice.log" 2>&1 || { echo "slice failed" > "$out/spike.exit"; exit 1; }
+  > "$out/slice.log" 2>&1
+slice_rc=$?
+echo "$slice_rc" > "$out/slice.exit"
+# No `spike.exit` is written here: a slice that failed is this harness failing,
+# not spike declining the event, and the scorer tells the two apart by which
+# file it finds.
+[ "$slice_rc" = 0 ] || exit 1
 samtools index -@ "$threads" "$out/slice.bam" >> "$out/slice.log" 2>&1
 
-rm -rf "$out/run"
 "$spike" --bam "$out/slice.bam" --reference "$ref" --event "$event" --seed 1 \
   -o "$out/run" > "$out/spike.log" 2>&1
 echo $? > "$out/spike.exit"

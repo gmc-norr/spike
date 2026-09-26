@@ -18,6 +18,7 @@ bcftools 1.9 has no `--regions-overlap` and the default moved between versions.
 Usage: t7_footprint_variants.py EVENTS_FILE VCF [FLANK]
 EVENTS_FILE holds one `<type>:<chrom>:<start>-<end>` spec per line.
 """
+import statistics
 import subprocess
 import sys
 
@@ -59,7 +60,17 @@ def info_int(info, key):
 
 
 def classify(ref, alts, info):
-    """(is_non_snp, size class) for one record, or (False, None) for a pure SNP."""
+    """(is_non_snp, size class) for one record, or (False, None) for a pure SNP.
+
+    `*` is dropped first. It is the spanning-deletion placeholder -- "this
+    allele is missing because a deletion recorded elsewhere covers it" -- not
+    one base of sequence, and treating its single character as sequence made
+    `len(ref) - 1` the record's size. A record whose only ALT is `*` names no
+    allele of its own here and is not counted as a non-SNP record.
+    """
+    alts = [a for a in alts if a != "*"]
+    if not alts:
+        return False, None
     symbolic = any(a.startswith("<") for a in alts)
     if symbolic:
         svlen = info_int(info, "SVLEN")
@@ -135,8 +146,10 @@ def main(events_file, vcf, flank=str(HAP_FLANK)):
           f"(SNP share {100.0 * (all_carried - all_non_snp) / all_carried:.1f}%)"
           if all_carried else "control 1: no carried records at all")
     counts = sorted(r[3] for r in rows)
+    # A true median: the upper of the two middle values is not the median, and
+    # was printed under that name (the same fix as real_events_score.py's).
     print(f"non-SNP records per footprint: min {counts[0]} median "
-          f"{counts[len(counts) // 2]} max {counts[-1]}")
+          f"{statistics.median(counts):g} max {counts[-1]}")
     for _, _, name in CLASSES:
         hit = sum(1 for r in rows if r[4][name] > 0)
         tot = sum(r[4][name] for r in rows)

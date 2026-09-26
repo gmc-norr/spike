@@ -36,8 +36,16 @@ def validate(spike, bam, truth, fasta, out, extra=()):
 
 
 def row(table, check):
+    r"""The report line naming `check`, or None.
+
+    The name must start the line or follow whitespace and must end at
+    whitespace or a `:`. A leading `\s` alone could never match `Advisory`,
+    which starts at column 0, so this script's own "no advisory line" check was
+    a silent no-op. The trailing lookahead keeps `split_reads` from matching
+    `split_reads_each_end`.
+    """
     for line in table.splitlines():
-        if re.search(rf"\s{re.escape(check)}\s", line):
+        if re.search(rf"(?:^|\s){re.escape(check)}(?=[\s:]|$)", line):
             return line.rstrip()
     return None
 

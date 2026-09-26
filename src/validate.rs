@@ -215,12 +215,12 @@ pub fn run() -> Result<()> {
 /// neither field -- an older spike's truth VCF -- gets neither row.
 fn push_census_rows(label: &str, event: &TruthEvent, results: &mut Vec<CheckResult>) {
     if let Some(raw) = event.census.resist.as_deref() {
-        results.push(census_row(label, "resistant", raw, census::WARN_ABOVE, 3));
+        results.push(census_row(label, RESISTANT, raw, census::WARN_ABOVE, 3));
     }
     if let Some(raw) = event.census.depth_fold.as_deref() {
         results.push(census_row(
             label,
-            "depth_fold",
+            DEPTH_FOLD,
             raw,
             census::DEPTH_FOLD_WARN_ABOVE,
             2,
@@ -267,13 +267,26 @@ fn census_row(
 /// whether or not advisory rows were printed beside them. `--strict` counts
 /// every row instead.
 fn failure_message(results: &[CheckResult], strict: bool) -> Option<String> {
-    let counted = results.iter().filter(|r| strict || !r.advisory);
-    let n_total = counted.clone().count();
-    let n_fail = counted.filter(|r| !r.pass).count();
+    let n_total = counted_rows(results, strict).count();
+    let n_fail = counted_rows(results, strict).filter(|r| !r.pass).count();
     if n_fail == 0 {
         return None;
     }
     Some(format!("{}/{} validation checks failed", n_fail, n_total))
+}
+
+/// The rows the exit status is computed over: the non-advisory ones by default,
+/// every row when `strict`.
+///
+/// [`failure_message`] and [`print_results_json`]'s `counted_*` trio both read
+/// this one filter, so `--json`'s summary cannot disagree with the exit status
+/// printed beside it. A second copy of `strict || !r.advisory` is exactly how
+/// the two would drift apart.
+fn counted_rows<'a>(
+    results: &'a [CheckResult],
+    strict: bool,
+) -> impl Iterator<Item = &'a CheckResult> + 'a {
+    results.iter().filter(move |r| strict || !r.advisory)
 }
 
 /// The depth-ratio row's name: event depth over flanking depth, at the run's
@@ -350,18 +363,25 @@ const ALLELE_FREQ: &str = "allele_freq";
 /// The "no check applies to this event" fallback row's name (M11).
 const EVENT_CHECKED: &str = "event_checked";
 
-// The eight check-name constants above name every row `check_event` pushes.
-// `print_usage` names only the five **non-advisory** ones from these same
-// constants -- `COVERAGE_RATIO`, `SPLIT_READS`, `INS_READS`, `ALLELE_FREQ` and
-// `EVENT_CHECKED`. The three advisory rows -- `COVERAGE_ANY_MAPQ`,
-// `SPLIT_READS_EACH_END` and `INS_SEQUENCE` -- appear nowhere in it: the usage
-// text is byte-frozen for this work, so they are documented in README.md
-// instead (the table at "Which check covers which type", and a section each).
-// So read this as the hazard and not the reassurance: **a renamed advisory row
-// can print one name and document another**. Rename `INS_SEQUENCE` and the
-// table prints the new name while `--help` says nothing about the row at all
-// and README.md still spells the old one, with nothing in the build to notice.
-// Whoever renames one of the three edits README.md by hand.
+/// The advisory census row's name for `SIM_RESIST`: the share of the reads over
+/// the event spike could not edit, as spike recorded it (CR4).
+const RESISTANT: &str = "resistant";
+
+/// The advisory census row's name for `SIM_DEPTH_FOLD`: how far the donor's
+/// depth departed from the depth the scaling assumed, as spike recorded it
+/// (CR2).
+const DEPTH_FOLD: &str = "depth_fold";
+
+// The ten check-name constants above name every row `check_event` pushes, and
+// `print_usage` now prints all ten from these same constants: the five
+// non-advisory ones (`COVERAGE_RATIO`, `SPLIT_READS`, `INS_READS`,
+// `ALLELE_FREQ`, `EVENT_CHECKED`) and the five advisory ones
+// (`COVERAGE_ANY_MAPQ`, `SPLIT_READS_EACH_END`, `INS_SEQUENCE`, `RESISTANT`,
+// `DEPTH_FOLD`). Renaming any of them moves the printed table and `--help`
+// together, so neither can print one name while the other prints the old one.
+// README.md is still edited by hand: it spells every row name out in prose (the
+// table at "Which check covers which type", and a section each), and nothing in
+// the build notices when a rename leaves it behind.
 //
 // The boundary of the shared-constant idiom is deliberate
 // and stops there: `insert_size`, `dup_rate` and `mean_mapq` are `run()`'s
@@ -645,14 +665,33 @@ fn print_usage() {
     eprintln!("                   does not vote");
     eprintln!("  every event      insert_size, dup_rate, mean_mapq, over the whole sample");
     eprintln!();
-    eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
-    eprintln!("exit 0 means every check ran and every check passed. An event type no");
+    eprintln!("Advisory checks, printed beside the checks above:");
+    eprintln!("  DEL, DUP         {} (the depth ratio again with no", COVERAGE_ANY_MAPQ);
+    eprintln!("                   MAPQ floor)");
     eprintln!(
-        "check covers (e.g. SVTYPE=CNV) is reported as `{} FAIL`.",
-        EVENT_CHECKED
+        "  DEL, DUP, INV    {} (the same evidence and the same",
+        SPLIT_READS_EACH_END
     );
-    eprintln!("The advisory rows are reported but left out of the exit status unless");
-    eprintln!("--strict is given.");
+    eprintln!("  and BND          minimum required at each breakpoint, not pooled)");
+    eprintln!("  INS              {} (reads carrying the bases the truth", INS_SEQUENCE);
+    eprintln!("                   record's own ALT names)");
+    eprintln!(
+        "  every event      {} and {}, when the truth record carries",
+        RESISTANT, DEPTH_FOLD
+    );
+    eprintln!("                   SIM_RESIST or SIM_DEPTH_FOLD: what spike recorded at");
+    eprintln!("                   simulation time, read back from the truth VCF rather");
+    eprintln!("                   than measured from the BAM");
+    eprintln!();
+    eprintln!("An advisory row prints its own PASS or FAIL, marked `(advisory)` in the");
+    eprintln!("Status column, and is left out of the exit status unless --strict is");
+    eprintln!("given.");
+    eprintln!();
+    eprintln!("A check that cannot run is a FAILED check, never a silent pass. Exit 0");
+    eprintln!("means every check the exit status counts ran and passed: every");
+    eprintln!("non-advisory check by default, and every check including the advisory");
+    eprintln!("ones under --strict. An event type no check covers (e.g. SVTYPE=CNV) is");
+    eprintln!("reported as `{} FAIL`.", EVENT_CHECKED);
 }
 
 // ---------------------------------------------------------------------------
@@ -3234,7 +3273,7 @@ fn print_results(results: &[CheckResult], json: bool, strict: bool) -> Result<()
     let mut out = stdout.lock();
 
     if json {
-        print_results_json(&mut out, results, n_total, n_pass)?;
+        print_results_json(&mut out, results, n_total, n_pass, strict)?;
     } else {
         print_results_text(&mut out, results, n_total, n_pass, strict)?;
     }
@@ -3309,15 +3348,33 @@ fn print_results_json(
     results: &[CheckResult],
     n_total: usize,
     n_pass: usize,
+    strict: bool,
 ) -> Result<()> {
+    // `total`, `pass` and `fail` are over every row printed, and keep exactly
+    // the meaning they had before the advisory rows existed -- a parser written
+    // against them still reads what it always read. The `counted_*` trio beside
+    // them is over the rows the *exit status* is computed from: the non-advisory
+    // rows, or every row under `--strict`, which `strict` names. They come from
+    // `counted_rows`, the same filter `failure_message` exits on, so a consumer
+    // reading `counted_pass == 0` is reading the number the exit status agrees
+    // with. `scripts/validate_pipeline.sh`'s step-5 guard is that consumer: an
+    // advisory row is read back from the truth VCF and passes whatever the BAM
+    // holds, so `pass` alone cannot tell a working run from a header-only BAM.
+    let n_counted_total = counted_rows(results, strict).count();
+    let n_counted_pass = counted_rows(results, strict).filter(|r| r.pass).count();
+
     // Manual JSON to avoid serde dependency.
     writeln!(out, "{{")?;
     writeln!(
         out,
-        "  \"summary\": {{ \"total\": {}, \"pass\": {}, \"fail\": {} }},",
+        "  \"summary\": {{ \"total\": {}, \"pass\": {}, \"fail\": {}, \"counted_total\": {}, \"counted_pass\": {}, \"counted_fail\": {}, \"strict\": {} }},",
         n_total,
         n_pass,
         n_total - n_pass,
+        n_counted_total,
+        n_counted_pass,
+        n_counted_total - n_counted_pass,
+        strict,
     )?;
     writeln!(out, "  \"checks\": [")?;
 
@@ -5637,6 +5694,132 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
     }
 
+    /// Every row a one-DEL truth VCF leaves on a **header-only** BAM: the five
+    /// non-advisory checks all fail, and the only rows that pass are the two
+    /// census rows, which are read back from the truth VCF and never touch the
+    /// BAM at all.
+    ///
+    /// This is the report `scripts/validate_pipeline.sh`'s step-5 guard sees
+    /// when `merge.sh` silently produces nothing, and the reason that guard
+    /// cannot count `pass`: 2 of 9 rows passed and not one of them looked at a
+    /// read.
+    fn only_advisory_rows_pass() -> Vec<CheckResult> {
+        vec![
+            row(COVERAGE_RATIO, false, false),
+            row(COVERAGE_ANY_MAPQ, false, true),
+            row(SPLIT_READS, false, false),
+            row(SPLIT_READS_EACH_END, false, true),
+            row(RESISTANT, true, true),
+            row(DEPTH_FOLD, true, true),
+            row("insert_size", false, false),
+            row("dup_rate", false, false),
+            row("mean_mapq", false, false),
+        ]
+    }
+
+    fn json_report(results: &[CheckResult], strict: bool) -> String {
+        let n_pass = results.iter().filter(|r| r.pass).count();
+        let mut out: Vec<u8> = Vec::new();
+        print_results_json(&mut out, results, results.len(), n_pass, strict).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn test_a_json_report_whose_only_passing_rows_are_advisory_counts_no_pass() {
+        // The Critical this pair of keys exists for: `passed == 0` is the only
+        // signal `scripts/validate_pipeline.sh` has that the run measured
+        // anything, and on this report `"pass"` is 2 while every check that
+        // read the BAM failed. `counted_pass` is 0, so the guard fires again.
+        let results = only_advisory_rows_pass();
+
+        let report = json_report(&results, false);
+        let summary = line_for(&report, "\"summary\"");
+
+        assert!(
+            summary.contains("\"counted_total\": 5")
+                && summary.contains("\"counted_pass\": 0")
+                && summary.contains("\"counted_fail\": 5")
+                && summary.contains("\"strict\": false"),
+            "the exit status counts the five non-advisory rows, none of which \
+             passed; got:\n{}",
+            summary
+        );
+        // The three original keys are over every row printed and must not have
+        // moved: a parser written before the advisory rows existed still reads
+        // what it always read.
+        assert!(
+            summary.contains("\"total\": 9")
+                && summary.contains("\"pass\": 2")
+                && summary.contains("\"fail\": 7"),
+            "got:\n{}",
+            summary
+        );
+        // And the trio is the exit status's own arithmetic, not a second copy
+        // of it.
+        assert_eq!(
+            failure_message(&results, false).as_deref(),
+            Some("5/5 validation checks failed"),
+            "the run exits on the same five rows `counted_*` counts"
+        );
+    }
+
+    #[test]
+    fn test_strict_moves_the_counted_trio_and_nothing_else() {
+        // Under --strict the exit status counts every row, so the trio counts
+        // every row too -- the same filter, the same flag.
+        let results = only_advisory_rows_pass();
+
+        let report = json_report(&results, true);
+        let summary = line_for(&report, "\"summary\"");
+
+        assert!(
+            summary.contains("\"counted_total\": 9")
+                && summary.contains("\"counted_pass\": 2")
+                && summary.contains("\"counted_fail\": 7")
+                && summary.contains("\"strict\": true"),
+            "got:\n{}",
+            summary
+        );
+        assert!(
+            summary.contains("\"total\": 9")
+                && summary.contains("\"pass\": 2")
+                && summary.contains("\"fail\": 7"),
+            "the first three keys do not depend on --strict; got:\n{}",
+            summary
+        );
+        assert_eq!(
+            failure_message(&results, true).as_deref(),
+            Some("7/9 validation checks failed"),
+        );
+    }
+
+    #[test]
+    fn test_a_report_with_no_advisory_row_counts_every_row_in_the_trio() {
+        // The other end of it: nothing advisory, so `counted_*` and the three
+        // original keys say the same thing and a consumer reading either gets
+        // the same answer an older spike gave it.
+        let results = vec![
+            row(COVERAGE_RATIO, true, false),
+            row(SPLIT_READS, false, false),
+        ];
+
+        let summary = {
+            let report = json_report(&results, false);
+            line_for(&report, "\"summary\"").to_string()
+        };
+
+        assert!(
+            summary.contains("\"total\": 2")
+                && summary.contains("\"pass\": 1")
+                && summary.contains("\"fail\": 1")
+                && summary.contains("\"counted_total\": 2")
+                && summary.contains("\"counted_pass\": 1")
+                && summary.contains("\"counted_fail\": 1"),
+            "got:\n{}",
+            summary
+        );
+    }
+
     #[test]
     fn test_the_advisory_summary_says_when_strict_counts_them() {
         let results = vec![row("resistant", false, true)];
@@ -5669,7 +5852,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         let results = vec![row("coverage_ratio", true, false), row("resistant", false, true)];
         let mut out: Vec<u8> = Vec::new();
 
-        print_results_json(&mut out, &results, results.len(), 1).unwrap();
+        print_results_json(&mut out, &results, results.len(), 1, false).unwrap();
 
         let json = String::from_utf8(out).unwrap();
         assert!(
@@ -5979,7 +6162,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
 
         let mut json: Vec<u8> = Vec::new();
-        print_results_json(&mut json, &results, results.len(), 0).unwrap();
+        print_results_json(&mut json, &results, results.len(), 0, false).unwrap();
         let json = String::from_utf8(json).unwrap();
         assert!(
             line_for(&json, "coverage_any_mapq").contains("\"advisory\": true"),
@@ -6289,7 +6472,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
 
         let mut json: Vec<u8> = Vec::new();
-        print_results_json(&mut json, &results, results.len(), 0).unwrap();
+        print_results_json(&mut json, &results, results.len(), 0, false).unwrap();
         let json = String::from_utf8(json).unwrap();
         assert!(
             line_for(&json, "\"check\": \"split_reads_each_end\"").contains("\"advisory\": true"),
@@ -7239,7 +7422,7 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
 
         let mut json: Vec<u8> = Vec::new();
-        print_results_json(&mut json, &rows, rows.len(), 0).unwrap();
+        print_results_json(&mut json, &rows, rows.len(), 0, false).unwrap();
         let json = String::from_utf8(json).unwrap();
         assert!(
             line_for(&json, "\"ins_sequence\"").contains("\"advisory\": true"),
