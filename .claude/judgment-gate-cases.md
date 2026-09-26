@@ -109,3 +109,19 @@ what was claimed, what the claim actually rested on, and which gate would have c
   inputs.* **Rule for this repo: any check that compares read bases to the reference must
   allow for the sample's own alleles, because spike writes them onto the simulated reads on
   purpose. This includes SNPs inside a probe, and hom-alt SNPs on both copies.**
+
+## 2026-09-26 -- RF11: "a small hole in the check" was a rule that fails both ways
+
+- **Claimed.** After one 40 bp insertion failed `ins_reads` because bwa-mem2 clipped all its
+  reads, RF11 was described to the user as a small hole: count clips below 50 bp too.
+- **What it rested on.** The false-FAIL side alone. The false-PASS side of the same rule had never
+  been measured. N10 set the 50 bp clip floor from 5 empty sites at a 3 bp threshold. Nobody had
+  counted how often an empty site passes at 50.
+- **How it was caught.** The locked plan's null test measured today's rule beside each proposed
+  floor. Today's rule passes a 50 bp insertion that is not there at 12 of 200 random and 46 of 200
+  simple-repeat sites. That was confirmed with `spike validate` itself on 400 of 400 sites. Every
+  lower floor passes more. Refuted before any code.
+- **Which gate would have caught it earlier.** Gate B step 2 (*run the trivial baseline beside
+  it*). **Rule for this repo: before changing what a check counts as evidence, measure the current
+  rule's pass rate where the event is absent, at the threshold in use. A false FAIL is visible; a
+  false PASS is not, and only a null test finds it.**

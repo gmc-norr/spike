@@ -20,8 +20,10 @@
 > | RF7 | Open. Adding the worst bin to `truth.vcf` for every event changes what spike emits; a per-event column in the run README would be the cheap fix, and it is a design decision rather than a defect. |
 > | RF8 | **Fixed** (branch `rf8`, the user's choice: refuse by default). spike refuses an event whose `SIM_RESIST` is above 0.5 and lists every such event at once; `--allow-resistant` restores the old behaviour byte for byte. Plan, code and result are under "RF8" at the end of `REVIEW.md`. Real SV sites hit it far more often than random spots (6 of `validate_pipeline.sh`'s 20 vs 0 of 40 on chr1), so that script passes the flag and counts them. |
 > | RF12 | **Scored around** (branch `rf12`, the user's choice: option 2). `validation_summary.tsv` gains `N_outside_bg`, `TP_outside_bg` and `Recall_outside_bg`: recall over the truth DELs the background's own Delly run does not recover, and `--min-recall` judges it. On the default run that is 0.7692 / 0.5385 / 0.4615 against 0.85 / 0.70 / 0.65. Four background DELs no short-read caller finds stay counted. See RF12 in `REVIEW.md`. |
+> | RF11 | Open; a fix was refuted before any code (branch `rf11`, "RF11" at the end of `REVIEW.md`). bwa-mem2 clips the reads of a 40-49 bp insertion, and `ins_reads` counts clips only from 50 bp: correct insertions fail 1 of 8 at 40 bp, 5 of 8 at 45 bp, 8 of 8 at 49 bp. Counting clips from 20, 30 or 40 bp makes more empty sites pass (RF13). The README says so. |
+> | RF13 | Open, found by RF11's test. `ins_reads` passes a 50 bp insertion that is not there at 12 of 200 random and 46 of 200 simple-repeat empty chr20 sites, measured with `spike validate`. |
 >
-> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, and all are written up at the end
+> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, RF13 from the RF11 work the same day, and all are written up at the end
 > of this file, under their own heading.
 
 # NEW-FINDINGS — found during this run, not fixed
@@ -343,6 +345,14 @@
   within 100 bp of POS — and changing a default check's verdict is the default change this run's
   standing choice forbids. One event is also not a rate: the 24-insertion C4 set, at 50 bp and above,
   had `ins_reads` pass 24 of 24.
+- **Follow-up (2026-09-26): a fix was tried and refuted; no code.** "RF11" at the end of `REVIEW.md`.
+  - **The cause, measured.** bwa-mem2 wrote all 11 reads of that 40 bp insertion as soft clips,
+    and below 50 bp `ins_reads` counts only `I` operations.
+  - **The rate.** Across 40 correct spike-ins at 8 sites, `ins_reads` fails 0 of 16 at 20-30 bp,
+    1 of 8 at 40 bp, 5 of 8 at 45 bp and 8 of 8 at 49 bp. `ins_sequence` passes 40 of 40.
+  - **Why the fix failed.** Counting clips from 20, 30 or 40 bp makes more empty sites pass
+    than today's rule does, and today's rule already passes too many (RF13).
+  - **What changed.** The README now says what the check gets wrong in both directions.
 
 ### RF12 — `validate_pipeline.sh`'s "clean" background already has low depth at many of its truth deletions
 
@@ -364,3 +374,25 @@
   depth is already reduced; another is to pick a background without them. Either changes what
   the pipeline measures.
 
+
+### RF13 — `ins_reads` passes a 50 bp insertion that is not there at 6-23% of empty sites
+
+- **Where:** `src/validate.rs`, `check_ins_reads` and `cigar_shows_insertion_near`. The check is
+  **not** advisory, so it decides the exit status.
+- **What:** for an insertion of 50 bp or more, two reads within 100 bp of POS with a soft clip of
+  50 bases or more are a PASS. At 35x such clips occur by chance. The check does not require them
+  to share a breakpoint.
+- **How I know:** a truth VCF with an `SVTYPE=INS;SVLEN=50` `<INS>` record at each of 400 seeded
+  chr20 sites where HG002 has no indel or SV of 10 bp or more within 1 kb (`scripts/rf11_sites.tsv`),
+  run through `spike validate` on the unedited 35x HG002 BAM. `ins_reads` PASSed:
+  - at **12 of 200** random benchmark sites (6%);
+  - at **46 of 200** sites in RepeatMasker simple repeats or low-complexity sequence (23%).
+
+  At 9 of the 12 random sites, the clips are scattered, no two at one position.
+- **Severity:** Medium. It is a silent PASS on a default check: a spike-in that did not land can
+  still report its insertion as present. `ins_sequence` asks for the inserted bases in the reads
+  instead of clips, but it is advisory, and it was not measured at these sites.
+- **Not fixed:** found while testing RF11's fix. Either way of closing it changes a default check,
+  and each needs its own locked plan on fresh sites, since these have been seen:
+  - requiring the clips to share a breakpoint;
+  - making the default row read bases, as `ins_sequence` does.

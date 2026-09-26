@@ -1032,8 +1032,9 @@ the inserted bases somewhere -- an `I` CIGAR operation when the insertion fits
 inside a read that anchors on both sides, a soft clip at the insertion point
 when it does not. Either counts, if it is at least `min(SVLEN, 50)` bases long
 and its reference boundary is within 100 bp of POS, and the check passes at
-two such reads (the same threshold `split_reads` uses: one clipped read is
-background anywhere, two at the same point are not). An INS record with no
+two such reads (the same threshold `split_reads` uses). The two need not be at
+the same point, and at 35x two such clips turn up by chance more often than
+that suggests (see below). An INS record with no
 usable `SVLEN` has no length to look for and is a failed check. Nothing in this
 check reads a base; the advisory `ins_sequence` row beside it does, by looking
 for the truth record's own inserted bases in the reads (see
@@ -1048,6 +1049,29 @@ Measured on the merged HG002 chr20 slice, a truth record of
 five PASSed on an insertion that was never there. Counting only `I` operations
 below the cap, the same five positions give **0, 0, 0, 0, 0**, while genuinely
 planted 3 bp and 12 bp insertions still find 12 reads each and PASS.
+
+**What `ins_reads` gets wrong, measured (RF11 in `REVIEW.md`).** Both errors
+come from counting CIGAR marks near POS rather than reading bases, and they pull
+in opposite directions, so no clip threshold fixes both:
+
+- **Correct 40-49 bp insertions can FAIL.** Under bwa-mem2's default penalties
+  an `I` costs `6 + SVLEN` and a clip costs 5, so a read with fewer than about
+  SVLEN bases on one side of the insertion scores better clipped. Near 50 bp
+  that is almost every read, and below 50 a clip does not count. (At a 40 bp
+  insertion, all 11 reads carrying it were clipped.) On the 35x HG002 BAM, correct spike-ins at 8 sites
+  failed `ins_reads` 0 of 8 times at 20 and 30 bp, 1 of 8 at 40 bp, 5 of 8 at
+  45 bp and **8 of 8 at 49 bp**. `ins_sequence` passed all 40.
+- **An insertion that is not there can PASS at 50 bp and up.** With nothing
+  planted, 12 of 200 random chr20 sites and 46 of 200 sites in simple repeats
+  already have two reads clipped by 50 or more bases within 100 bp (measured
+  with `spike validate` itself). At the random sites most (9 of 12) are
+  scattered clips, not a breakpoint.
+- Counting clips from 20, 30 or 40 bp would fix the first and worsen the
+  second: 22, 18 or 15 random sites and 64, 58 or 50 repeat sites.
+
+So a FAIL on `ins_reads` for a 40-49 bp insertion usually means bwa-mem2 clipped
+the reads, not that the insertion is missing: look at `ins_sequence`. And a PASS
+at 50 bp or more is weaker evidence than two reads suggests.
 
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
 and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at

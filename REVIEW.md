@@ -5459,3 +5459,65 @@ master binary, 12 threads.
 of alt reads that still carry an `I` falls with length: about half at 20 bp, 15% at 40 bp,
 and near none at 49 bp. So today's `ins_reads` should fail rarely at 20-30 bp, sometimes at
 40 bp, and nearly always at 45-49 bp.
+
+#### Result: RF11 -- refuted; no code
+
+`scripts/rf11_score.py` on K2 (`rf11_count.py sites` over the unedited 35x BAM) and K1 (40
+`slice_loop.sh` runs, binary built from `b269427` in its own target dir, md5
+`da8818724d916eda68aa9e20f29cad12`):
+
+```
+K2, null sites passing (>= 2 reads):
+  null-rand (200 sites): today at 50 bp 12; today I-only at {20: 0, 30: 0, 40: 0, 45: 0, 49: 0}
+  null-rep (200 sites): today at 50 bp 46; today I-only at {20: 0, 30: 0, 40: 0, 45: 0, 49: 0}
+  floor 20: fix passes {'null-rand': 22, 'null-rep': 64} vs allowed max(2, today at 50) -> does not qualify
+  floor 30: fix passes {'null-rand': 18, 'null-rep': 58} vs allowed max(2, today at 50) -> does not qualify
+  floor 40: fix passes {'null-rand': 15, 'null-rep': 50} vs allowed max(2, today at 50) -> does not qualify
+  F* = None
+
+K1: 40 of 40 runs reached validate
+  replica vs validate's observed: 40 of 40 equal
+  today's ins_reads, failing runs by length:
+    20 bp: 0 of 8 fail   observed [16, 9, 8, 16, 9, 13, 9, 21]
+    30 bp: 0 of 8 fail   observed [9, 9, 6, 7, 9, 10, 9, 8]
+    40 bp: 1 of 8 fail   observed [3, 3, 5, 3, 3, 1, 5, 3]
+    45 bp: 5 of 8 fail   observed [0, 2, 0, 0, 1, 0, 2, 3]
+    49 bp: 8 of 8 fail   observed [0, 0, 0, 0, 0, 0, 0, 0]
+
+Verdict:
+  REFUTED: no floor keeps the null sites within the allowance
+```
+
+- **The controls hold.**
+  - The replica matches `validate` on 40 of 40 K1 runs.
+  - It is not a vacuous match: at MAPQ 0 instead of 20, it mismatches on 2 of 40.
+  - The null counts were checked with spike itself, not only the replica. A truth VCF
+    with an `SVTYPE=INS;SVLEN=50` `<INS>` record at each of the 400 null sites, run through
+    `spike validate` on the unedited BAM, gives `ins_reads` observed equal to the replica's
+    on 400 of 400, and PASS at 12 and 46 sites.
+- **The prediction held.** Today's `ins_reads` fails 0 of 16 at 20-30 bp, 1 of 8 at 40 bp,
+  5 of 8 at 45 bp and 8 of 8 at 49 bp: 14 of 40 correct insertions. The advisory
+  `ins_sequence` passes 40 of 40.
+- **Why the fix fails: today's rule already passes empty sites.** A 50 bp insertion that is
+  not there passes `ins_reads` at 12 of 200 random sites (6%) and 46 of 200 simple-repeat
+  sites (23%). That is today's allowance, and every lower floor adds to it.
+  - At 9 of the 12 random sites, the clips of 50 bp or more are scattered: no two at one
+    position.
+  - Of those 9 sites' clipped reads, 1 carries `SA:Z`, and TLEN runs from 98 to 1217.
+    Two reads at chr20:59188032 come from 98 bp fragments, where the read runs into
+    adapter.
+  - At the repeat sites, 21 are scattered and 25 have two or more clips at one point.
+- **So RF11 is not a hole in the threshold.** A CIGAR count cannot tell a correct 40-49 bp
+  insertion from an empty site. Lowering the floor trades false FAILs for false PASSes.
+- **What changed instead.** No code. The README's `ins_reads` section says:
+  - what the check gets wrong in both directions, with these numbers;
+  - that the check's two reads need not be at one point;
+  - that a 40-49 bp FAIL usually means bwa-mem2 clipped the reads, so look at
+    `ins_sequence`.
+- **Filed, not fixed: RF13.** Today's non-advisory `ins_reads` passes an absent insertion of
+  50 bp or more at 6% of random empty sites and 23% of simple-repeat ones. It is a silent
+  PASS.
+- **Possible directions** need a new locked plan on **fresh** sites, since these have been
+  seen:
+  - requiring the clips to share a breakpoint, within a few bp of each other;
+  - making the default row read bases, as `ins_sequence` does (CR9's territory).
