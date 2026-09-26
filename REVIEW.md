@@ -3416,7 +3416,7 @@ the exit status.
 | T1 | `spike validate` reports the census spike recorded, advisory; `--strict` | Supported, done (`d9cf476`) |
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
-| T4 | CR4 on a real hard locus (measurement only) | Plan locked |
+| T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Not started |
 | T6 | INS sequence identity, advisory | Not started |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
@@ -4050,3 +4050,95 @@ spike still runs. **Locked here, before any `SIM_RESIST` from a second-tier run 
 - Every refused window met on the way down is reported with its `low_share` and its refusal, so the
   walk is auditable rather than a search that stopped where it liked.
 - **No threshold is changed either way.**
+
+#### Result: T4 -- supported. The resistant warning does fire on real data
+
+Measurement only; no production code changed. Master's binary (`985e50f`, md5 `2dd58097…`),
+`scripts/t4_hard_loci.py` for the scan, `--seed 1` for every run, against
+`HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam`.
+
+**The scan.**
+
+```
+# scanned 645 windows of 10000 bp every 100000 bp on chr20
+# median any_depth 43.06; eligibility [21.53, 86.11]
+# eligible 627; excluded 18
+```
+
+The 18 excluded are the centromeric and telomeric `N` runs and their edges -- excluded by the
+eligibility rule, as the plan required, not by a blacklist. Hardest and easiest eligible windows:
+
+```
+HARD  chr20:27200000-27210000  low_share=0.9996  any_depth=73.54  n=4929
+HARD  chr20:27300000-27310000  low_share=0.9990  any_depth=60.57  n=4066
+HARD  chr20:27000000-27010000  low_share=0.9990  any_depth=59.17  n=4035
+EASY  chr20:600000-610000      low_share=0.0000  any_depth=45.90  n=3099
+EASY  chr20:2000000-2010000    low_share=0.0000  any_depth=41.65  n=2809
+EASY  chr20:4300000-4310000    low_share=0.0000  any_depth=45.19  n=3044
+```
+
+**C1, the extreme tier: inconclusive, and informative.** All six runs on the three hardest windows
+**refused**, exit 1, empty output directory:
+
+```
+Error: event chr20:27200000-27210000 has no donor coverage at any of its breakpoints
+(chr20:27199999, chr20:27210000): the pool holds 136 read pair(s) but none of them cover that.
+```
+
+136, 115 and 140 pairs respectively, out of roughly 4,000-4,900 reads in each window: at 99.9% of
+reads below MAPQ 20 the pool is essentially empty and no pair reaches a breakpoint. N5/N12's
+refusal working exactly as designed. Six refusals is more than the two the plan allowed, so C1 is
+inconclusive at the extreme -- **at chr20's hardest real loci the warning cannot fire because
+there is no run to warn about.**
+
+**C1', the hardest loci spike accepts: supported, 6 of 6.** Walking down the eligible ranking,
+**6 windows were refused** before three were accepted at ranks 5, 6 and 9 -- the first two for no
+breakpoint coverage, ranks 7 and 8 for `has too few` donor reads. The three accepted:
+
+| tier | event | exit | `SIM_RESIST` | `SIM_DEPTH_FOLD` | resist warned | fold warned |
+| --- | --- | --- | --- | --- | --- | --- |
+| hard | `del:chr20:26700000-26710000` | 0 | **0.998** | 1.57 | **yes** | yes |
+| hard | `dup:chr20:26700000-26710000` | 0 | **0.998** | 1.57 | **yes** | yes |
+| hard | `del:chr20:27100000-27110000` | 0 | **0.997** | **15.44** | **yes** | yes |
+| hard | `dup:chr20:27100000-27110000` | 0 | **0.997** | **15.71** | **yes** | yes |
+| hard | `del:chr20:28200000-28210000` | 0 | **0.995** | 1.65 | **yes** | yes |
+| hard | `dup:chr20:28200000-28210000` | 0 | **0.995** | 1.68 | **yes** | yes |
+| control | `del:chr20:600000-610000` | 0 | 0.007 | 1.13 | no | no |
+| control | `dup:chr20:600000-610000` | 0 | 0.007 | 1.22 | no | no |
+| control | `del:chr20:2000000-2010000` | 0 | 0.004 | 1.11 | no | no |
+| control | `dup:chr20:2000000-2010000` | 0 | 0.004 | 1.16 | no | no |
+| control | `del:chr20:4300000-4310000` | 0 | 0.005 | 1.09 | no | no |
+| control | `dup:chr20:4300000-4310000` | 0 | 0.005 | 1.19 | no | no |
+
+The warning, verbatim from the first:
+
+```
+DEL  chr20:26700001-26710000 (10000bp): 3673 of 3679 reads over it (100%) are ones spike cannot
+edit (below --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the merged
+BAM as they are, so the event is weaker than requested; truth.vcf records the share as SIM_RESIST
+(CR4).
+```
+
+**C2, the control: passes, 0 of 6.** The three easiest windows give `SIM_RESIST` 0.004 to 0.007,
+inside CR4's C4 range of 0.003 to 0.083, and neither warning printed on any of the six. The scan
+separates what it claims to separate.
+
+**C3, every run accounted for.** 24 runs in all: 6 refused at the extreme tier, 6 refused during
+the walk (each reported above with its `low_share` and reason), 6 accepted hard runs and 6 control
+runs. No run is unexplained.
+
+**So CR4's open question is answered.** Its result said *"Not measured: a real locus where the
+warning should fire ... a hard real locus (a segmental duplication, say) has not been tried."* It
+fires, hard: `SIM_RESIST` goes from a maximum of **0.083** across 40 ordinary benchmark loci to
+**0.995-0.998** in chr20's pericentromere, with nothing in between measured. The threshold of 0.10
+sits in a gap two orders of magnitude wide on this data, and **it is not changed here** -- picking
+a number now would be choosing it after seeing its distribution.
+
+**What the accepted hard runs reveal beyond T4's question, and it is the more serious finding.**
+Spike **accepts** an event whose breakpoint donor depth is **0.2x** (ranks 5 and 6) or **0.7x**
+(rank 9). `donor_coverage_for_tiling` refuses only when the coverage is zero or NaN, so at 0.2x it
+plants `0.2 x VAF` fragments -- a handful -- while 99.7% of the 5,749 reads over the event stay
+exactly as they were. The run exits **0** and writes a truth VCF claiming a 10 kb deletion. Both
+warnings fire, which is what the census is for; but nothing refuses, and the `SIM_DEPTH_FOLD` of
+**15.71** at rank 6 is the depth model being asked to scale a 17.2x bin by a 0.2x anchor. Filed as
+**RF8**.

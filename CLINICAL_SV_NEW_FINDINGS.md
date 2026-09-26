@@ -225,3 +225,29 @@
   which this run's standing choice forbids. The run README is not part of that promise (it "may
   gain lines"), so a per-event bin column there would be the cheap fix, and it is a design decision
   rather than a defect.
+
+### RF8 — spike accepts an event whose donor depth at the breakpoint is 0.2x
+
+- **Where:** `simulate::donor_coverage_for_tiling` (`src/simulate.rs:453`). Its `covered` test is
+  `!cov.is_nan() && cov > 0.0`, so **any** non-zero coverage is enough; the tiling count is then
+  `cov x VAF`.
+- **What:** on `chr20:27100000-27110000` (99.69% of reads below MAPQ 20, 84x of any-MAPQ depth), the
+  pool's depth at the breakpoint spike scaled by is **0.2x**. Spike accepts, plants `0.2 x VAF`
+  fragments, exits **0**, and writes a truth VCF claiming a 10 kb deletion — while **5731 of the
+  5749 reads over the event (99.7%) stay exactly as they were**. Both censuses warn
+  (`SIM_RESIST=0.997`, `SIM_DEPTH_FOLD=15.44`, that fold being a 17.2x bin scaled by a 0.2x
+  anchor), so the run is not silent; but nothing refuses it, and a user who reads only the exit
+  status gets a truth VCF for an event that was barely simulated.
+- **How I know:** measured in T4 on the 35x HG002 BAM with master's binary and `--seed 1`. Two more
+  loci behave the same way: `chr20:26700000-26710000` scaled by 0.2x at `SIM_RESIST=0.998`, and
+  `chr20:28200000-28210000` scaled by 0.7x at 0.995. The three windows one rank harder are refused
+  outright for *zero* breakpoint coverage, so the accept/refuse boundary on this data sits between
+  0.0x and 0.2x.
+- **Severity:** Medium-High for anyone spiking into difficult regions. It is the same family as
+  CR4 — the pool's filter decides what can be simulated — but sharper: here the pool is not merely
+  incomplete, it is two orders of magnitude thinner than the locus, and the run still succeeds.
+- **Not fixed:** a coverage floor would make runs that succeed today start failing, which this
+  run's standing choice forbids. The conservative alternatives are a **warning** when the scaling
+  depth is far below the event's any-MAPQ depth (which `SIM_DEPTH_FOLD` already half-says), or an
+  opt-in `--min-donor-depth`, which would be a new flag and so out of this run. **It is a decision
+  for the human**, recorded with the numbers above.
