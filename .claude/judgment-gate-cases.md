@@ -125,3 +125,19 @@ what was claimed, what the claim actually rested on, and which gate would have c
   it*). **Rule for this repo: before changing what a check counts as evidence, measure the current
   rule's pass rate where the event is absent, at the threshold in use. A false FAIL is visible; a
   false PASS is not, and only a null test finds it.**
+
+## 2026-09-26 -- RF13: a mismatch tolerance larger than the part of the probe that decides
+
+- **What the plan set out to show.** A row counting spike's own reads that carry a 31-base
+  junction probe, within 2 substitutions, would pass correct insertions and fail wrong ones.
+  It was locked, then the kill test ran.
+- **What it rested on.** That 2 substitutions are small next to the difference between a
+  right and a wrong truth record. The tolerance was sized for the sample's SNPs and
+  sequencing errors across the whole probe. For a 4 bp insertion, the part that tells right
+  from wrong is 4 bases, and a wrong one often differs in only 2. N2 matched on 3 of 6.
+- **How it was caught.** The locked K- test with wrong letters, at the shortest length in the
+  set. The smoke test had been on a 40 bp insertion only.
+- **Which gate would have caught it earlier.** Gate A step 5 (*what must be true of the
+  inputs*), over the whole input range. **Rule for this repo: a tolerance in a matching rule
+  is checked against the smallest discriminating part of the input, not the average one.
+  Name the shortest case, and put it in the smoke test.**

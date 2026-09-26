@@ -5690,3 +5690,42 @@ RF11's).
 - **C2.** The Rust row's observed count equals the replica's on every K positive and on
   N2 and N3.
 - **C3.** On the K positives, the new exit status is reported beside master's.
+
+#### Result: RF13 -- refuted as locked, by K- on 4 bp insertions; no code
+
+`scripts/rf13_k.sh` with the master binary (md5 `da8818724d916eda68aa9e20f29cad12`), then
+`scripts/rf13_planted.py k` and `null`:
+
+```
+K+ runs reaching validate: 53 of 54
+K+ carriers >= 1: 53 of 53  (min 3, median 21)
+K- negatives with a carrier: 3 of 212 [('r_14005652_4', 'N2 wrong letters', 17), ('r_40508557_4', 'N2 wrong letters', 22), ('r_47532532_4', 'N2 wrong letters', 13)]
+check of the check, hg sites' unspiked slice with the name filter off: [('h_12473053', 51), ('h_22882762', 37), ('h_23794277', 15), ('h_46656268', 52), ('h_47225596', 14), ('h_50258483', 57), ('h_53415694', 56), ('h_60439008', 36), ('h_62440029', 104), ('h_63226559', 51), ('h_64042917', 41)]
+N5 null sites passing: 0 of 200
+```
+
+- **K+ holds.** 53 of 54 runs reached `validate`. The 54th, `h_57350857`, was refused by
+  spike under RF8 (`SIM_RESIST` above 0.5), as designed. All 53 have spike's reads carrying
+  the insertion, including the 12 real HG002 ones and the 6 at VAF 0.1 (3 to 6 carriers each).
+- **The check of the check holds.** With the name filter off, HG002's own reads carry at 11
+  of 11 real sites (14 to 104 reads). So the filter is what keeps them out.
+- **K- fails: 3 of 212.** All three are N2, wrong letters, on a **4 bp** insertion
+  (`r_14005652_4`, `r_40508557_4`, `r_47532532_4`, with 17, 22 and 13 carriers). N1, N3
+  and N4 had 0 carriers on every run, and N5 0 of 200.
+- **Why.** The tolerance of 2 substitutions covers the whole 31-base probe, including the
+  inserted bases. A 4 bp insertion with wrong letters differs from the right one in at most
+  4 positions, and random letters often agree at 2 or more of them. So the wrong truth
+  matched within 2. The tolerance was meant for the sample's SNPs and sequencing errors. It
+  was never checked against the part of the probe that tells right from wrong, which for a
+  short insertion is smaller than the tolerance.
+- **Reported, not judged** (today's `ins_reads`, by `rf11_count.py`'s replica on N1):
+  - it FAILs 10 of the 53 correct positives: 8 of the 12 random runs at 45 bp, and 2 of the
+    11 real ones;
+  - on the unspiked slices it PASSes 10 of 11 real HG002 sites, where HG002 carries the
+    insertion itself, and 2 of 42 random runs.
+- **What a next attempt would change.** Allow substitutions only in the reference flank
+  bases, and require the inserted bases exactly. `apply_variants` skips a segment with no
+  reference origin (`src/haplotype.rs:612`, "novel insertion"), so no sample SNP lands in
+  inserted sequence. A sequencing error in the inserted bases would drop
+  that read, and how often that empties the row at low VAF is **not measured**. That is a new
+  rule, and it needs its own locked plan on fresh sites, since these have been seen.
