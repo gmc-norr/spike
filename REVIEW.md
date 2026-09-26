@@ -3418,7 +3418,7 @@ the exit status.
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
-| T6 | INS sequence identity, advisory | Not started |
+| T6 | INS sequence identity, advisory | Plan locked |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
 
 The real-data loop every measuring step uses is `scripts/slice_loop.sh` (`ab61c6c`): one event
@@ -4326,3 +4326,103 @@ listing eight -- corrected in `764cba9`'s body rather than by amending history.
 neither checks strand, the CIGAR-implied breakpoint, sequence, or allele fraction -- CR9's documented
 limit, unchanged. The row is strictly stricter than the pooled one, so RF6's 4 of 40 is its floor:
 of its six failures, four are the pooled check's own and only two are its own contribution.
+
+### T6 -- INS sequence identity, advisory
+
+#### Plan: T6, the inserted-sequence row (locked before any code or measurement)
+
+**Why.** CR9's documented limit: `ins_reads` "works from the CIGAR alone and never reads the
+inserted bases". CR7's fix put the sequence in the truth VCF, so it can now be read. Verified before
+planning: `ins:chr20:1136743:200` with a **random** sequence writes `REF=A` and an ALT of **201**
+bases -- the anchor plus all 200 inserted -- so an explicit sequence is not needed for the row to
+have something to check.
+
+**Claim.** A row that looks for the truth record's own inserted bases in the reads at the insertion
+fails an insertion whose reads carry *different* inserted bases -- which `ins_reads` passes, since
+the CIGAR is the same -- passes correct insertions, and costs no more than the locked bar on correct
+real data.
+
+**Metric.** A new advisory row **`ins_sequence`** (12 characters, fits the 18-wide Check column), for
+`INS` events only.
+
+- It applies when the truth record's ALT is a **literal sequence**: it does not begin with `<` and is
+  longer than one base. A symbolic `<INS>` ALT gets **no row** -- the sequence was not recorded, and
+  an older spike's truth VCF is not a FAIL. Same rule as T1's missing census fields.
+- `inserted` = the ALT bytes after the first, the anchor base.
+- `k = min(len(inserted), 31)`. **If `k < 12` the row is not evaluable** and reports as such: a
+  k-mer shorter than 12 bases is not specific enough inside a 150 bp read (a given random 12-mer is
+  expected in about one read in 10^5, an 8-mer in one in 400). The bound 12 is set here, before any
+  count is seen.
+- Two probe k-mers: `inserted[..k]` and `inserted[len-k..]` -- the **first** and **last** k bases,
+  not the middle. A read anchored left of POS carries the insertion's beginning and a read anchored
+  right of it carries the end, and for an insertion longer than a read **no read contains the
+  middle at all** -- a 2000 bp insertion's middle k-mer sits 1000 bases in, past the reach of any
+  151 bp read. For `len(inserted) <= k` the two k-mers are the same.
+- A read **supports** the sequence if its own bases contain either probe k-mer, **in either
+  orientation** (forward or reverse-complement), since a read's stored sequence is in reference
+  orientation but the insertion may be read from either side.
+- **Counted:** distinct read names over `[POS - 150, POS + 150]` that are mapped, primary (not
+  secondary, not supplementary), non-duplicate, non-QC-fail, and at or above `--min-mapq` -- the same
+  `usable_alignment` filter `ins_reads` applies, reused rather than restated.
+- **Guard, because the reference can contain the k-mer too.** If either probe k-mer occurs in the
+  reference within 1 kb of POS, the row is **not evaluable** and says so: an unedited read would
+  then match and the count would mean nothing. A random insertion makes this vanishingly unlikely,
+  but an explicit one copied from nearby sequence does not.
+- **Floor:** 2 supporting reads, the same value and the same reasoning `check_ins_reads` uses -- one
+  is background anywhere, two at the same point are not. The constant is shared with `ins_reads`
+  rather than duplicated.
+- `expected`: `>=2 with a <k>bp alt kmer` (24 characters at k = 31 or 12, so it survives the 24-wide
+  Expected column exactly). `observed`: the supporting count.
+- It is **always advisory**.
+
+A not-evaluable row reports as a **failed** row, which is this codebase's standing rule (M10, M11:
+"a check that cannot run is a FAILED check, never a silent pass"). Because the row is advisory that
+costs nothing in the exit status, and it is visible rather than silent.
+
+**Criteria.** Each is run and its real output recorded in the result commit and in STATUS.md.
+
+- **C1, it must reject different inserted bases.** Two spike runs at the **same** locus with two
+  **different** explicit sequences of the same length; validate run A's merged BAM against run B's
+  truth VCF. The reads genuinely carry other bases. `ins_sequence` reads `FAIL (advisory)`;
+  `ins_reads` on the same input is reported as it comes, and if it also fails, that is recorded
+  rather than glossed -- the claim that the two rows separate is C1's to establish, not to assume.
+  A unit test pins the same separation on a fixture.
+- **C2, it must accept correct insertions.** The same run A validated against its **own** truth VCF:
+  `ins_sequence` reads `PASS (advisory)`.
+- **C3, the default is unchanged.** On the C1/C2 runs: the same exit status under master's binary and
+  T6's, non-advisory rows byte-identical once the advisory rows and the summary line are removed,
+  `spike --help` byte-identical, `validate --help` gaining no flag. **And** across all of C4's runs
+  the `ins_reads` row's `expected`, `observed` and `pass` must be unchanged event by event against
+  the pre-T6 binary on the same merged BAM (the `BEFORE_SPIKE` hook in `scripts/slice_loop.sh`), as
+  T5's C3 did for `split_reads`.
+- **C4, its false-failure rate on correct real insertions of mixed length.** **24 insertions**: four
+  at each of **50, 100, 250, 500, 1000 and 2000 bp**, at the **first 24 starts of the seeded
+  placement list** (`scripts/cr4_placements.py`, output md5 `8f30486221e221e76c7a863ae0755c4b`), so
+  the positions are the already-fixed list and only the lengths are new. Each as
+  `ins:chr20:<pos>:<len>` with a random sequence, run on its own ±100 kb slice of the 35x HG002 BAM
+  through `scripts/slice_loop.sh`. **`ins_sequence` fires on at most 4 of 24 (about 20%)**, the same
+  width CR4's and CR2's C4 used, set here before any count is seen. An event spike or the loop
+  refuses is reported and left out; more than 4 refusals, or fewer than 20 scored, makes C4
+  inconclusive. The per-length breakdown is reported whatever the total, since the row's reach into a
+  long insertion is the thing most likely to differ by length.
+- **C5, the gates.** `cargo test` at 511 passed / 0 failed or better; clippy 13 (bin) / 14 (test) or
+  fewer.
+
+**Outcome rules.**
+
+- C1-C5 pass: supported, keep.
+- **C1 or C2 fails:** the row does not measure what it claims. Revert the code.
+- **C3 fails:** the default changed, or the `ins_reads` row moved. Revert the code.
+- **Only C4 fails:** the row stays -- it is advisory -- but **no new floor, k, or window is chosen
+  after seeing the distribution.** README records the measured rate and the per-length breakdown, and
+  any change goes to the human as a design note to be locked by a new plan.
+
+**Known limits, stated before measuring.**
+
+- The row checks that the inserted bases are *present*, not that they are present at the right
+  offset, in the right orientation, in the right number, or at the right allele fraction. A read
+  carrying the k-mer anywhere in its 151 bases counts.
+- It cannot see an insertion longer than about twice a read length in the middle: only its first and
+  last `k` bases are ever reachable. For a 2000 bp insertion the row verifies 62 of 2000 bases.
+- It reads the truth VCF's ALT, so a truth VCF edited between the run and the validation is believed
+  -- which is exactly what makes C1 measurable.
