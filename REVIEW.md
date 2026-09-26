@@ -5219,3 +5219,52 @@ Any miss in K1, K2 or K3 refutes the rule as locked, and no code is written.
 read the same alignments later.
 
 **Outcome rules** are as in the first plan.
+
+#### Result, second attempt: REFUTED by the kill test on real SV sites (no code written)
+
+Fresh `real_events.sh` runs with master's binary `c0c9614` (md5
+`5ec1f7f5ff23303dfdda2aadcb3e9660`). spike accepted all 70 events. Master's validate passed
+37 of 40 on chr1, 5 of 20 on the pipeline set and 6 of 10 on the chr20 subset.
+`scripts/rf6_kill2.py` on chr1 and the pipeline set:
+
+```
+K1 master-passing events kept passing: 41 of 42  ['pipeline/9']
+K2 donor carriers == 0: 45 of 50  ['pipeline/3', 'pipeline/9', 'pipeline/10', 'pipeline/16', 'pipeline/17']
+K3 shifted carriers == 0: 59 of 60  ['pipeline/14']
+K1b split_reads FAIL events the row would pass: 3 of 16
+K: FAIL
+```
+
+- **On random spots it works.** On chr1's 40, all three held: master-passing events all keep
+  at least 2 carriers with the guard silent (guard distance 7-13), and the unspiked donor
+  and `END + 50` show 0 carriers on 40 of 40.
+- **On real SV sites it cannot work.** The junction of a real deletion is often reference
+  sequence already: at **14 of the pipeline's 20** sites, `J` is within 2 substitutions of
+  the reference within 1000 bp of a breakpoint (guard distance 0 on 10, 1 on 3, 2 on 1).
+  That is a deletion of repeat units, or between two copies of a repeat. There an unedited
+  read spells the junction too, and no sequence probe can tell edited reads from unedited
+  ones. The guard turns them into not-evaluable failures, which is how `pipeline/9` (master
+  passes) fails K1.
+- **K2's exclusion was naive.** Where the guard distance is 0, the donor holds `J` exactly
+  because the *reference* does, not necessarily because the background has the deletion.
+
+**Also measured, and bigger than RF6.**
+- **Master's validate on real SV sites.** It fails 15 of the pipeline's 20 real HG002
+  deletions spiked into NA18488 (with `--allow-resistant`): `split_reads` on 13 and
+  `coverage_ratio` on 9.
+- **The background is not clean at those sites.** The unspiked NA18488 slice's own depth,
+  inside the event over the 1 kb flanks at any MAPQ, is at most 0.62 at 10 of the 20 sites:
+  0.29, 0.62, 0.57, 0.24, 0.59, 0.24, **0.00**, 0.55, 0.35 and 0.38 at events 1, 7, 10, 13,
+  14, 15, 16, 17, 19 and 20.
+  - Event 16 (`chr20:63093345-63094243`) has no read at all across 898 bp, against 32.8x
+    flanks. That is what a deletion on both copies looks like.
+  - So `validate_pipeline.sh`'s "clean 1000 Genomes background" appears to already carry a
+    large share of the HG002 deletions it measures recall on. Filed as **RF12**.
+
+**Verdict.** RF6's junction row is refuted twice, and the outcome rule says no code. What
+survives is measured:
+- On random spots, `split_reads` false-fails 4 of 40 on chr20 and 3 of 40 on chr1 (one of
+  those three also fails `mean_mapq`).
+- On real SV sites, validate's DEL checks as a whole are unreliable.
+
+That is CR9's territory (the validate redesign), not a one-row patch.
