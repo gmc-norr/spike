@@ -3418,7 +3418,7 @@ the exit status.
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
-| T6 | INS sequence identity, advisory | Plan locked |
+| T6 | INS sequence identity, advisory | Supported, done (`02a2ecc`) |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
 
 The real-data loop every measuring step uses is `scripts/slice_loop.sh` (`ab61c6c`): one event
@@ -4426,3 +4426,105 @@ costs nothing in the exit status, and it is visible rather than silent.
   last `k` bases are ever reachable. For a 2000 bp insertion the row verifies 62 of 2000 bases.
 - It reads the truth VCF's ALT, so a truth VCF edited between the run and the validation is believed
   -- which is exactly what makes C1 measurable.
+
+#### Result: T6 -- supported
+
+Code `02a2ecc`, reviewed (spec ✅, quality **Approved** -- no Critical, no Important) and its Minor
+findings fixed in `06b9689`. Binaries in their own target dirs and md5'd (NF4): base `985e50f`
+`2dd58097…`, before-T6 (T5's fixed code) `ab45463e…`, T6 `02a2ecc` `f13c9cf9…`, T6 fixed `06b9689`
+`a7bf36c2…`.
+
+- **C1 pass -- it rejects different inserted bases, measured end to end.** Two runs at
+  `chr20:1136743` with two different explicit 200-base sequences (`AGGAGCTTCG…` and `CCGCGCTGTC…`,
+  both writing a 201-base ALT), then run **A's** merged BAM validated against run **B's** truth VCF:
+
+  ```
+  INS chr20:1136743 (unknown)         ins_reads          >=2 reads with >=50bp...  21              PASS
+  INS chr20:1136743 (unknown)         ins_sequence       >=2 with a 31bp alt kmer  0               FAIL (advisory)
+  ```
+
+  The reads genuinely carry other bases. **`ins_reads` still passes at 21** -- it works from the
+  CIGAR alone, which is CR9's documented limit, and the two rows disagreeing on this one input is
+  exactly what T6 was for. Exit is **0** without `--strict`, so nothing that passes today fails.
+- **C2 pass -- it accepts a correct insertion.** The same run A against its **own** truth VCF:
+  `ins_sequence >=2 with a 31bp alt kmer 22 PASS (advisory)`, in a `Result: 7/7 PASS`, exit 0.
+- **C3 pass -- the default is unchanged, and `ins_reads` did not move on any of the 24.** On the C1/C2
+  runs, master's binary and T6's give the same exit status (0 and 0) and the non-advisory rows are
+  byte-identical (`diff` empty). `spike --help` is byte-identical to master's and `validate --help` to
+  T1's -- no flag added. Across all 24 of C4's runs, each validated by both the pre-T6 and the T6
+  binary against **its own** merged BAM through the `BEFORE_SPIKE` hook:
+
+  ```
+  ins_reads rows or exit statuses that MOVED vs the pre-T6 binary: 0
+  ```
+- **C4 pass -- it fires on 0 of 24, against a bar of 4.** The 24 locked insertions -- four at each of
+  50, 100, 250, 500, 1000 and 2000 bp, at the first 24 starts of the seeded placement list -- each on
+  its own ±100 kb slice of the 35x HG002 BAM:
+
+  ```
+  events=24 scored=24 refused_by_spike=0 no_report=0
+  ins_sequence: present on 24 of 24 scored, FAIL on 0
+    ins_sequence observed: min 10.00 median 23.00 max 34.00 (n=24)
+  ins_reads: present on 24 of 24 scored, FAIL on 0
+    ins_reads observed: min 5.00 median 21.00 max 33.00 (n=24)
+  ```
+
+  Per length, as the plan required whatever the total:
+
+  ```
+     50 bp: FAIL on 0 of 4   14  20  10  13
+    100 bp: FAIL on 0 of 4   19  23  20  26
+    250 bp: FAIL on 0 of 4   19  20  29  11
+    500 bp: FAIL on 0 of 4   19  20  21  29
+   1000 bp: FAIL on 0 of 4   29  28  34  23
+   2000 bp: FAIL on 0 of 4   26  30  34  24
+  ```
+
+  **The count does not fall off with length**, which is the one thing that could have: the probes are
+  the insertion's first and last 31 bases, and a read reaches those from either side whatever sits
+  between them. Had the plan used the *middle* k-mer, every 1000 and 2000 bp event would have read 0.
+- **C5 pass -- the gates.** `cargo test`: `527 passed; 0 failed; 1 ignored` (T5 left 511; 16 added,
+  none removed). Clippy `13` (bin) / `14` (test), unchanged.
+
+**The reviewer approved the row and named eight Minor issues; six were fixed in `06b9689`.** The two
+that mattered were both about evidence rather than behaviour:
+
+- **The reference guard's reverse-complement half was pinned by no test of its own.** The existing
+  test put the probe in the reference in its *forward* orientation, so it could not tell a
+  both-orientations guard from a forward-only one. A new fixture puts **only the reverse complement**
+  near POS, and the forward-only mutation now reddens it at `left: "5" right: "kmer in ref"` -- the 5
+  being 3 edited reads **plus the 2 unedited ones the guard exists to exclude**. The guard is right as
+  built and now says so: a read's stored sequence is reference-forward, and the read predicate matches
+  either orientation, so a reference holding `revcomp(probe)` within 1 kb would have an unedited read
+  counted as support.
+- **Case-insensitivity was unpinned.** Both `to_ascii_uppercase()` calls could be deleted with no test
+  reddening, because every fixture was already uppercase -- while a lowercase truth ALT is legal VCF.
+  Two new tests pin it, and deleting each call in turn reddens exactly one of them.
+- Also fixed: a doc link pointing at the check-name constant instead of the reader; an in-code comment
+  claiming `print_usage` lists every row from the same constants (it names five of eight, and the
+  three advisory rows are in README only, so a renamed advisory row **can** print one name and
+  document another -- the comment now states the hazard instead of the reassurance); and a README
+  sentence whose *reason* was wrong ("only the first and last k bases are ever inside a read" -- about
+  a read length at each end is reachable; 62 of 2000 is what the 31-base probes cover).
+
+**A ledger correction the reviewer caught.** T6's report claimed a multi-allelic ALT yields probes
+containing a comma that match no read. That holds only when the **first** ALT allele is shorter than
+`k`: with both alleles at least 31 bases the probes are comma-free and the row grades against a
+*mixture* of two alleles -- allele 1's start and allele 2's end. spike writes exactly one ALT per INS
+record (`src/truth.rs`), so only a hand-made VCF reaches either case. Not fixed: splitting on `,` is
+not in the locked rule.
+
+**One behaviour change the reviewer flagged and the standing choice permits.** A `--strict` run can
+now exit 1 where it exited 0, for a truth VCF holding an INS shorter than 12 bases or one whose probe
+the reference also holds within 1 kb: those report *not evaluable*, which is a failed row, and
+`--strict` counts advisory rows. The standing choice protects the **default**, and `--strict` is new
+in this run, so no run that passes today is affected. Nothing in the repo passes `--strict`, and
+`scripts/validate_pipeline.sh` fails only when its total or pass count is zero, both of which only
+grow.
+
+**What T6 does not establish.** The row checks the bases are *present*, not that they are at the right
+offset, in the right orientation, in the right number, or at the right allele fraction: a read
+carrying the k-mer anywhere in its 151 bases counts. Only sequence near each end of an insertion is
+reachable at all, and of that the row probes 31 bases per end -- for a 2000 bp insertion it verifies
+62 of 2000. And it reads the ALT out of the truth VCF, so a truth VCF edited between the run and the
+validation is believed -- which is precisely what made C1 measurable.
