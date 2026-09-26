@@ -292,6 +292,25 @@ const SPLIT_READS_EACH_END: &str = "split_reads_each_end";
 /// these two points do not.
 const MIN_SPLIT_READS: usize = 2;
 
+/// The INS row's name: reads carrying the inserted sequence.
+const INS_READS: &str = "ins_reads";
+
+/// The small-variant row's name: the allele fraction read off the pileup.
+const ALLELE_FREQ: &str = "allele_freq";
+
+/// The "no check applies to this event" fallback row's name (M11).
+const EVENT_CHECKED: &str = "event_checked";
+
+// The seven check-name constants above name every row `check_event` pushes,
+// and `print_usage` lists the same rows from the same constants, so a renamed
+// row cannot print one name and document another. The boundary is deliberate
+// and stops there: `insert_size`, `dup_rate` and `mean_mapq` are `run()`'s
+// global rows rather than `check_event`'s, and `check_ins_reads` and the
+// allele-frequency path still spell their own names out where they build their
+// `CheckResult`s. Finishing those too would edit the allele-frequency path,
+// `check_ins_reads`, the three global checks and `run()`'s fallback list, for a
+// cosmetic idiom, with five non-advisory rows' printed text as the stake.
+
 /// Run every check that applies to one truth event, pushing one result per
 /// check. An event no check applies to gets one failed "not evaluable"
 /// result, so a truth VCF of such events cannot report all-PASS (M11).
@@ -350,14 +369,24 @@ fn check_event(
         // is re-wrapped rather than cloned (`anyhow::Error` is not `Clone`);
         // `{:#}` of the re-wrap is the same flattened chain the single row
         // printed before, so the pooled row's Observed did not move.
-        let (pooled, each_end) =
-            match check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq) {
-                Ok((pooled, each_end)) => (Ok(pooled), Ok(each_end)),
-                Err(e) => (
-                    Err(anyhow::anyhow!("{:#}", e)),
-                    Err(anyhow::anyhow!("{:#}", e)),
-                ),
-            };
+        let (pooled, each_end) = match check_split_reads(
+            &args.bam_path,
+            &args.ref_path,
+            event,
+            args.min_mapq,
+            &label,
+        ) {
+            Ok((pooled, each_end)) => (Ok(pooled), Ok(each_end)),
+            Err(e) => {
+                // One error, two rows: flatten the chain once and hand each
+                // row its own `anyhow::Error` over that one string.
+                let flat = format!("{:#}", e);
+                (
+                    Err(anyhow::Error::msg(flat.clone())),
+                    Err(anyhow::Error::msg(flat)),
+                )
+            }
+        };
         results.push(check_outcome(&label, SPLIT_READS, pooled, false));
         results.push(check_outcome(&label, SPLIT_READS_EACH_END, each_end, true));
     }
@@ -366,13 +395,13 @@ fn check_event(
     // type with no second breakpoint and no reference span of its own).
     if event.sv_type == "INS" {
         let r = check_ins_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-        results.push(check_outcome(&label, "ins_reads", r, false));
+        results.push(check_outcome(&label, INS_READS, r, false));
     }
 
     // Allele frequency (meaningful for SNPs/small variants).
     if event.sv_type == "SNP" && event.ref_allele.is_some() && event.alt_allele.is_some() {
         let r = check_allele_freq(&args.bam_path, &args.ref_path, event, nearby, args.min_mapq);
-        results.push(check_outcome(&label, "allele_freq", r, false));
+        results.push(check_outcome(&label, ALLELE_FREQ, r, false));
     }
 
     push_census_rows(&label, event, results);
@@ -390,7 +419,7 @@ fn check_event(
         log::warn!("no check applies to {}, so it was not evaluated", label);
         results.push(CheckResult {
             event_label: label.clone(),
-            check_name: "event_checked".to_string(),
+            check_name: EVENT_CHECKED.to_string(),
             expected: "a check applies".to_string(),
             observed: format!("none for {}", event.sv_type),
             pass: false,
@@ -515,12 +544,15 @@ fn print_usage() {
     eprintln!("  --help, -h       Show this help");
     eprintln!();
     eprintln!("Checks, by truth-event type:");
-    eprintln!("  DEL, DUP         coverage_ratio, split_reads");
-    eprintln!("  INV, BND         split_reads");
-    eprintln!("  INS              ins_reads (reads whose alignment leaves the");
+    eprintln!("  DEL, DUP         {}, {}", COVERAGE_RATIO, SPLIT_READS);
+    eprintln!("  INV, BND         {}", SPLIT_READS);
+    eprintln!("  INS              {} (reads whose alignment leaves the", INS_READS);
     eprintln!("                   reference at POS -- an I operation, or a soft clip");
     eprintln!("                   once the insertion is 50 bp or longer)");
-    eprintln!("  SNP, small indel allele_freq (a substitution from the pileup; a small");
+    eprintln!(
+        "  SNP, small indel {} (a substitution from the pileup; a small",
+        ALLELE_FREQ
+    );
     eprintln!("  and MNV          indel from each read's bases over it: nearer the");
     eprintln!("                   reference with the indel made carries it, nearer");
     eprintln!("                   the reference spans it, a tie does not vote; other");
@@ -534,7 +566,10 @@ fn print_usage() {
     eprintln!();
     eprintln!("A check that cannot run is a FAILED check, never a silent pass, so");
     eprintln!("exit 0 means every check ran and every check passed. An event type no");
-    eprintln!("check covers (e.g. SVTYPE=CNV) is reported as `event_checked FAIL`.");
+    eprintln!(
+        "check covers (e.g. SVTYPE=CNV) is reported as `{} FAIL`.",
+        EVENT_CHECKED
+    );
     eprintln!("The advisory rows are reported but left out of the exit status unless");
     eprintln!("--strict is given.");
 }
@@ -908,14 +943,17 @@ fn coverage_ratio_result(
 /// exists, since neither can see a read the other did not (NF5). Neither row
 /// is stamped advisory here -- `check_outcome` at the call site is the only
 /// place that flag is set.
+///
+/// `label` is the caller's own, not recomputed: `check_event` already holds it
+/// for its `check_outcome` calls, and one label now feeds two rows.
 fn check_split_reads(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
     min_mapq: u8,
+    label: &str,
 ) -> Result<(CheckResult, CheckResult)> {
     let pad = 500u64;
-    let label = format_event_label(event);
     let partner = event
         .partner
         .clone()
@@ -955,7 +993,7 @@ fn check_split_reads(
 /// which is why a junction whose every split read sits at one breakpoint fails
 /// it while the pooled row still passes.
 fn split_read_rows(
-    label: String,
+    label: &str,
     partner: &(String, u64),
     at_here: HashSet<String>,
     at_partner: HashSet<String>,
@@ -966,7 +1004,7 @@ fn split_read_rows(
 
     (
         CheckResult {
-            event_label: label.clone(),
+            event_label: label.to_string(),
             check_name: SPLIT_READS.to_string(),
             expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
             observed: format!("{}", pooled.len()),
@@ -974,9 +1012,19 @@ fn split_read_rows(
             advisory: false, // stamped by check_outcome
         },
         CheckResult {
-            event_label: label,
+            event_label: label.to_string(),
             check_name: SPLIT_READS_EACH_END.to_string(),
             expected: format!(">={} at each end", MIN_SPLIT_READS),
+            // `print_results_text` truncates Observed at 14 characters, which
+            // this pair reaches only once the two counts run to 14 digits
+            // between them. Measured against `truncate` itself, not reasoned
+            // about: `100000/1000000` (13 digits, 14 characters) is printed
+            // whole, `1000000/1000000` (14 digits, 15 characters) prints as
+            // `1000000/100...` and drops the partner count silently, and so
+            // does the lopsided `9/1000000000000`. That is a million distinct
+            // read names at each end of one 1 kb window, so it is unreachable,
+            // and `--json` prints the pair untruncated regardless. Nobody need
+            // re-derive this.
             observed: format!("{}/{}", n_here, n_partner),
             pass: n_here >= MIN_SPLIT_READS && n_partner >= MIN_SPLIT_READS,
             advisory: false, // stamped by check_outcome
@@ -4310,11 +4358,11 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         (0..20_000).map(|i| b"ACGT"[i % 4]).collect()
     }
 
-    // The four helpers below are the scaffolding every CRAM fixture in this
+    // The five helpers below are the scaffolding every CRAM fixture in this
     // module needs and none of them is about: a scratch directory, the FASTA
-    // and its `.fai`, the one-contig header, and the writer plus its `.crai`.
-    // Only the read plan and the record builder differ between fixtures, so
-    // only those stay written out (F3).
+    // and its `.fai`, the one-contig header, the writer plus its `.crai`, and
+    // one 100 bp record on chrA. Only the read plan differs between fixtures,
+    // so only that stays written out (F3, F4).
 
     /// A scratch directory of its own for one fixture, named after `tag` and
     /// this process, emptied first. The caller removes it.
@@ -4397,6 +4445,45 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         index_writer.write_index(&index).unwrap();
         index_writer.finish().unwrap();
         cram_path
+    }
+
+    /// One `TEST_READ_LEN`-long read of a one-contig chrA fixture: primary,
+    /// mapped, unmarked, not a duplicate, single-end, its bases taken from
+    /// `seq` at 0-based `start0` and its quality scores flat at 40. `tags`
+    /// carries whatever else the fixture needs -- an `SA:Z` entry, or
+    /// `Data::default()` for none.
+    ///
+    /// Two fixtures built this record independently and differed only in the
+    /// MAPQ being a constant rather than a parameter and in the tags, so it is
+    /// one function (F4).
+    fn one_contig_record(
+        seq: &[u8],
+        name: &str,
+        start0: usize,
+        mapq: u8,
+        tags: noodles::sam::alignment::record_buf::Data,
+    ) -> noodles::cram::Record {
+        noodles::cram::Record::builder()
+            .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
+            .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
+            .set_reference_sequence_id(0)
+            .set_read_length(TEST_READ_LEN)
+            .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+            .set_name(name)
+            .set_mapping_quality(
+                noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
+            )
+            .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
+                seq[start0..start0 + TEST_READ_LEN].to_vec(),
+            ))
+            .set_quality_scores(
+                noodles::sam::alignment::record_buf::QualityScores::from(vec![
+                    40u8;
+                    TEST_READ_LEN
+                ]),
+            )
+            .set_tags(tags)
+            .build()
     }
 
     /// Write `pairs` -- `(name, read1, read2)` -- onto chrA as an indexed CRAM
@@ -5046,6 +5133,16 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
     }
 
     /// The table line for one check, by name.
+    ///
+    /// **This is a substring match, not a field match.** `split_reads` is a
+    /// prefix of `split_reads_each_end`, so on a report carrying both rows a
+    /// bare `"split_reads"` returns whichever of the two comes first. The safe
+    /// form for the pooled row is `"split_reads "` **with a trailing space**:
+    /// the Check column is `{:<18}` and the format string adds one more, so
+    /// every name shorter than 18 is followed by at least one space. A
+    /// hand-built row list passed here is safe with the bare string only while
+    /// it holds no `SPLIT_READS_EACH_END` row -- add one above the pooled row
+    /// and this silently asserts about the wrong line.
     fn line_for<'a>(report: &'a str, check_name: &str) -> &'a str {
         report
             .lines()
@@ -5472,33 +5569,20 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         }
         plan.sort_unstable();
 
-        let record = |name: &str, start0: usize, mapq: u8| {
-            noodles::cram::Record::builder()
-                .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
-                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
-                .set_reference_sequence_id(0)
-                .set_read_length(TEST_READ_LEN)
-                .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
-                .set_name(name)
-                .set_mapping_quality(
-                    noodles::sam::alignment::record::MappingQuality::new(mapq).unwrap(),
-                )
-                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
-                    seq[start0..start0 + TEST_READ_LEN].to_vec(),
-                ))
-                .set_quality_scores(
-                    noodles::sam::alignment::record_buf::QualityScores::from(vec![
-                        40u8;
-                        TEST_READ_LEN
-                    ]),
-                )
-                .build()
-        };
-
+        // No tags: this fixture is about MAPQ and depth, and the split-read
+        // scan is the only thing that reads a tag.
         let records: Vec<noodles::cram::Record> = plan
             .iter()
             .enumerate()
-            .map(|(i, &(start0, mapq))| record(&format!("read{}", i), start0, mapq))
+            .map(|(i, &(start0, mapq))| {
+                one_contig_record(
+                    &seq,
+                    &format!("read{}", i),
+                    start0,
+                    mapq,
+                    noodles::sam::alignment::record_buf::Data::default(),
+                )
+            })
             .collect();
         let cram_path = write_indexed_cram(&dir, "mapq_hidden", &fasta_path, &header, &records);
 
@@ -5742,8 +5826,16 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
     ///   with one record in each window, each pointing at the other -- a pair
     ///   whose two mates straddle the junction, which is what a real BAM looks
     ///   like. 1 here, 1 there, and **1** pooled, not 2.
+    /// * **within the pad**, `chrA:2000-2500` (span 500 == `pad`): three reads
+    ///   straddling the left breakpoint, naming the right one, and **nothing
+    ///   at the right breakpoint at all**. The two windows overlap and each
+    ///   window's SA test reaches the other breakpoint, so the same three
+    ///   records answer both: 3 here, 3 there. The documented blind zone.
+    /// * **past the pad**, `chrA:18000-18501` (span 501, one base more): the
+    ///   same layout one base past the boundary, where the SA test at the
+    ///   partner window no longer reaches `here`. 3 here, 0 there.
     ///
-    /// The three pairs of windows are disjoint, so no junction's reads are
+    /// The five pairs of windows are disjoint, so no junction's reads are
     /// visible to another's query. Returns `(dir, fasta_path, cram_path)`; the
     /// caller removes `dir`.
     fn one_sided_split_read_cram(tag: &str) -> (std::path::PathBuf, String, String) {
@@ -5766,43 +5858,34 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         // The same name in both windows of the third junction.
         plan.push(("both_ends".to_string(), 14_950, 17_001));
         plan.push(("both_ends".to_string(), 16_950, 15_001));
+        // The blind zone and its boundary: three reads straddling the left
+        // breakpoint, naming the right one, and nothing at the right
+        // breakpoint. The two junctions differ only in their span -- 500 and
+        // 501 -- so what separates them is `pad` alone.
+        for i in 0..3usize {
+            plan.push((format!("within_pad{}", i), 1_950 + i * 25, 2_501));
+            plan.push((format!("past_pad{}", i), 17_950 + i * 25, 18_502));
+        }
         plan.sort_by_key(|&(_, start0, _)| start0);
 
-        let record = |name: &str, start0: usize, sa_pos: u64| {
-            let tags: noodles::sam::alignment::record_buf::Data = [(
+        // One `SA:Z` entry naming a 1-based position on chrA. The scan reads
+        // its first two fields and nothing else, so the rest is filler.
+        let sa_tag = |sa_pos: u64| -> noodles::sam::alignment::record_buf::Data {
+            [(
                 noodles::sam::alignment::record::data::field::Tag::new(b'S', b'A'),
                 noodles::sam::alignment::record_buf::data::field::Value::from(
                     format!("chrA,{},+,50M50S,60,0;", sa_pos).as_str(),
                 ),
             )]
             .into_iter()
-            .collect();
-            noodles::cram::Record::builder()
-                .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
-                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
-                .set_reference_sequence_id(0)
-                .set_read_length(TEST_READ_LEN)
-                .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
-                .set_name(name)
-                .set_mapping_quality(
-                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
-                )
-                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
-                    seq[start0..start0 + TEST_READ_LEN].to_vec(),
-                ))
-                .set_quality_scores(
-                    noodles::sam::alignment::record_buf::QualityScores::from(vec![
-                        40u8;
-                        TEST_READ_LEN
-                    ]),
-                )
-                .set_tags(tags)
-                .build()
+            .collect()
         };
 
         let records: Vec<noodles::cram::Record> = plan
             .iter()
-            .map(|(name, start0, sa_pos)| record(name, *start0, *sa_pos))
+            .map(|(name, start0, sa_pos)| {
+                one_contig_record(&seq, name, *start0, 60, sa_tag(*sa_pos))
+            })
             .collect();
         let cram_path = write_indexed_cram(&dir, "split_ends", &fasta_path, &header, &records);
 
@@ -5842,6 +5925,14 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert_eq!(each_end.observed, "3/0", "nothing joins back from the partner");
         assert!(!each_end.pass, "0 at the partner breakpoint is below the minimum");
         assert!(each_end.advisory, "the per-end row is always advisory");
+
+        // Both rows carry `check_event`'s own label, not one recomputed inside
+        // the check: `coverage_ratio`'s row is built from that same local, so
+        // the three must agree. Nothing pinned this before -- a wrong label
+        // threaded into `split_read_rows` passed the whole suite (measured).
+        let label = &named(&results, "coverage_ratio").event_label;
+        assert_eq!(&pooled.event_label, label, "the pooled row's Event column");
+        assert_eq!(&each_end.event_label, label, "the per-end row's Event column");
     }
 
     #[test]
@@ -6093,5 +6184,61 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
             .position(|r| r.check_name == "split_reads_each_end")
             .unwrap();
         assert_eq!(failure_message(&results[i..=i], false), None);
+    }
+
+    #[test]
+    fn test_the_each_end_rows_documented_blind_zone_for_spans_within_the_pad() {
+        // A **documented blind zone**, pinned as the behaviour it is and not
+        // as behaviour anyone wants. Both breakpoint windows are `pad` = 500
+        // bp wide, and the SA test at each window asks whether the entry lands
+        // within 500 bp of the *other* breakpoint. So for an event whose two
+        // breakpoints are 500 bp apart or less, one read sitting only at the
+        // left breakpoint whose `SA:Z` names the right one satisfies both
+        // halves: it is inside both windows, and its SA is within 500 bp of
+        // both. `at_here` and `at_partner` become the same set, the two counts
+        // are the same number, and the row degenerates into the pooled row --
+        // for that whole size class it cannot tell one-sided evidence from
+        // two-sided. `scripts/validate_pipeline.sh` sets MIN_DEL_SIZE=500, so
+        // the pipeline's smallest admissible deletion sits on the boundary.
+        //
+        // The locked plan mandated reusing `pad`, so this is **pinned, not
+        // endorsed**: README.md's "what it does not" list for the row says the
+        // same thing in prose. Both junctions below have three reads at the
+        // left breakpoint naming the right one and nothing at the right
+        // breakpoint at all, and differ only in their span -- END - POS of 500
+        // against 501 -- so the boundary itself is pinned and a change to
+        // `pad` reddens this test.
+        let (dir, fasta, cram) = one_sided_split_read_cram("split_blind_zone");
+        let within_pad = split_rows(&cram, &fasta, 2_000, 2_500);
+        let past_pad = split_rows(&cram, &fasta, 18_000, 18_501);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // END - POS == 500: the two windows and the two SA tests coincide, so
+        // one-sided evidence reads as two-sided and the advisory row PASSes
+        // exactly where it exists to FAIL.
+        let each_end = named(&within_pad, "split_reads_each_end");
+        assert_eq!(
+            each_end.observed, "3/3",
+            "the blind zone: the same three reads are counted at both ends"
+        );
+        assert!(
+            each_end.pass,
+            "the blind zone: a span of 500 passes on one-sided evidence"
+        );
+        let pooled = named(&within_pad, "split_reads");
+        assert_eq!(pooled.observed, "3", "the union is those same three names");
+        assert!(pooled.pass, "the pooled row is what this row degenerates to");
+
+        // END - POS == 501, one base past the boundary: the same read layout
+        // now reads as the one-sided evidence it is.
+        let each_end = named(&past_pad, "split_reads_each_end");
+        assert_eq!(
+            each_end.observed, "3/0",
+            "one base past the pad, nothing joins back"
+        );
+        assert!(!each_end.pass, "past the blind zone the row FAILs");
+        let pooled = named(&past_pad, "split_reads");
+        assert_eq!(pooled.observed, "3", "the pooled row did not move either");
+        assert!(pooled.pass, "the pooled row passes on either side of it");
     }
 }

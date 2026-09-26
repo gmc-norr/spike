@@ -600,7 +600,18 @@ is 20 characters and the Check column is 18, so **this one row's own later
 columns sit two characters right of every other row's**. The alternative was
 renaming the row or widening the column, and widening it would move the spacing
 of every non-advisory row, so the raggedness is deliberate. It affects no other
-row: the column pads short names and only overflows long ones.
+row's *alignment*: the column pads short names and only overflows long ones. It
+does affect *parsing*. Every other column is truncated one character below its
+width, so before this row every column boundary in every row was at least two
+spaces wide and a reader splitting on runs of two or more spaces worked; the
+check name is the one field passed through untruncated, and at 20 characters
+`split_reads_each_end` is the first content ever to overflow its column. On that
+one row exactly **one** space separates Check from Expected, so `awk -F'  +'` or
+`re.split(r"\s{2,}")` merges those two fields and shifts every later field along
+-- measured on the fixture run those two lines come from, where every each-end
+row splits into four fields and every other row into five. Nothing in this repo
+parses the table that way, so this costs nothing today. `--json` is the
+parseable form: use it rather than the text table.
 
 The other two advisory rows are the **census spike recorded**, and a record gets
 each one whenever it carries that row's field, whatever the event's type. `resistant` reports the record's
@@ -699,7 +710,9 @@ scored 0 -- a FAIL (`N1` in `REVIEW.md`).
 `split_reads_each_end` establishes the same thing at **each** breakpoint rather
 than pooled over both: two distinct read names within 500 bp of the event's own
 breakpoint carrying an `SA:Z` entry that names the partner, **and** two within
-500 bp of the partner carrying one back. That is what the pooled row's own
+500 bp of the partner carrying one back -- for any event whose two breakpoints
+are more than 500 bp apart. (For a shorter one the same two records answer both
+halves; that blind zone is spelt out below.) That is what the pooled row's own
 `expected` string reads as though it asked for, and it is what catches the
 one-sided case above -- three reads at one end and nothing at the other reads
 `3/0` here and FAILs, on the same input the pooled row PASSes. What it does
@@ -708,14 +721,35 @@ and reads the same two fields of an `SA:Z` entry, the contig and the position,
 so it checks neither strand -- for an INV, still the one thing separating its
 junctions from any other pair of splits -- nor the breakpoint the CIGAR implies,
 nor a single base of sequence, nor any fraction. Both rows remain counts without
-denominators. And because it is the pooled row's own evidence at a strictly
-stronger bar, it can only fail **at least as often**: every event the pooled row
-fails, this row fails too, and it adds the events whose evidence is one-sided.
-That includes the case above where the aligner represented a correct deletion
-with no `SA:Z` entry at all, which is why the row is advisory and out of the
-exit status unless `--strict` is given. How much more often it fails on correct real
-data is being measured separately and is not in this document yet:
-**PREDICTED (not run)**.
+denominators.
+
+And it does **not** tell one-sided evidence from two-sided for a short event.
+The row inherits the pooled row's two 500 bp windows and the pooled row's 500 bp
+tolerance on where an `SA:Z` entry may land, so when an event's own breakpoint
+and its partner are within 500 bp of each other the two windows overlap *and*
+each window's SA test reaches the other breakpoint: one read sitting only at the
+left breakpoint, whose `SA:Z` names the right one, satisfies both halves at
+once. The two counts become the same number and the row degenerates into the
+pooled row, so for that whole size class it cannot distinguish one-sided
+evidence from two-sided. Measured on this repo's own fixture, with three reads
+at the left breakpoint naming the right one and **nothing at the right
+breakpoint at all**: at `END - POS == 500` the row reads `3/3` and PASSes, and
+at `END - POS == 501` the same layout reads `3/0` and FAILs. That boundary is
+not academic -- `scripts/validate_pipeline.sh` sets `MIN_DEL_SIZE=500` and spike
+itself puts no floor on SV size, so the pipeline's smallest admissible deletion
+sits exactly on it. Reusing the pooled row's window was what this row was
+specified to do; the blind zone is the cost, and it is recorded here rather than
+worked around.
+
+And because it is the pooled row's own evidence at a strictly stronger bar, it
+can only fail **at least as often**: every event the pooled row fails, this row
+fails too. That includes the case above where the aligner represented a correct
+deletion with no `SA:Z` entry at all, which is why the row is advisory and out
+of the exit status unless `--strict` is given. For an event whose breakpoints
+are more than 500 bp apart it also adds the events whose evidence is one-sided;
+at 500 bp or less it adds nothing, for the reason just given. How much more
+often it fails on correct real data is being measured separately and is not in
+this document yet: **PREDICTED (not run)**.
 
 `ins_reads` establishes that at least **two** reads leave the reference within
 100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
