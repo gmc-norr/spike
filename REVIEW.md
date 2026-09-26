@@ -3417,7 +3417,7 @@ the exit status.
 | T2 | `coverage_ratio` at every MAPQ, advisory | Supported, done (`c18eb9b`) |
 | T3 | CR2 follow-up: what the six depth-fold warnings are (measurement only) | Measured: mappability dominates, 5 of 6 |
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
-| T5 | Split reads at each breakpoint (NF5), advisory | Not started |
+| T5 | Split reads at each breakpoint (NF5), advisory | Plan locked |
 | T6 | INS sequence identity, advisory | Not started |
 | T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
 
@@ -4142,3 +4142,77 @@ exactly as they were. The run exits **0** and writes a truth VCF claiming a 10 k
 warnings fire, which is what the census is for; but nothing refuses, and the `SIM_DEPTH_FOLD` of
 **15.71** at rank 6 is the depth model being asked to scale a 17.2x bin by a 0.2x anchor. Filed as
 **RF8**.
+
+### T5 -- split reads at each breakpoint (NF5), advisory
+
+#### Plan: T5, the per-breakpoint split-read row (locked before any code or measurement)
+
+**Why.** NF5: `check_split_reads` pools its evidence. It requires two distinct read names *in
+total* across both breakpoint windows, so both may sit at one end with nothing seen at the other,
+while its own `expected` string, `">=2 joining chr:pos"`, reads as though each end contributes.
+
+**Claim.** The same evidence, required at **each** breakpoint rather than pooled, fails an event
+whose split reads all sit at one end, passes a correct deletion, and costs no more than the locked
+bar in extra failures on correct real data.
+
+**Metric.** A new advisory row **`split_reads_each_end`** -- the name TASKS.md specifies -- for the
+same event types `split_reads` covers (DEL, DUP, INV, BND). It reuses `split_reads_to_partner` and
+the same `MIN_SPLIT_READS` and `pad` as `split_reads`; the two rows must be built from the **same
+two calls**, so they can never disagree about what evidence exists. The pooled row keeps the union
+of the two name sets exactly as today; the new row takes **each set's own size** and passes iff
+**both** are at least `MIN_SPLIT_READS`.
+
+- `expected`: `>=2 at each end`.
+- `observed`: the two counts as `<here>/<partner>`.
+
+**A cosmetic cost, decided here rather than worked around.** `split_reads_each_end` is 20
+characters and the text table's Check column is `{:<18}`. T2's review measured the effect: a 19-
+character name puts that row's Status at offset 98 against 97 for a shorter one. So **this row's
+own later columns sit two characters right of the others**. The alternative was renaming what
+TASKS.md specifies, which is not this run's call, or widening the column, which would change the
+non-advisory rows' spacing and is forbidden. The name stays; the raggedness is accepted and
+recorded, and it affects **no other row** -- `{:<18}` pads short names and only overflows long
+ones.
+
+**Criteria.** Each is run and its real output recorded in the result commit and in STATUS.md.
+
+- **C1, it must reject one-sided evidence.** A test fixture where **every** split read sits at one
+  breakpoint and none at the other: `split_reads_each_end` reads `FAIL (advisory)` with an observed
+  of the form `n/0`, while `split_reads` on the same input still reads **PASS**. The two rows
+  disagreeing on one input is the point of the row.
+- **C2, it must accept a correct control.** The real control `del:chr20:1136743-1146743` through
+  `scripts/slice_loop.sh`: `split_reads_each_end` reads `PASS (advisory)`, with both counts at or
+  above 2.
+- **C3, the default is unchanged, and the pooled row did not move.** On the real control and on the
+  `uniform` merged probe: the same exit status under master's binary and T5's, the non-advisory rows
+  byte-identical once the advisory rows and the summary line are removed, `spike --help`
+  byte-identical, and `validate --help` gaining no flag. **Additionally**, across all 40 real runs
+  of C4 the `split_reads` row's `observed`, `expected` and `pass` must be identical to what the
+  same runs gave before T5 -- the refactor touches that row's code path, so it is checked event by
+  event, not on one control.
+- **C4, its extra false-failure rate on correct real data.** The 40 seeded spans (list md5
+  `8f30486221e221e76c7a863ae0755c4b`) as `del:` events through `scripts/slice_loop.sh` on the 35x
+  HG002 BAM. The bar is **relative**, because the check this refines already fails on correct
+  input: RF6 measured pooled `split_reads` failing on **4 of 40** correct deletions. So
+  **`n_fail(split_reads_each_end) - n_fail(split_reads) <= 8` (20 percentage points)** on the same
+  40 runs, with both absolute counts reported. Fewer than 20 events scored makes C4 inconclusive.
+  The bar and its form are set here, before any per-end count is seen; 20 percentage points is the
+  same width CR4's and CR2's C4 used.
+- **C5, the gates.** `cargo test` at 502 passed / 0 failed or better;
+  `cargo clippy --all-targets` at 13 (bin) / 14 (test) or fewer.
+
+**Outcome rules.**
+
+- C1-C5 pass: supported, keep.
+- **C1 or C2 fails:** the row does not measure what it claims. Revert the code.
+- **C3 fails:** the default changed, or the refactor moved the pooled row. Revert the code.
+- **Only C4 fails:** the row stays -- it is advisory, so nothing that passes today starts failing --
+  but **no new minimum is chosen after seeing the distribution.** README records the measured extra
+  rate and the distribution of the two per-end counts, and whether a different minimum is wanted
+  goes to the human as a design note, to be locked by a new plan on other chromosomes.
+
+**Known limit, stated before measuring.** Both rows read only the contig and position of an `SA:Z`
+entry, so neither checks strand, the CIGAR-implied breakpoint, sequence, or allele fraction --
+CR9's documented limit, unchanged. The per-end row is strictly stricter than the pooled one, so its
+failure count can only be greater than or equal to it; C4 measures by how much, and RF6's 4 of 40
+is the floor, not the baseline to beat.
