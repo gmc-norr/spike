@@ -3419,7 +3419,7 @@ the exit status.
 | T4 | CR4 on a real hard locus (measurement only) | Supported: 6 of 6 warn; control 0 of 6 |
 | T5 | Split reads at each breakpoint (NF5), advisory | Supported, done (`084104f`) |
 | T6 | INS sequence identity, advisory | Supported, done (`02a2ecc`) |
-| T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Not started |
+| T7 | The sample's own non-SNP variants in event footprints (CR3), measurement only | Plan locked |
 
 The real-data loop every measuring step uses is `scripts/slice_loop.sh` (`ab61c6c`): one event
 on a ±100 kb slice of the 35x HG002 BAM, through spike, `align.sh`, `merge.sh` and
@@ -4528,3 +4528,80 @@ carrying the k-mer anywhere in its 151 bases counts. Only sequence near each end
 reachable at all, and of that the row probes 31 bases per end -- for a 2000 bp insertion it verifies
 62 of 2000. And it reads the ALT out of the truth VCF, so a truth VCF edited between the run and the
 validation is believed -- which is precisely what made C1 measurable.
+
+### T7 -- the sample's own non-SNP variants in event footprints (CR3)
+
+#### Plan: T7, would the footprint scan fire on everything (locked before any count)
+
+**Measurement only. No production code changes.**
+
+**Why.** CR3's design note proposes, as its option B, to **reject footprints containing unsupported
+variation** -- the sample's own indels and SVs, which `SampleCopies` cannot represent because it
+stores one base per reference position. This measures whether such a scan could be a *warning* at all,
+or whether it would fire on essentially every event and so carry no information.
+
+**Claim.** A warning on "this event's footprint holds one of the sample's own non-SNP variants" would
+fire on **nearly every** event, and so cannot be a warning as stated.
+
+**The falsifying measurement.** If most footprints hold none, the warning is informative and the claim
+dies.
+
+**Metric.** The 40 seeded spans (`scripts/cr4_placements.py`, output md5
+`8f30486221e221e76c7a863ae0755c4b`). Each event's **footprint** is `[start - 2000, end + 2000)` --
+the span grown by `HAP_FLANK`, which is what TASKS.md specifies and what CR1's own
+`FOOTPRINT_MARGIN` uses for the flank part.
+
+Source: `GRCh38_HG2-T2TQ100-V1.1_chr20.vcf.gz` (208,757 chr20 records, one sample `HG002`, `GT:AD`).
+
+A record **counts** when all three hold:
+
+1. Its reference span `[POS-1, POS-1+len(REF))` **overlaps** the footprint.
+2. It is **non-SNP**: not every ALT allele is a single base against a single-base REF. A symbolic ALT
+   (`<...>`) counts as non-SNP. Records whose REF holds `N` runs with `SVTYPE=DEL` -- this VCF has
+   them -- count by their length change like any other.
+3. The sample **carries** it: `GT` is neither `0/0`, `0|0`, `./.` nor `.|.`. "The sample's own
+   variants" means what HG002 actually has, not every line in the file.
+
+Each counted record is put in **one size class** by `|len(longest ALT) - len(REF)|`, or by `SVLEN`
+when the ALT is symbolic: **1 bp**, **2-5**, **6-20**, **21-50**, **>50 (SV-sized)**.
+
+**Verdict rule, locked here.**
+
+- **Supported** -- the warning fires on nearly everything: **at least 36 of 40 (90%)** footprints hold
+  at least one counted record.
+- **Refuted** -- the warning is informative: **at most 20 of 40 (50%)**.
+- **In between (21 to 35)**: inconclusive as a blanket warning; the distribution is reported and no
+  verdict is claimed.
+
+The per-size-class firing rate is reported whatever the total, because a scan restricted to a size
+class is the obvious variant of option B and its rate is the number that would decide it.
+
+**Two controls, because a count that separates nothing measures nothing.**
+
+1. **Is the filter doing anything?** The same 40 footprints are also counted **without** the non-SNP
+   test. If the non-SNP count is close to the all-records count, the filter is not excluding SNPs and
+   every "non-SNP" hit is an artefact of the filter. The two totals are reported side by side, and the
+   SNP share must be the large majority of records (this VCF is a whole-genome small-variant plus SV
+   benchmark, so SNPs should dominate) or the measurement is not trusted.
+2. **Is the seeded list representative?** The same count over **40 random 14 kb windows** on chr20
+   drawn inside the same SV benchmark BED with a **different fixed seed** (20260926, written here
+   before the draw). If the seeded spans' firing rate differs from the random windows' by more than
+   **20 percentage points**, the conclusion is about `cr4_placements.py`'s list rather than about
+   chr20, and T7 says so instead of generalising.
+
+**Outcome rules.** No code either way.
+
+- **Supported:** write the design note for the human with at most two options and the measured
+  distribution, saying plainly that a blanket warning is not usable and what the alternatives are.
+- **Refuted:** write the note saying a blanket warning *is* usable, with the measured rate.
+- **Inconclusive, or a control fails:** report the table and the control, and propose nothing.
+
+**What must be true of the inputs, and how each will be verified.**
+
+- *The VCF is HG002's own calls on GRCh38.* Its header records
+  `bcftools view -r chr20 ... GRCh38_HG2-T2TQ100-V1.1.vcf.gz` and its one sample is `HG002`. The
+  footprints are GRCh38 coordinates, as the spans are.
+- *`bcftools` here is 1.9*, which has no `--regions-overlap`; overlap is therefore computed in the
+  scanner from POS and `len(REF)` rather than delegated to a flag whose default differs by version.
+- *A command that fails must not read as a count of zero.* T3's census returned 0.0 everywhere from a
+  samtools option that did not exist. The scanner raises on a non-zero exit.
