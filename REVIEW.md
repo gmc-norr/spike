@@ -6076,3 +6076,42 @@ the test, for the two things the first attempt taught.
 
 **C, after code.** As in the first plan (C1 mutations, C2 replica equality, C3 exit
 statuses). C3 also covers this attempt's and the first attempt's K runs.
+
+#### Result: RF14 second attempt -- supported
+
+`scripts/rf14b_k.sh` with master `8b4b878` (md5 `4e2126fcc81bee41e22843f77abf45e9`). The run
+was interrupted once by a session restart and continued to the end; all 66 runs have spike exit
+0. Then `scripts/rf14b_score.py` and `rf14_planted.py null`:
+
+```
+K+ VAF 0.5: 36 of 36 reach validate; 33 at SIM_RESIST <= 0.5; carrying 33 of 33 [] -> PASS
+LOW VAF 0.1: 30 of 30 judged; row fails 2 (95% 0.018-0.213), master split_reads fails 14 -> PASS
+GUARD master split_reads PASS but row 0: 0 [] -> PASS
+above SIM_RESIST 0.5 (reported): 3 [('h_50156237', 0.526, 18), ('h_61641810', 0.893, 35), ('h_9015824', 0.744, 34)]
+K- judged negatives with a carrier: 0 of 330 [] -> PASS
+indistinguishable negatives (not judged): 0 []
+check of the check, h_ sites' unspiked slice with the name filter off: [('h_14548422', 37), ('h_18776542', 43), ('h_3041109', 43), ('h_35033852', 25), ('h_37187206', 33), ('h_50156237', 34), ('h_5553899', 18), ('h_55633574', 37), ('h_61641810', 84), ('h_61995568', 32), ('h_62622385', 68), ('h_9015824', 91)]
+N5 null sites passing: 0 of 200
+```
+
+- **K+.** All 36 VAF 0.5 runs reached `validate`. The 33 at `SIM_RESIST` 0.5 or below all
+  carry. Over all 36 the carriers run from 8 to 35, median 14. The three resistant ones, all
+  real HG002 deletions, carry at 18, 35 and 34.
+- **LOW, the chance-zero rate at VAF 0.1, measured.**
+  - The row fails **2 of 30** correct 1 kb deletions (95% Wilson 0.018-0.213): `l_32438876`
+    and `l_38403708`, at `SIM_RESIST` 0.006 and 0.013. Master's `split_reads` also fails
+    both, at 0.
+  - Carriers per run: 0, 0, 1, 1, 1, then 2 to 8.
+  - Master's `split_reads` fails **14 of 30**.
+- **GUARD.** No run where master's `split_reads` passes and the row has 0.
+- **K-.** 0 of 330 judged negatives carry, with none indistinguishable. N5 is 0 of 200.
+- **The check of the check.** With the name filter off, HG002's own reads carry at 12 of 12
+  real sites (18 to 91).
+- **Master, reported.**
+  - Master's `split_reads` fails 20 of the 66 correct deletions: 14 at VAF 0.1 and 6 at 0.5.
+  - Master exits 0 on 41 of 66.
+
+**Verdict.** Supported as locked. The code step follows the first plan's C1-C3.
+- **The honest price:** at VAF 0.1 about 1 correct deletion in 15 has no read of spike's
+  across its join, and the row fails it. Today's `split_reads` fails about 1 in 2.
+- The README states the measured rate, not a prediction.
