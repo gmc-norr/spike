@@ -193,6 +193,16 @@ struct Args {
     /// the legacy junction-only haplotype with separate depth copies.
     #[arg(long, default_value = "full")]
     dup_model: String,
+
+    /// Which original reads an event replaces. "clean" (default): only the
+    /// donor pool's pairs (both mates at --min-mapq or above, a proper pair,
+    /// no duplicate, secondary, supplementary or QC-fail flag) inside the
+    /// event's footprint. "origin" (experimental): every primary read at the
+    /// event and at its look-alikes, each removed by its chance of having
+    /// come from the edited copy, read from its MAPQ and its XA tag. It
+    /// needs the aligner's XA tags (bwa-mem and bwa-mem2 write them).
+    #[arg(long, default_value = "clean")]
+    edit_model: String,
 }
 
 /// Reference flank on each side of an event in its variant haplotype. Must be
@@ -226,6 +236,14 @@ fn validate_allele_fraction(af: f64) -> Result<()> {
     // rejected rather than silently let through (L8).
     if !(af > 0.0 && af <= 1.0) {
         bail!("allele-fraction must be in (0.0, 1.0]");
+    }
+    Ok(())
+}
+
+/// Check `--edit-model`: "clean" or "origin".
+fn validate_edit_model(model: &str) -> Result<()> {
+    if model != "clean" && model != "origin" {
+        bail!("invalid --edit-model '{}', expected 'clean' or 'origin'", model);
     }
     Ok(())
 }
@@ -430,6 +448,8 @@ fn main() -> Result<()> {
             args.dup_model,
         );
     }
+
+    validate_edit_model(&args.edit_model)?;
 
     // Compute BAM stats for read length.
     let bam_stats =
@@ -4253,5 +4273,23 @@ cat "$root/validation_summary.tsv""#,
         // from it -- carries, not just the same count of them.
         assert_eq!(stored.len(), 30);
         assert_eq!(hap.get_sequence(50, 30), stored.as_slice());
+    }
+
+    #[test]
+    fn test_validate_edit_model_accepts_clean_and_origin() {
+        assert!(validate_edit_model("clean").is_ok());
+        assert!(validate_edit_model("origin").is_ok());
+    }
+
+    #[test]
+    fn test_validate_edit_model_rejects_anything_else_and_names_both() {
+        let err = validate_edit_model("Origin").unwrap_err().to_string();
+        assert!(err.contains("'Origin'") && err.contains("clean") && err.contains("origin"), "{}", err);
+    }
+
+    #[test]
+    fn test_edit_model_defaults_to_clean() {
+        let args = Args::try_parse_from(["spike", "--bam", "x.bam", "--reference", "x.fa"]).unwrap();
+        assert_eq!(args.edit_model, "clean");
     }
 }
