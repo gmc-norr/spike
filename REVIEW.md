@@ -4639,13 +4639,18 @@ records, one sample `HG002`, `GT:AD`) with `bcftools` 1.9.
 
 ```
 events=40 footprints with at least one carried non-SNP record=38 (95.0%)
-non-SNP records per footprint: min 0 median 5 max 23
+non-SNP records per footprint: min 0 median 4.5 max 23
   class      1bp: fires on 33 of 40 footprints (82.5%), 77 records in all
-  class    2-5bp: fires on 27 of 40 footprints (67.5%), 71 records in all
-  class   6-20bp: fires on 17 of 40 footprints (42.5%), 33 records in all
-  class  21-50bp: fires on 10 of 40 footprints (25.0%), 14 records in all
+  class    2-5bp: fires on 27 of 40 footprints (67.5%), 70 records in all
+  class   6-20bp: fires on 17 of 40 footprints (42.5%), 32 records in all
+  class  21-50bp: fires on 10 of 40 footprints (25.0%), 13 records in all
   class    >50bp: fires on 4 of 40 footprints (10.0%), 4 records in all
 ```
+
+Re-measured after `27625d3` taught the scanner that `*` is the spanning-deletion placeholder rather
+than sequence, and after the median was corrected from the upper order statistic to a real median.
+**Every firing rate is unchanged** -- 38 of 40, and all five per-class percentages. Three record
+totals fell by one and the median from 5 to 4.5; the block above is the corrected run.
 
 **38 of 40 is at or above the locked bar of 36, so the claim is supported: a warning on "this
 footprint holds one of the sample's own non-SNP variants" would fire on nearly every event and
@@ -4655,11 +4660,11 @@ carries no information.** The two footprints that hold none are
 **Both controls pass.**
 
 - **Control 1, is the filter excluding anything?** Across the 40 footprints, **896 carried records,
-  of which 199 non-SNP -- a 77.8% SNP share**. The non-SNP test removes the large majority, so the
+  of which 196 non-SNP -- a 78.1% SNP share**. The non-SNP test removes the large majority, so the
   199 are not an artefact of a filter that filters nothing.
 - **Control 2, is the seeded list representative?** 40 random 14 kb windows inside the same SV
   benchmark BED, seed **20260926** written into the plan before the draw (list md5
-  `ada41f3c0192d3701c8fe6cd1bb9fabc`): **40 of 40 (100.0%)** fire, with a 80.1% SNP share and a
+  `ada41f3c0192d3701c8fe6cd1bb9fabc`): **40 of 40 (100.0%)** fire, with a 80.4% SNP share and a
   median of 4 non-SNP records per window. The seeded list's 95.0% is **5 percentage points** from the
   random windows' 100.0%, well inside the locked 20. **The conclusion is about chr20, not about
   `cr4_placements.py`'s list** -- if anything the seeded spans are slightly *cleaner* than an average

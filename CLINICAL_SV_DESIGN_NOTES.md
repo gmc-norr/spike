@@ -596,8 +596,10 @@ calls, counting only records HG002 carries (`GT` not `0/0`, `0|0`, `./.`, `.|.`)
 | any ≥ 21 bp | 13 of 40 (32.5%) | 10 of 40 (25.0%) |
 | **any > 50 bp (SV-sized)** | **4 of 40 (10.0%)** | 7 of 40 (17.5%) |
 
-Non-SNP records per footprint: min 0, median 5, max 23. A 77.8% SNP share across 896 carried
-records, so the filter is excluding the large majority. The random-window control (seed 20260926,
+Non-SNP records per footprint: min 0, median 4.5, max 23. A 78.1% SNP share across 896 carried
+records, so the filter is excluding the large majority. (These totals are the re-measured ones, after
+`27625d3` taught the scanner that `*` is the spanning-deletion placeholder and corrected the median;
+every firing rate in the table above is unchanged by that fix.) The random-window control (seed 20260926,
 fixed before the draw) is 5 percentage points from the seeded list, so this is a property of chr20
 and not of `cr4_placements.py`.
 
