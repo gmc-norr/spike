@@ -81,18 +81,20 @@ pub fn write_truth_vcf(
     // so a short slice would quietly write the request as `SIM_VAF` for every
     // event past its end -- the exact defect this field exists to fix, silent.
     // The one production caller builds both in the same loop; this catches a
-    // future one that does not.
-    debug_assert_eq!(
+    // future one that does not. `assert_eq!`, not `debug_assert_eq!`: spike
+    // ships as a release build, where a debug assertion is compiled out and the
+    // wrong truth VCF would be written without a word.
+    assert_eq!(
         adjusted_afs.len(),
         events.len(),
         "write_truth_vcf: one adjusted AF per event, in the same order",
     );
-    debug_assert_eq!(
+    assert_eq!(
         resistant.len(),
         events.len(),
         "write_truth_vcf: one resistant fraction per event, in the same order",
     );
-    debug_assert_eq!(
+    assert_eq!(
         depth_folds.len(),
         events.len(),
         "write_truth_vcf: one depth fold per event, in the same order",
