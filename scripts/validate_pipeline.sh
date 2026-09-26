@@ -727,6 +727,11 @@ step3_spike_inject() {
         log "  VAF=${vaf}: running spike..."
         # --samtools makes the generated align.sh/merge.sh use the same
         # samtools this script resolved, not whatever happens to be on PATH.
+        # --allow-resistant: spike refuses an event when over half the reads
+        # over it are ones it cannot edit (RF8), and real SV sites sit in
+        # repeats -- on the NA18488 chr20 background 6 of the 20 truth DELs
+        # do. The harness still runs them, and counts them below; how they
+        # should be scored is not yet decided.
         "$SPIKE" \
             --bam "$BG_BAM" \
             --reference "$REFERENCE" \
@@ -736,6 +741,7 @@ step3_spike_inject() {
             -t "$THREADS" \
             --flank 10000 \
             --samtools "$SAMTOOLS" \
+            --allow-resistant \
             -o "$spike_out" \
             2>&1 | tee "${spike_out}.spike.log"
 
@@ -748,6 +754,18 @@ step3_spike_inject() {
         n_truth=$(count_records "${spike_out}/truth.vcf")
         log "  VAF=${vaf}: spike produced $n_truth events in truth VCF"
         [[ "$n_truth" -gt 0 ]] || fail "spike wrote an empty truth VCF for VAF=${vaf}"
+
+        # POSIX match() + RSTART/RLENGTH, as in step 2, so mawk runs it too.
+        # LC_ALL=C: mawk reads numbers by LC_NUMERIC, and under sv_SE (a
+        # decimal comma) it read every "0.776" as 0 and counted none.
+        local n_resistant
+        n_resistant=$(LC_ALL=C awk -F'\t' '
+            !/^#/ && match($8, /SIM_RESIST=[0-9.]+/) {
+                if (substr($8, RSTART + 11, RLENGTH - 11) + 0 > 0.5) n++
+            }
+            END { print n + 0 }' "${spike_out}/truth.vcf")
+        log "  VAF=${vaf}: $n_resistant of $n_truth events have SIM_RESIST above 0.5:" \
+            "their reads carry less than half of the event (RF8)"
     done
 }
 

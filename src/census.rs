@@ -132,8 +132,8 @@ pub fn depth_fold_warning(label: &str, fold: &DepthFold) -> Option<String> {
 /// measured.
 pub const REFUSE_ABOVE: f64 = 0.5;
 
-/// The refusal for an event whose resistant share is above [`REFUSE_ABOVE`],
-/// unless `allow` is set.
+/// One line of [`refusal_message`] for an event whose resistant share is
+/// above [`REFUSE_ABOVE`], unless `allow` is set.
 ///
 /// The resistant reads are never removed or replaced, so the event that
 /// reaches the reads is about `VAF x (1 - share)`: above one half they carry
@@ -143,16 +143,35 @@ pub fn refusal(label: &str, census: &Census, allow: bool) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{}: {} of {} reads over it ({:.1}%) are ones spike cannot edit (below \
-         --min-mapq, not a proper pair, or a mate that fails a filter), so the reads \
-         would carry less than half of the event truth.vcf would claim. spike stops \
-         rather than write that record (RF8). If most of them are below --min-mapq, \
-         lowering it lets spike edit them; or pass --allow-resistant to simulate it \
-         anyway, and truth.vcf records the share as SIM_RESIST.",
+        "{}: {} of {} reads over it ({:.1}%) are ones spike cannot edit",
         label,
         census.resistant,
         census.counted,
         census.fraction() * 100.0,
+    ))
+}
+
+/// The error for a run whose events include any [`refusal`]: every refused
+/// event at once, so a multi-event input can drop them all in one pass.
+pub fn refusal_message(refusals: &[String]) -> Option<String> {
+    if refusals.is_empty() {
+        return None;
+    }
+    let events = if refusals.len() == 1 {
+        "1 event".to_string()
+    } else {
+        format!("{} events", refusals.len())
+    };
+    Some(format!(
+        "The reads over {} would carry less than half of what truth.vcf would claim, \
+         so spike stops rather than write it (RF8):\n  {}\nThose reads are below --min-mapq, not a \
+         proper pair, or have a mate that fails a filter, and they stay in the merged \
+         BAM as they are. If most of them are below --min-mapq, lowering it lets spike \
+         edit them. Otherwise remove the events from the input, or pass \
+         --allow-resistant to simulate them anyway; truth.vcf then records the share \
+         as SIM_RESIST.",
+        events,
+        refusals.join("\n  "),
     ))
 }
 
@@ -295,9 +314,6 @@ mod tests {
         let r = at(2074, 1038).expect("0.5005 is above 0.5");
         assert!(r.contains("DEL chr1:101-200"), "{}", r);
         assert!(r.contains("1038 of 2074"), "{}", r);
-        assert!(r.contains("--allow-resistant"), "{}", r);
-        assert!(r.contains("--min-mapq"), "{}", r);
-        assert!(r.contains("SIM_RESIST"), "{}", r);
     }
 
     #[test]
@@ -306,6 +322,26 @@ mod tests {
         let census = Census { counted: 5749, resistant: 5731 };
         assert!(refusal("DEL chr20:27100001-27110000", &census, false).is_some());
         assert_eq!(refusal("DEL chr20:27100001-27110000", &census, true), None);
+    }
+
+    #[test]
+    fn test_refusal_message_names_every_refused_event() {
+        assert_eq!(refusal_message(&[]), None, "no refused event, no error");
+        // Two of validate_pipeline.sh's events on its NA18488 background.
+        let at = |label, counted, resistant| {
+            refusal(label, &Census { counted, resistant }, false)
+        };
+        let first = at("DEL chr20:32723064-32724971", 407, 316).expect("0.776 is above 0.5");
+        let second = at("DEL chr20:61943514-61945040", 200, 189).expect("0.945 is above 0.5");
+        let m = refusal_message(&[first, second]).expect("two refused events");
+        assert!(m.contains("2 events"), "{}", m);
+        assert!(m.contains("DEL chr20:32723064-32724971"), "{}", m);
+        assert!(m.contains("316 of 407"), "{}", m);
+        assert!(m.contains("DEL chr20:61943514-61945040"), "{}", m);
+        assert!(m.contains("189 of 200"), "{}", m);
+        assert!(m.contains("--allow-resistant"), "{}", m);
+        assert!(m.contains("--min-mapq"), "{}", m);
+        assert!(m.contains("SIM_RESIST"), "{}", m);
     }
 
     /// A one-contig BAM (`chrA`, 3000 bp) of 100 bp proper pairs, read 2

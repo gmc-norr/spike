@@ -529,7 +529,8 @@ fn main() -> Result<()> {
     // M14: pairs whose stored quality is unusable never reach a pool, so they
     // are in neither kept_originals nor suppressed_names.
     let mut unusable_qual_names: BTreeSet<String> = BTreeSet::new();
-
+    // RF8: one line per event whose reads cannot back its truth record.
+    let mut refusals: Vec<String> = Vec::new();
 
     // Process each event using the unified haplotype + tiling approach.
     let n_events = events.len();
@@ -573,7 +574,12 @@ fn main() -> Result<()> {
         if let Some(refusal) =
             census::refusal(&event_label(event), &event_census, args.allow_resistant)
         {
-            anyhow::bail!("{}", refusal);
+            refusals.push(refusal);
+        }
+        // RF8: once any event is refused nothing is written, so the rest are
+        // only counted, not simulated -- the error names every one of them.
+        if !refusals.is_empty() {
+            continue;
         }
 
         // Build quality profile and synth generator.
@@ -631,6 +637,10 @@ fn main() -> Result<()> {
         resistant.push(Some(event_census.fraction()));
         depth_folds.push(Some(output.depth_fold.fold));
         event_outputs.push(output);
+    }
+
+    if let Some(message) = census::refusal_message(&refusals) {
+        anyhow::bail!("{}", message);
     }
 
     // Names of the originals spike took out of the BAM; merge.sh removes
