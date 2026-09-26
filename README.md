@@ -790,9 +790,17 @@ fails too. That includes the case above where the aligner represented a correct
 deletion with no `SA:Z` entry at all, which is why the row is advisory and out
 of the exit status unless `--strict` is given. For an event whose breakpoints
 are more than 500 bp apart it also adds the events whose evidence is one-sided;
-at 500 bp or less it adds nothing, for the reason just given. How much more
-often it fails on correct real data is being measured separately and is not in
-this document yet: **PREDICTED (not run)**.
+at 500 bp or less it adds nothing, for the reason just given.
+
+How much more often it fails on correct real data, measured: on 40 seeded 10 kb
+deletions inside the HG002 T2T-Q100 SV benchmark on chr20, each spiked into the
+35x HG002 BAM at the default AF and run through `align.sh`, `merge.sh` and
+`spike validate`, the pooled `split_reads` row failed on **4 of 40** and
+`split_reads_each_end` on **6 of 40** -- so the per-breakpoint row's own
+contribution is **2 of 40**. Both of those two carried **7** joining reads at one
+breakpoint and **1** at the other, which the pooled row passes at `observed 8`:
+they are the one-sided evidence this row exists to name. The other four are the
+pooled row's own failures, where no `SA:Z` entry exists at either end.
 
 `ins_reads` establishes that at least **two** reads leave the reference within
 100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
@@ -838,8 +846,16 @@ harmless in the exit status because the row is advisory: an insertion of fewer
 than 12 bases, whose k-mer would be too short to be specific inside a read, and
 an ALT one of whose probe k-mers the reference already holds within 1 kb of POS,
 where an unedited read would match. A symbolic `<INS>` ALT recorded no sequence
-and gets no row at all. How often the row fails on correct real data is being
-measured separately and is not in this document yet: **PREDICTED (not run)**.
+and gets no row at all.
+
+How often the row fails on correct real data, measured: on 24 insertions -- four
+at each of 50, 100, 250, 500, 1000 and 2000 bp, at the first 24 starts of the
+same seeded list, each on its own +/-100 kb slice of the 35x HG002 BAM through
+`align.sh`, `merge.sh` and `spike validate` -- it failed on **0 of 24**, and on
+**0 of 4** in every one of the six length classes. Supporting reads: min 10,
+median 23, max 34. The count does not fall off with length, because the probes
+are the insertion's first and last `k` bases and a read reaches those from either
+side whatever sits between them.
 
 `allele_freq` is the one per-event check that measures a fraction rather than
 counting evidence; the table below says what it can and cannot read off a truth
