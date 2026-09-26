@@ -4947,3 +4947,56 @@ README's "What spike refuses" table and its "Reads spike cannot edit" section, a
 - K is inconclusive: no code is written; report why the runs failed.
 - K passes, then C1-C4 pass: supported, keep.
 - C1, C2 or C3 fails: revert the code.
+
+#### Result: RF8 -- supported as locked; but the default refusal stops `validate_pipeline.sh`
+
+Plan `317a1f0`, code `53b19d5`. Binaries built in their own target dirs: master `463465f`
+md5 `dd49305a58a0375ea6cb3b06407b67dd`, new md5 `a900b9aa6dde9c1fea24b096ccdbffaa`.
+
+- **K, passes. It was run first, on master's binary, before any code.** 40 of 40 chr1
+  deletions ran with 0 non-zero exits, and **0 of 40 are above 0.5**. `R` min 0.003, median
+  0.011, max 0.286. Aside: 3 of the 40 are above CR4's 0.10 warning (0.198, 0.286, 0.177),
+  against 0 of 40 on chr20. That is still under CR4's 8-of-40 bar.
+- **C1, passes.** All six T4 events exit 1 and leave no `R1.fq.gz`, `R2.fq.gz`,
+  `replaced_reads.txt`, `truth.vcf` or `events.bed`. First line, verbatim:
+  `Error: DEL  chr20:27100001-27110000 (10000bp): 5731 of 5749 reads over it (99.7%) are ones
+  spike cannot edit ...`. **C1b:** the lowmap probe exits 1 with `1038 of 2074 reads over it
+  (50.0%)`.
+- **C2, passes.** With `--allow-resistant`, all six exit 0, and all five files match master's
+  byte for byte. On the lowmap probe the R1, R2, replaced and truth md5s equal master's.
+- **C3, passes.** All 40 chr1 runs give all five files byte-identical to master's, with and
+  without the flag (`40 x 5` "same"). On the uniform probe, all three runs give the same md5s.
+- **C4, passes.**
+  - The two tests were seen red on a stub returning `None` (2 failed).
+  - Each mutation reddens at least one test: `>=` reddens
+    `test_census_refuses_only_above_half`; removing the refusal reddens both; ignoring the flag
+    reddens `test_allow_resistant_lifts_the_refusal`.
+  - `cargo test`: 533 passed, 1 ignored.
+  - Clippy's warning set is identical to master's (9 distinct, 13/14 by count).
+- **Also measured:** `del:chr20:27100000-27110000` at `--min-mapq 0` is accepted with
+  `58 of 5749` uneditable (0.010; depth fold 7.28). So the message offers lowering
+  `--min-mapq`.
+- **The scripts:** `review_sv_model.py` (new binary, `--allow-resistant` on lowmap) gives a
+  `summary.json` identical to its old version on master, including `del_lowmap` 37.5x of 75.
+  `t1_probes.py` gives output identical to its old version on master.
+
+**Found outside the locked criteria: the repo's own harness is refused.**
+`validate_pipeline.sh` spikes HG002's real chr20 deletions into NA18488.
+- **Its events.** Its step 2, run on its own from the script's function, keeps **20** het
+  DELs today.
+- **Their shares.** On its background `NA18488.chr20.noalt.bam`, master's `truth.vcf`
+  records `SIM_RESIST` for all 20, and **6 are above 0.5**: 0.776, 0.643, 0.945, 0.655,
+  0.611 and 0.689. The same values came from 20 one-event runs.
+- **The new binary.** It refuses the pipeline's step-3 command at the first of them. It exits
+  1 and leaves the output directory empty.
+- **Why.** Those sites are repeats. At `chr20:61943514-61945040`, 188 of the 200 reads are
+  below MAPQ 20.
+
+So **real SV sites sit in uneditable sequence far more often than random spots do: 6 of 20
+against 0 of 40.** It also means the pipeline's recall has so far counted 6 events whose
+reads carry less than half of what the truth record claims. That is RF8 inside the repo's
+own benchmark.
+
+**Verdict:** supported as locked. **Not yet decided:** whether the refusal stays on by
+default now that it is known to stop `validate_pipeline.sh`. That is the user's call.
+README and the "What spike refuses" table wait on it.

@@ -46,3 +46,19 @@ what was claimed, what the claim actually rested on, and which gate would have c
 - **Which gate would have caught it.** Gate D question 2 (*does my control distinguish working from
   broken?*). **Rule for this repo: every shell-out in a measurement script raises on a non-zero exit.
   A helper that returns stdout unchecked will eventually return silence and be summed.**
+
+## 2026-09-26 -- RF8: a noise test on random spots said nothing about real SV sites
+
+- **What the plan set out to show.** RF8's kill test K was to show that refusing above
+  `SIM_RESIST` 0.5 would not stop ordinary runs. It drew 40 random 10 kb spots inside the
+  HG002 benchmark on chr1, and **0 of 40** were above 0.5.
+- **What it rested on.** Random placements. spike's users do not spike random spots. They
+  spike known SV sites, and so does the repo's own `validate_pipeline.sh`. Those sites sit in
+  repeats. On the pipeline's background, **6 of its 20** real HG002 deletions are above 0.5,
+  and the new default stops its spike step outright.
+- **How it was caught.** Before the docs step, every repo script that runs spike was checked
+  for events the new rule would refuse. It was not a locked criterion.
+- **Which gate would have caught it.** Gate A step 5 (*what must be true of the inputs*).
+  **Rule for this repo: a noise test for a new default is drawn from what the rule will
+  actually see. For spike, that is known SV sites, and the repo's own harnesses first. A
+  random placement is a control, not the population.**
