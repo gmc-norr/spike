@@ -5136,3 +5136,32 @@ sentence is corrected with the numbers above.
 - K fails: refuted as locked, no code; record which part failed.
 - K passes and C1-C4 pass: supported, keep.
 - C1, C2 or C3 fails: revert the code.
+
+#### Result: RF6 as locked -- REFUTED by the kill test (no code written)
+
+`scripts/rf6_kill.py` on the 40 saved T2 C4 runs:
+
+```
+K1 sim >= 2: 38 of 40   (min 0, median 12)
+K2 donor == 0: 40 of 40
+K3 shifted == 0: 40 of 40
+K4 J in reference: 0 of 40
+K: FAIL
+```
+
+The four RF6 events all carry the junction (8, 6, 10 and 9 reads). The two misses are events
+8 (`chr20:13969919-13979919`) and 10 (`chr20:16926999-16936999`). Today `split_reads`
+**passes** on both, at 13 and 4, so the row as locked would have *added* two false failures.
+No read anywhere in either `sim.bam` holds `J` exactly, at any MAPQ and in any record.
+
+**Why, measured.** Each junction holds one of HG002's own SNPs, and spike carries the sample's
+alleles onto the event copy. That is the "sample's two copies" feature working as designed.
+- **Event 8:** hom-alt `chr20:13979926 T>C` (`1|1`), 7 bases past `END`. spike's log:
+  `7 hom-alt SNPs` in the region.
+- **Event 10:** het `chr20:16926991 C>T` (`1|0`), 9 bases before `POS`. spike's log:
+  `Applied 10 het SNP variants to haplotype sequence`.
+
+A probe built from the plain reference cannot match reads that correctly carry the sample's
+own base. On this data that is 2 of 40 junctions (5%). The idea dies at Gate B, having cost
+one script and no code. The outcome rule says no code: record it and stop. The case file
+gains the trap.

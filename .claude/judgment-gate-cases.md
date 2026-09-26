@@ -76,3 +76,20 @@ what was claimed, what the claim actually rested on, and which gate would have c
   here, to be non-zero where it must be. **Rule for this repo: a script that parses decimals
   with `awk` runs it as `LC_ALL=C awk`. This machine's locale uses a decimal comma, and `mawk`
   turns every such number into 0 silently.**
+
+## 2026-09-26 -- RF6: a junction probe built from the reference, on reads that carry the sample
+
+- **What the plan set out to show.** A 31-base probe `ref[start-15, start) + ref[end, end+16)`
+  would find every correct deletion's junction in its reads. The plan was locked, then the kill
+  test ran.
+- **What it rested on.** That the reads spike writes spell the *reference* on both sides of
+  the junction. They do not. spike puts the sample's own SNPs on the event copy (het alleles
+  of the chosen haplotype, and every hom-alt), so wherever one falls inside the probe, **no**
+  correct read matches it exactly. That was 2 of 40 chr20 deletions. Both pass `split_reads`
+  today, so the row would have *added* two false failures.
+- **How it was caught.** The kill test K1 (at least 2 carriers on 40 of 40), run before any
+  code. That is the gate working.
+- **Which gate would have caught it earlier.** Gate A step 5: *what must be true of the
+  inputs.* **Rule for this repo: any check that compares read bases to the reference must
+  allow for the sample's own alleles, because spike writes them onto the simulated reads on
+  purpose. This includes SNPs inside a probe, and hom-alt SNPs on both copies.**
