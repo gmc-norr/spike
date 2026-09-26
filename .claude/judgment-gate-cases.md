@@ -141,3 +141,21 @@ what was claimed, what the claim actually rested on, and which gate would have c
   inputs*), over the whole input range. **Rule for this repo: a tolerance in a matching rule
   is checked against the smallest discriminating part of the input, not the average one.
   Name the shortest case, and put it in the smoke test.**
+
+## 2026-09-26 -- RF14: a kill test that forced spike past its own refusal
+
+- **What the plan set out to show.** At least 41 of 42 correct deletions would have 1 or more
+  of spike's reads carrying the join. It was locked, then the kill test ran.
+- **What it rested on.** That every K positive was a properly planted event. To copy
+  `validate_pipeline.sh`, the plan passed `--allow-resistant` on every run. That flag exists
+  to override RF8's refusal of events spike cannot plant properly (`SIM_RESIST` above 0.5).
+  One "clean" random site, chr20:7119236, is a low-MAPQ region at 0.93 to 0.95. spike tiled
+  36 pairs over its ~4 kb haplotype, and two runs had no read across the join.
+- **How it was caught.** The locked K+ (at most 1 miss). At `SIM_RESIST` 0.5 or below it was
+  34 of 34.
+- **Which gate would have caught it earlier.** Gate A step 5 (*what must be true of the
+  inputs*). The site draw defined "clean" by the benchmark and by distance from indels, not by
+  whether spike can edit the reads there. **Rule for this repo: when a kill test turns off one
+  of spike's own safety defaults, the plan says what the row must do on the events that
+  default exists to stop, or judges them apart. `SIM_RESIST` is only known after spike runs,
+  so it cannot be filtered at draw time without running spike.**

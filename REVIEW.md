@@ -5958,3 +5958,54 @@ threads; `--allow-resistant` on every run, as `validate_pipeline.sh` passes it).
 **A change a user can see, if this lands.** A DEL truth record whose ID is not `sim_del_N`,
 from another tool or the realism probe's `real_del_*`, fails with a not-evaluable
 `del_planted` row. It is the same trade RF13 made for insertions.
+
+#### Result: RF14 -- refuted as locked, by K+ at one resistant site; no code
+
+`scripts/rf14_k.sh` with master `8b4b878` (md5 `4e2126fcc81bee41e22843f77abf45e9`, the same
+build RF13's C used), then `rf14_planted.py k` and `null`:
+
+```
+K+ runs reaching validate: 42 of 42
+K+ carriers >= 1: 40 of 42  (min 0, median 13)
+K- judged negatives with a carrier: 0 of 210 []
+indistinguishable negatives (not judged): 0 []
+check of the check, h_ sites' unspiked slice with the name filter off: [('h_2883355', 31), ('h_6170298', 31), ('h_6270521', 66), ('h_17303442', 18), ('h_24913579', 80), ('h_32311424', 54), ('h_34528006', 29), ('h_41257715', 40), ('h_45906708', 31), ('h_51890786', 50), ('h_55497625', 5), ('h_57598460', 27)]
+N5 null sites passing: 0 of 200
+```
+
+- **K+ fails: 2 misses, where the plan allowed 1.** Both are at one random site, chr20:7119236:
+  `r_7119236_1000` and `r_7119236_1000_af01`, with 0 carriers each.
+- **Why, measured.** The site is one spike cannot edit. It lies inside the benchmark and far
+  from HG002's indels, but it is a low-MAPQ region:
+  - `SIM_RESIST` is 0.931 to 0.946 on four of its five runs (0.288 on the 10 kb one);
+  - on the 1 kb run, spike warned that 359 of 382 reads over the event are uneditable;
+  - it scaled every fragment to 8.5x (`SIM_DEPTH_FOLD` 4.37) and tiled only 36 pairs over the
+    whole ~4 kb haplotype (2 kb of flank each side). None of them has a read across the join.
+- **What the plan got wrong.** By default spike **refuses** an event above `SIM_RESIST` 0.5
+  (RF8), because it cannot plant it properly. The plan passed `--allow-resistant` on every run
+  to copy `validate_pipeline.sh`. That put four such runs into K+ as "correct deletions", and
+  it never said what the row should do on them. The row's FAIL there states a true fact: none
+  of spike's reads carries the join.
+- **By resistance.**
+  - At `SIM_RESIST` 0.5 or below (what spike accepts by default): **34 of 34** carry, min 1.
+  - Above it: 6 of 8. The four real ones carry at 5 to 22; 7119236's carry at 2, 1, 0 and 0.
+- **VAF 0.1 is thin.** The six runs at `af=0.1` carry at 3, 2, 1, 1, 3 and 0. At a clean site
+  1 is the least seen. How often a correct VAF 0.1 deletion has no read across its join by
+  chance is **not measured**.
+- **K- holds.** 0 of 210 judged negatives carry, and no negative was indistinguishable. N5 is
+  0 of 200.
+- **The check of the check holds.** With the name filter off, HG002's own reads carry at 12 of
+  12 real sites (5 to 80 reads). So the filter is what keeps them out.
+- **Reported, not judged: master on the same runs.**
+  - Master's `split_reads` fails 18 of the 42 correct deletions. The row would pass 16 of
+    those 18; the 2 it would not are the two misses above.
+  - Master exits 0 on 20 of 42. Its failing counted rows are `split_reads` on 18 and
+    `coverage_ratio` on 12.
+  - `coverage_ratio` fails 8 of the 12 real HG002 sites at 0.02 to 0.17. HG002 carries these
+    deletions itself, so a spiked copy on top empties the span. It also fails the 4 resistant
+    7119236 runs. With `split_reads` advisory, those runs would still exit 1.
+
+**Verdict.** Refuted as locked; no code. The outcome rule is followed as written. The row
+itself held everywhere spike plants by default. A next attempt needs a new locked plan on
+fresh sites. It must say what the row does on events spike would refuse, and it must measure
+the chance-zero rate at low VAF, not assume it. These sites have been seen.
