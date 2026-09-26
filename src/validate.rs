@@ -62,10 +62,11 @@ struct TruthEvent {
     /// move a non-advisory row. This field is read by [`ins_alt_sequence`],
     /// which is the only reader of it anywhere.
     ins_alt: Option<Vec<u8>>,
-    /// For INS: `N` when the record's ID is spike's `sim_ins_N`, the number
-    /// spike's own reads for the event carry as `evNNNN_hap_` (RF13). None for
-    /// any other ID, and for every other type.
-    sim_ins_number: Option<u32>,
+    /// `N` when the record's ID is spike's `sim_ins_N` (an INS) or `sim_del_N`
+    /// (a DEL): the number spike's own reads for the event carry as
+    /// `evNNNN_hap_` (RF13, RF14). None for any other ID, and for every other
+    /// type.
+    sim_number: Option<u32>,
     /// The census numbers spike recorded for this event, as INFO holds them.
     census: CensusInfo,
 }
@@ -350,6 +351,33 @@ const PLANTED_PROBE_LEN: usize = 31;
 /// inserted bases matched.
 const PLANTED_MAX_FLANK_MISMATCH: usize = 2;
 
+/// The DEL row that decides: whether the reads spike made for the event are
+/// in the BAM at its breakpoints, carrying its join (RF14).
+const DEL_PLANTED: &str = "del_planted";
+
+/// How far either side of each breakpoint [`DEL_PLANTED`] looks for spike's
+/// reads: the windows `split_reads` reads, so the row sees at least the records
+/// that one did.
+const DEL_PLANTED_PAD: u64 = 500;
+
+/// A deletion's junction probe, in both orientations and without a duplicate:
+/// the haplotype's bases across the join, `left` (the last
+/// [`PLANTED_PROBE_FLANK`] reference bases before START) then `right` (the
+/// first bases from END on). No position is inserted, so the mask is all
+/// false and [`carries_junction_probe`]'s tolerance covers every base.
+fn del_junction_probes(left: &[u8], right: &[u8]) -> Vec<(Vec<u8>, Vec<bool>)> {
+    let mut probe = left.to_ascii_uppercase();
+    probe.extend_from_slice(&right.to_ascii_uppercase());
+    let mask = vec![false; probe.len()];
+    let mut reverse = probe.clone();
+    crate::extract::reverse_complement(&mut reverse);
+    let mut probes = vec![(probe, mask.clone())];
+    if reverse != probes[0].0 {
+        probes.push((reverse, mask));
+    }
+    probes
+}
+
 /// The read-name prefix spike gives the tiled reads of event `n`:
 /// `simulate_event`'s `format!("ev{:04}", n)` and `tile_haplotype_reads`'s
 /// `_hap_`. `simulate.rs` pins that the two agree.
@@ -357,10 +385,10 @@ pub(crate) fn planted_read_prefix(n: u32) -> String {
     format!("ev{:04}_hap_", n)
 }
 
-/// `N` if `id` is spike's INS truth ID `sim_ins_N`; truth.rs numbers it with
-/// the same `i + 1` that names the event's reads.
-fn sim_ins_number(id: &str) -> Option<u32> {
-    let digits = id.strip_prefix("sim_ins_")?;
+/// `N` if `id` is spike's truth ID `<prefix>N` (`sim_ins_N`, `sim_del_N`);
+/// truth.rs numbers it with the same `i + 1` that names the event's reads.
+fn sim_number(id: &str, prefix: &str) -> Option<u32> {
+    let digits = id.strip_prefix(prefix)?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -413,8 +441,9 @@ fn ins_junction_probes(
 
 /// True if some window of `seq` carries one of `probes`: every inserted
 /// position equal, and at most [`PLANTED_MAX_FLANK_MISMATCH`] flank positions
-/// not, case-insensitively.
-fn carries_ins_probe(seq: &[u8], probes: &[(Vec<u8>, Vec<bool>)]) -> bool {
+/// not, case-insensitively. A deletion's probe marks no position inserted, so
+/// the tolerance covers all of it.
+fn carries_junction_probe(seq: &[u8], probes: &[(Vec<u8>, Vec<bool>)]) -> bool {
     let seq = seq.to_ascii_uppercase();
     probes.iter().any(|(probe, mask)| {
         seq.windows(probe.len()).any(|window| {
@@ -484,13 +513,14 @@ const RESISTANT: &str = "resistant";
 /// (CR2).
 const DEPTH_FOLD: &str = "depth_fold";
 
-// The eleven check-name constants above name every row `check_event` pushes,
-// and `print_usage` prints all eleven from these same constants: the five
+// The twelve check-name constants above name every row `check_event` pushes,
+// and `print_usage` prints all twelve from these same constants: the six
 // non-advisory ones
-// (`COVERAGE_RATIO`, `SPLIT_READS`, `INS_PLANTED`, `ALLELE_FREQ`,
-// `EVENT_CHECKED`) and the six advisory ones (`COVERAGE_ANY_MAPQ`,
-// `SPLIT_READS_EACH_END`, `INS_READS` since RF13, `INS_SEQUENCE`, `RESISTANT`,
-// `DEPTH_FOLD`). Renaming any of them moves the printed table and `--help`
+// (`COVERAGE_RATIO`, `DEL_PLANTED`, `SPLIT_READS` for DUP, INV and BND,
+// `INS_PLANTED`, `ALLELE_FREQ`, `EVENT_CHECKED`) and the six advisory ones
+// (`COVERAGE_ANY_MAPQ`, `SPLIT_READS_EACH_END`, `INS_READS` since RF13,
+// `INS_SEQUENCE`, `RESISTANT`, `DEPTH_FOLD`), with `SPLIT_READS` advisory for a
+// DEL since RF14. Renaming any of them moves the printed table and `--help`
 // together, so neither can print one name while the other prints the old one.
 // README.md is still edited by hand: it spells every row name out in prose (the
 // table at "Which check covers which type", and a section each), and nothing in
@@ -547,6 +577,15 @@ fn check_event(
         results.push(check_outcome(&label, COVERAGE_ANY_MAPQ, r, true));
     }
 
+    // The counted DEL row: are spike's own reads for the event there, carrying
+    // its join (RF14). Whether the aligner split them and named the partner is
+    // the realism question `split_reads` below asks, and for a DEL that row is
+    // advisory now. DUP, INV and BND were not measured and are unchanged.
+    if event.sv_type == "DEL" {
+        let r = check_del_planted(&args.bam_path, &args.ref_path, event);
+        results.push(check_outcome(&label, DEL_PLANTED, r, false));
+    }
+
     // Split reads joining the two breakpoints (not INS: its inserted
     // sequence has no second reference breakpoint).
     if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
@@ -580,7 +619,7 @@ fn check_event(
                 )
             }
         };
-        results.push(check_outcome(&label, SPLIT_READS, pooled, false));
+        results.push(check_outcome(&label, SPLIT_READS, pooled, event.sv_type == "DEL"));
         results.push(check_outcome(&label, SPLIT_READS_EACH_END, each_end, true));
     }
 
@@ -766,7 +805,10 @@ fn print_usage() {
     eprintln!("  --help, -h       Show this help");
     eprintln!();
     eprintln!("Checks, by truth-event type:");
-    eprintln!("  DEL, DUP         {}, {}", COVERAGE_RATIO, SPLIT_READS);
+    eprintln!("  DEL              {}, {} (spike's own reads for the", COVERAGE_RATIO, DEL_PLANTED);
+    eprintln!("                   event, named after the truth ID sim_del_N, carrying");
+    eprintln!("                   its join at the breakpoints)");
+    eprintln!("  DUP              {}, {}", COVERAGE_RATIO, SPLIT_READS);
     eprintln!("  INV, BND         {}", SPLIT_READS);
     eprintln!("  INS              {} (spike's own reads for the event,", INS_PLANTED);
     eprintln!("                   named after the truth ID sim_ins_N, carrying its");
@@ -789,6 +831,8 @@ fn print_usage() {
     eprintln!("Advisory checks, printed beside the checks above:");
     eprintln!("  DEL, DUP         {} (the depth ratio again with no", COVERAGE_ANY_MAPQ);
     eprintln!("                   MAPQ floor)");
+    eprintln!("  DEL              {} (split reads joining the two", SPLIT_READS);
+    eprintln!("                   breakpoints: how the aligner wrote the junction)");
     eprintln!(
         "  DEL, DUP, INV    {} (the same evidence and the same",
         SPLIT_READS_EACH_END
@@ -901,7 +945,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: sim_number(&id, "sim_del_"),
                     census: census_info,
                 });
             }
@@ -920,7 +964,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: None,
                     census: census_info,
                 });
             }
@@ -939,7 +983,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: None,
                     census: census_info,
                 });
             }
@@ -961,7 +1005,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len,
                     ins_alt: Some(alt_col.as_bytes().to_vec()),
-                    sim_ins_number: sim_ins_number(&id),
+                    sim_number: sim_number(&id, "sim_ins_"),
                     census: census_info,
                 });
             }
@@ -986,7 +1030,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: None,
                     census: census_info,
                 });
             }
@@ -1017,7 +1061,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: None,
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: None,
                     census: census_info,
                 });
             }
@@ -1040,7 +1084,7 @@ fn load_truth_events(path: &str) -> Result<Vec<TruthEvent>> {
                     alt_allele: Some(alt_allele),
                     ins_len: None,
                     ins_alt: None,
-                    sim_ins_number: None,
+                    sim_number: None,
                     census: census_info,
                 });
             }
@@ -1518,7 +1562,7 @@ fn check_ins_sequence(
 /// [`INS_SEQUENCE_PAD`]. Every such record counts but a secondary or
 /// supplementary one: its MAPQ, and duplicate, QC-fail and unmapped flags, are
 /// the aligner's verdict, not the question. A read carries the event when its
-/// bases hold one of [`ins_junction_probes`] as [`carries_ins_probe`] reads it.
+/// bases hold one of [`ins_junction_probes`] as [`carries_junction_probe`] reads it.
 ///
 /// No read of the sample's own can count, whatever it spells, so there is no
 /// background to rise above and [`MIN_PLANTED_READS`] is 1. Two cases are a
@@ -1526,7 +1570,7 @@ fn check_ins_sequence(
 /// `sim_ins_N`, which leaves spike's reads unknown, and an ALT with no bases.
 fn check_ins_planted(bam_path: &str, ref_path: &str, event: &TruthEvent) -> Result<CheckResult> {
     let label = format_event_label(event);
-    let Some(n) = event.sim_ins_number else {
+    let Some(n) = event.sim_number else {
         return Ok(event_not_evaluable(
             &label,
             INS_PLANTED,
@@ -1567,7 +1611,7 @@ fn check_ins_planted(bam_path: &str, ref_path: &str, event: &TruthEvent) -> Resu
         pos + INS_SEQUENCE_PAD,
         &|flags, _mapq| !(flags.is_secondary() || flags.is_supplementary()),
         &mut |name, _align_start, _ops, seq| {
-            if name.starts_with(prefix.as_bytes()) && carries_ins_probe(seq, &probes) {
+            if name.starts_with(prefix.as_bytes()) && carries_junction_probe(seq, &probes) {
                 names.insert(String::from_utf8_lossy(name).into_owned());
             }
         },
@@ -1576,6 +1620,89 @@ fn check_ins_planted(bam_path: &str, ref_path: &str, event: &TruthEvent) -> Resu
     Ok(CheckResult {
         event_label: label,
         check_name: INS_PLANTED.to_string(),
+        expected,
+        observed: format!("{}", names.len()),
+        pass: names.len() >= MIN_PLANTED_READS,
+        advisory: false, // stamped by check_outcome
+    })
+}
+
+/// Check that the reads spike made for a deletion are in the BAM at its
+/// breakpoints, carrying its join (RF14).
+///
+/// [`check_ins_planted`]'s question for a DEL. `split_reads` asks whether the
+/// aligner split the junction reads and named the partner; on real SV sites it
+/// often does not (the realism probe: 12 of the pipeline's 20 real HG002
+/// deletions fail it in HG002's own BAM). So this row looks only at spike's own
+/// reads for the event, named [`planted_read_prefix`] of the truth ID's `N`,
+/// over START and END +/- [`DEL_PLANTED_PAD`]. Every such record counts but a
+/// secondary or supplementary one. A read carries the event when its bases hold
+/// [`del_junction_probes`] within [`PLANTED_MAX_FLANK_MISMATCH`] substitutions.
+///
+/// Measured on RF14's fresh sites: 33 of 33 correct deletions at VAF 0.5 carry
+/// (8 to 35 reads); at VAF 0.1, 2 of 30 correct ones have no carrier by chance,
+/// where `split_reads` fails 14. Where a real deletion's join is already
+/// reference sequence (repeat units), unedited reads spell it too; the name
+/// filter keeps them out, but the row then shows spike's reads are there, not
+/// that the bases were removed -- `coverage_ratio` measures that.
+///
+/// Not evaluable, which fails (M10): an ID that is not `sim_del_N`, and a START
+/// with fewer than [`PLANTED_PROBE_FLANK`] bases before it.
+fn check_del_planted(bam_path: &str, ref_path: &str, event: &TruthEvent) -> Result<CheckResult> {
+    let label = format_event_label(event);
+    let Some(n) = event.sim_number else {
+        return Ok(event_not_evaluable(
+            &label,
+            DEL_PLANTED,
+            &format!(">={} of spike's reads carrying", MIN_PLANTED_READS),
+            "no sim_del_N id",
+            "the truth record's ID is not spike's sim_del_N, so which reads are spike's \
+             for this event is unknown",
+        ));
+    };
+    let expected = format!(">={} ev{:04} read carrying", MIN_PLANTED_READS, n);
+    let flank = PLANTED_PROBE_FLANK as u64;
+    if event.start < flank {
+        return Ok(event_not_evaluable(
+            &label,
+            DEL_PLANTED,
+            &expected,
+            "start < 15",
+            "fewer than 15 bases precede the deletion, so its join cannot be spelled",
+        ));
+    }
+
+    // `load_truth_events` reads a DEL as `start: vcf_pos`, the 0-based first
+    // deleted base, and `end` as INFO END: the haplotype is
+    // `ref[..start] + ref[end..]`.
+    let right_len = (PLANTED_PROBE_LEN - PLANTED_PROBE_FLANK) as u64;
+    let (_, left) =
+        crate::reference::fetch_window(ref_path, &event.chrom, event.start - flank, event.start)?;
+    let (_, right) =
+        crate::reference::fetch_window(ref_path, &event.chrom, event.end, event.end + right_len)?;
+    let probes = del_junction_probes(&left, &right);
+    let prefix = planted_read_prefix(n);
+
+    let mut names: HashSet<String> = HashSet::new();
+    for breakpoint in [event.start, event.end] {
+        scan_region(
+            bam_path,
+            ref_path,
+            &event.chrom,
+            breakpoint.saturating_sub(DEL_PLANTED_PAD),
+            breakpoint + DEL_PLANTED_PAD,
+            &|flags, _mapq| !(flags.is_secondary() || flags.is_supplementary()),
+            &mut |name, _align_start, _ops, seq| {
+                if name.starts_with(prefix.as_bytes()) && carries_junction_probe(seq, &probes) {
+                    names.insert(String::from_utf8_lossy(name).into_owned());
+                }
+            },
+        )?;
+    }
+
+    Ok(CheckResult {
+        event_label: label,
+        check_name: DEL_PLANTED.to_string(),
         expected,
         observed: format!("{}", names.len()),
         pass: names.len() >= MIN_PLANTED_READS,
@@ -3784,7 +3911,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
-            sim_ins_number: None,
+            sim_number: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "DEL chr7:55000-56000 (EGFR)");
@@ -3804,7 +3931,7 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
-            sim_ins_number: None,
+            sim_number: None,
             census: CensusInfo::default(),
         };
         assert_eq!(format_event_label(&event), "INS chr7:55200 (EGFR)");
@@ -4113,7 +4240,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: None,
             ins_len: None,
             ins_alt: None,
-            sim_ins_number: None,
+            sim_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -4217,7 +4344,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: None,
             ins_len: Some(300),
             ins_alt: None,
-            sim_ins_number: None,
+            sim_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -4344,7 +4471,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
             alt_allele: Some(alt.to_vec()),
             ins_len: None,
             ins_alt: None,
-            sim_ins_number: None,
+            sim_number: None,
             census: CensusInfo::default(),
         }
     }
@@ -4582,7 +4709,7 @@ chr20\t39200000\tbad_1\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=39199000;SVLEN=-1000
         // Since RF13 the counted row is `ins_planted`; `ins_reads` is advisory.
         let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
         let event = TruthEvent {
-            sim_ins_number: Some(1),
+            sim_number: Some(1),
             ins_len: Some(4),
             ins_alt: Some(b"AGGGG".to_vec()),
             ..ins_event("chrA", 10_000)
@@ -6389,11 +6516,11 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
         assert_eq!(
             failure_message(&results, true).as_deref(),
-            // Four rows on a DEL since T5: this row, `coverage_ratio`,
-            // `split_reads` and the advisory `split_reads_each_end`. The
-            // default count above is the half that matters and it did not
-            // move -- both advisory rows are still out of it.
-            Some("4/4 validation checks failed"),
+            // Five rows on a DEL since RF14: this row, `coverage_ratio`,
+            // `del_planted`, and the advisory `split_reads` and
+            // `split_reads_each_end`. The default count above is the half that
+            // matters: still 2/2, now `coverage_ratio` and `del_planted`.
+            Some("5/5 validation checks failed"),
             "--strict counts it with the rest"
         );
 
@@ -6602,7 +6729,10 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert_eq!(pooled.expected, ">=2 joining chrA:12001");
         assert_eq!(pooled.observed, "3", "three distinct names, all at one end");
         assert!(pooled.pass, "the pooled row passes one-sided evidence");
-        assert!(!pooled.advisory, "split_reads stays a real check");
+        // A DEL here: since RF14 its `split_reads` is advisory and `del_planted`
+        // decides. `test_the_del_rows_are_del_planted_counted_and_split_reads_advisory`
+        // pins that a DUP's still counts.
+        assert!(pooled.advisory, "a DEL's split_reads is advisory since RF14");
 
         let each_end = named(&results, "split_reads_each_end");
         assert_eq!(each_end.observed, "3/0", "nothing joins back from the partner");
@@ -6682,9 +6812,14 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         // missing file would start failing runs that exit 0 today (T1's F1).
         // Both rows come out of one pair of queries, so one unreadable BAM is
         // one error reported twice -- once in the exit status, once beside it.
+        // A DUP, whose pooled row still counts: a DEL's is advisory since RF14.
         let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
         let mut results: Vec<CheckResult> = Vec::new();
-        check_event(&args, &del_event("chrA", 10_000, 12_000), &NearbyRecords::default(), &mut results);
+        let dup = TruthEvent {
+            sv_type: "DUP".to_string(),
+            ..del_event("chrA", 10_000, 12_000)
+        };
+        check_event(&args, &dup, &NearbyRecords::default(), &mut results);
 
         let each_end = named(&results, "split_reads_each_end");
         assert!(each_end.advisory, "an errored per-end row is still advisory");
@@ -7972,7 +8107,7 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
     /// Truth record `sim_ins_1` at [`INS_CARRIED_POS`], carrying `inserted`.
     fn planted_event(inserted: &[u8]) -> TruthEvent {
         TruthEvent {
-            sim_ins_number: Some(1),
+            sim_number: Some(1),
             ..ins_event_with_alt(INS_CARRIED_POS, inserted)
         }
     }
@@ -7999,7 +8134,7 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         // insertion is the planted event (MIN_PLANTED_READS).
         let (dir, fasta, cram) = planted_reads_cram("planted_one");
         let event = TruthEvent {
-            sim_ins_number: Some(2),
+            sim_number: Some(2),
             ..planted_event(&carried_insertion())
         };
         let rows = ins_rows(&cram, &fasta, &event);
@@ -8033,7 +8168,7 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
     fn test_ins_planted_is_not_evaluable_without_a_spike_id() {
         let (dir, fasta, cram) = planted_reads_cram("planted_noid");
         let event = TruthEvent {
-            sim_ins_number: None,
+            sim_number: None,
             ..planted_event(&carried_insertion())
         };
         let rows = ins_rows(&cram, &fasta, &event);
@@ -8073,24 +8208,24 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         };
         // Probe positions: flank bases left[16..31], inserted bases at 31..47.
         let swap = |b: u8| if b == b'A' { b'C' } else { b'A' };
-        assert!(carries_ins_probe(&read(&|_| {}), &probes), "exact");
+        assert!(carries_junction_probe(&read(&|_| {}), &probes), "exact");
         assert!(
-            carries_ins_probe(&read(&|r| { r[20] = swap(r[20]); r[25] = swap(r[25]); }), &probes),
+            carries_junction_probe(&read(&|r| { r[20] = swap(r[20]); r[25] = swap(r[25]); }), &probes),
             "two flank substitutions: the sample's SNPs and errors"
         );
         assert!(
-            !carries_ins_probe(
+            !carries_junction_probe(
                 &read(&|r| { r[18] = swap(r[18]); r[22] = swap(r[22]); r[27] = swap(r[27]); }),
                 &probes
             ),
             "three flank substitutions"
         );
         assert!(
-            !carries_ins_probe(&read(&|r| { r[35] = swap(r[35]); }), &probes),
+            !carries_junction_probe(&read(&|r| { r[35] = swap(r[35]); }), &probes),
             "one substitution in an inserted base"
         );
         assert!(
-            carries_ins_probe(&revcomp_of(&read(&|_| {})), &probes),
+            carries_junction_probe(&revcomp_of(&read(&|_| {})), &probes),
             "either orientation"
         );
     }
@@ -8106,8 +8241,8 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         let mut read = left.clone();
         read.extend_from_slice(&inserted);
         read.extend_from_slice(&right);
-        assert!(carries_ins_probe(&read, &ins_junction_probes(&left, &inserted, &right)));
-        assert!(!carries_ins_probe(&read, &ins_junction_probes(&left, &wrong, &right)));
+        assert!(carries_junction_probe(&read, &ins_junction_probes(&left, &inserted, &right)));
+        assert!(!carries_junction_probe(&read, &ins_junction_probes(&left, &wrong, &right)));
     }
 
     #[test]
@@ -8141,8 +8276,267 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         )
         .unwrap();
         let events = load_truth_events(path.to_str().unwrap()).unwrap();
-        let numbers: Vec<Option<u32>> = events.iter().map(|e| e.sim_ins_number).collect();
+        let numbers: Vec<Option<u32>> = events.iter().map(|e| e.sim_number).collect();
         assert_eq!(numbers, vec![Some(7), None, None]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── del_planted (RF14) ─────────────────────────────────────────────────
+
+    /// chrA for the `del_planted` fixture: 20 kb of seeded random bases, so a
+    /// 16-base stretch is unique and a probe shifted by one base is a different
+    /// probe (the cycling contig repeats every 4 bases).
+    fn del_planted_contig() -> Vec<u8> {
+        pseudo_random_bases(61, 20_000)
+    }
+
+    /// One read of the `del_planted` fixture: name, 0-based start, CIGAR,
+    /// bases, BAM flags and MAPQ.
+    type DelPlantedRead = (&'static str, usize, Vec<(Kind, usize)>, Vec<u8>, u16, u8);
+
+    /// The fixture deletion: `[DEL_PLANTED_START, DEL_PLANTED_END)`, 3 kb, so
+    /// the two 500 bp breakpoint windows do not overlap.
+    const DEL_PLANTED_START: u64 = 5_000;
+    const DEL_PLANTED_END: u64 = 8_000;
+
+    /// One indexed CRAM of 100 bp reads spelling the deletion's join
+    /// `seq[..5000] + seq[8000..]`, told apart by name, placement, flags and
+    /// bases:
+    ///
+    /// - `ev0001_hap_000001`: event 1's, aligned at the START side (60M40S);
+    /// - `ev0001_hap_000002`: event 1's, aligned at the END side only (40S60M),
+    ///   inside END's window and outside START's;
+    /// - `ev0001_hap_000003`: event 1's, **MAPQ 0 and duplicate-flagged**;
+    /// - `ev0001_hap_000004`: event 1's, but **secondary**;
+    /// - `ev0001_hap_000005`: event 1's, **one** base of the probe changed;
+    /// - `ev0001_hap_000006`: event 1's, **three** bases of the probe changed;
+    /// - `A00744:46:HV3C3DSXX:2:1104:13160:1000`: a read of the sample's own;
+    /// - `ev0002_hap_000001`: **another event's** read.
+    ///
+    /// For truth record `sim_del_1`, `del_planted` must count exactly 1, 2, 3
+    /// and 5.
+    fn del_planted_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = del_planted_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "del_planted", &seq);
+        let header = one_contig_header(seq.len());
+        let (s, e) = (DEL_PLANTED_START as usize, DEL_PLANTED_END as usize);
+
+        // Left-placed carrier: 60 bases before START, 40 from END on. Read
+        // index 45..60 is the probe's left 15, 60..76 its right 16.
+        let left_placed = || {
+            let mut b = seq[s - 60..s].to_vec();
+            b.extend_from_slice(&seq[e..e + 40]);
+            b
+        };
+        let swap = |b: u8| if b == b'A' { b'C' } else { b'A' };
+        let with_changes = |at: &[usize]| {
+            let mut b = left_placed();
+            for &i in at {
+                b[i] = swap(b[i]);
+            }
+            b
+        };
+        let left_ops = [(Kind::Match, 60), (Kind::SoftClip, 40)];
+        let mut right_placed = seq[s - 40..s].to_vec();
+        right_placed.extend_from_slice(&seq[e..e + 60]);
+
+        let mut reads: Vec<DelPlantedRead> = vec![
+            ("ev0001_hap_000001", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
+            ("ev0001_hap_000003", s - 60, left_ops.to_vec(), left_placed(), 0x400, 0),
+            ("ev0001_hap_000004", s - 60, left_ops.to_vec(), left_placed(), 0x100, 60),
+            ("ev0001_hap_000005", s - 60, left_ops.to_vec(), with_changes(&[55]), 0, 60),
+            ("ev0001_hap_000006", s - 60, left_ops.to_vec(), with_changes(&[50, 55, 65]), 0, 60),
+            ("A00744:46:HV3C3DSXX:2:1104:13160:1000", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
+            ("ev0002_hap_000001", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
+            (
+                "ev0001_hap_000002",
+                e,
+                vec![(Kind::SoftClip, 40), (Kind::Match, 60)],
+                right_placed,
+                0,
+                60,
+            ),
+        ];
+        reads.sort_by_key(|r| r.1);
+        let records: Vec<noodles::cram::Record> = reads
+            .iter()
+            .map(|(name, start0, ops, bases, flags, mapq)| {
+                spliced_record_with(name, *start0, ops, bases, *flags, *mapq)
+            })
+            .collect();
+        let cram_path = write_indexed_cram(&dir, "del_planted", &fasta_path, &header, &records);
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// Truth record `sim_del_1` over the fixture's deletion, ending at `end`.
+    fn del_planted_event(end: u64) -> TruthEvent {
+        TruthEvent {
+            sim_number: Some(1),
+            ..del_event("chrA", DEL_PLANTED_START, end)
+        }
+    }
+
+    /// The rows one event leaves behind on a fixture.
+    fn event_rows(cram: &str, fasta: &str, event: &TruthEvent) -> Vec<CheckResult> {
+        let args = args_for(cram, fasta);
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, event, &NearbyRecords::default(), &mut results);
+        results
+    }
+
+    #[test]
+    fn test_del_planted_counts_only_the_events_own_reads() {
+        let (dir, fasta, cram) = del_planted_cram("del_planted_own");
+        let rows = event_rows(&cram, &fasta, &del_planted_event(DEL_PLANTED_END));
+        let r = named(&rows, DEL_PLANTED);
+        // Event 1's reads 1, 2, 3 and 5: the one placed at END alone, the MAPQ 0
+        // duplicate (how the aligner scored or flagged spike's read is not the
+        // question) and the one with a single changed base (a sample SNP or an
+        // error). Not the secondary record, not the one three bases off, not
+        // the sample's read and not event 2's.
+        assert_eq!(r.observed, "4", "{} / {}", r.expected, r.observed);
+        assert!(r.pass);
+        assert!(!r.advisory, "del_planted is the DEL event's counted row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_del_planted_passes_on_one_carrying_read() {
+        // Event 2 has one read in the fixture; with the sample's reads left out
+        // one carrying read of spike's own is the planted event.
+        let (dir, fasta, cram) = del_planted_cram("del_planted_one");
+        let event = TruthEvent {
+            sim_number: Some(2),
+            ..del_planted_event(DEL_PLANTED_END)
+        };
+        let rows = event_rows(&cram, &fasta, &event);
+        let r = named(&rows, DEL_PLANTED);
+        assert_eq!(r.observed, "1", "{} / {}", r.expected, r.observed);
+        assert!(r.pass, "one carrying read of spike's own is enough");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_del_planted_fails_a_truth_whose_end_is_50_bp_off() {
+        // RF14's N2a: the same reads, a truth record whose deletion runs 50 bp
+        // too far. Its join is not what the reads spell.
+        let (dir, fasta, cram) = del_planted_cram("del_planted_off");
+        let rows = event_rows(&cram, &fasta, &del_planted_event(DEL_PLANTED_END + 50));
+        let r = named(&rows, DEL_PLANTED);
+        assert_eq!(r.observed, "0", "{} / {}", r.expected, r.observed);
+        assert!(!r.pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_del_planted_is_not_evaluable_without_a_spike_id() {
+        let (dir, fasta, cram) = del_planted_cram("del_planted_noid");
+        let event = TruthEvent {
+            sim_number: None,
+            ..del_planted_event(DEL_PLANTED_END)
+        };
+        let rows = event_rows(&cram, &fasta, &event);
+        let r = named(&rows, DEL_PLANTED);
+        assert!(!r.pass, "no sim_del_N ID, no way to know spike's reads");
+        assert!(r.observed.contains("id"), "{} / {}", r.expected, r.observed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_del_probe_allows_two_substitutions_and_not_three() {
+        let left = pseudo_random_bases(67, 40);
+        let right = pseudo_random_bases(71, 40);
+        let probes = del_junction_probes(&left[25..], &right[..16]);
+        // A read over the join: 40 bases before it, 40 after. The probe is read
+        // positions 25..56 (15 before the join, 16 after).
+        let read = |at: &[usize]| {
+            let mut r = left.clone();
+            r.extend_from_slice(&right);
+            for &i in at {
+                r[i] = if r[i] == b'A' { b'C' } else { b'A' };
+            }
+            r
+        };
+        assert!(carries_junction_probe(&read(&[]), &probes), "exact");
+        assert!(carries_junction_probe(&read(&[30, 50]), &probes), "two substitutions");
+        assert!(
+            !carries_junction_probe(&read(&[28, 38, 50]), &probes),
+            "three substitutions"
+        );
+        assert!(carries_junction_probe(&revcomp_of(&read(&[])), &probes), "either orientation");
+        // A read of the reference with no deletion does not carry it.
+        let unjoined = pseudo_random_bases(67, 80);
+        assert!(!carries_junction_probe(&unjoined, &probes), "no join, no carrier");
+    }
+
+    #[test]
+    fn test_the_del_rows_are_del_planted_counted_and_split_reads_advisory() {
+        let (dir, fasta, cram) = del_planted_cram("del_planted_rows");
+        let flags = |event: &TruthEvent| -> Vec<(String, bool)> {
+            event_rows(&cram, &fasta, event)
+                .iter()
+                .filter(|r| {
+                    [COVERAGE_RATIO, COVERAGE_ANY_MAPQ, DEL_PLANTED, SPLIT_READS, SPLIT_READS_EACH_END]
+                        .contains(&r.check_name.as_str())
+                })
+                .map(|r| (r.check_name.clone(), r.advisory))
+                .collect()
+        };
+        let own = |v: &[(&str, bool)]| -> Vec<(String, bool)> {
+            v.iter().map(|&(n, a)| (n.to_string(), a)).collect()
+        };
+        assert_eq!(
+            flags(&del_planted_event(DEL_PLANTED_END)),
+            own(&[
+                (COVERAGE_RATIO, false),
+                (COVERAGE_ANY_MAPQ, true),
+                (DEL_PLANTED, false),
+                (SPLIT_READS, true),
+                (SPLIT_READS_EACH_END, true),
+            ]),
+            "split_reads says how the aligner split it; it no longer decides a DEL (RF14)"
+        );
+        let dup = TruthEvent {
+            sv_type: "DUP".to_string(),
+            ..del_planted_event(DEL_PLANTED_END)
+        };
+        assert_eq!(
+            flags(&dup),
+            own(&[
+                (COVERAGE_RATIO, false),
+                (COVERAGE_ANY_MAPQ, true),
+                (SPLIT_READS, false),
+                (SPLIT_READS_EACH_END, true),
+            ]),
+            "a DUP was not measured: its split_reads still decides, and it gets no del_planted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_truth_events_reads_the_del_event_number_from_the_id() {
+        let dir = fixture_dir("del_planted_ids");
+        let path = dir.join("truth_del_ids.vcf");
+        std::fs::write(
+            &path,
+            "##fileformat=VCFv4.3\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+             chr1\t100\tsim_del_4\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=500;SVLEN=-400\tGT\t0/1\n\
+             chr1\t1000\treal_del_1000\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=1400;SVLEN=-400\tGT\t0/1\n\
+             chr1\t2000\tsim_ins_4\tN\t<DEL>\t999\tPASS\tSVTYPE=DEL;END=2400;SVLEN=-400\tGT\t0/1\n\
+             chr1\t3000\tsim_ins_7\tA\tAGGGG\t999\tPASS\tSVTYPE=INS;SVLEN=4\tGT\t0/1\n\
+             chr1\t4000\tsim_del_7\tA\tAGGGG\t999\tPASS\tSVTYPE=INS;SVLEN=4\tGT\t0/1\n",
+        )
+        .unwrap();
+        let events = load_truth_events(path.to_str().unwrap()).unwrap();
+        let numbers: Vec<Option<u32>> = events.iter().map(|e| e.sim_number).collect();
+        // Each type reads only its own spike ID.
+        assert_eq!(numbers, vec![Some(4), None, None, Some(7), None]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
