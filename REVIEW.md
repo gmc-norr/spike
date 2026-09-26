@@ -5816,3 +5816,145 @@ N5 null sites passing: 0 of 200
 **A change a user can see.** A truth VCF with a symbolic `<INS>` ALT, which spike wrote
 before CR7, or one from another tool without `sim_ins_N` IDs, now fails its insertions with
 a not-evaluable `ins_planted` row. The plan locked this. The README says so.
+
+## RF14 -- a deletion row that asks whether spike's own reads are there (2026-09-26)
+
+**Background.**
+- **RF6.** The default `split_reads` false-fails 4 of 40 random 10 kb deletions on chr20 and
+  3 of 40 on chr1. The reads carry the junction, but the aligner puts the short piece on
+  another chromosome. Two junction rows that read the bases of **all** reads were refuted:
+  - the sample's own SNPs sit inside the probe (2 of 40);
+  - at real SV sites the join is already reference sequence nearby, so unedited reads
+    spell it too (14 of the pipeline's 20).
+- **RF14.** `split_reads` fails 12 of the pipeline's 20 *real* HG002 deletions in HG002's
+  own BAM, and 9 of 15 isolated real ones of 500 bp or more.
+- **RF13's fix.** For insertions, only spike's own reads for the event count now. The
+  sample's reads can no longer match, so reference-like joins stop mattering there.
+- **The user's choice** (2026-09-26): option 1, the same idea for deletions.
+
+#### Plan: RF14, `del_planted` (locked before K)
+
+**Principle.** The default DEL row asks whether the reads spike made for the event are in
+the BAM at the truth record's breakpoints, carrying its join. How the aligner split them
+does not matter.
+
+**The row** (`scripts/rf14_planted.py` is its replica, run before any Rust).
+- **Whose reads.** The truth ID is `sim_del_N`; spike names that event's reads
+  `evNNNN_hap_*`. `truth.rs` and `simulate.rs` number both `i + 1` over one event list, as
+  for RF13. No other read counts.
+- **Which records.** Those over START +/- 500 or END +/- 500, the windows `split_reads`
+  reads, that are not secondary or supplementary. MAPQ, duplicate, QC-fail and unmapped
+  flags do not exclude a record.
+- **Carrying.** The probe is the event haplotype's 31 bases across the join,
+  `ref[START-15, START) + ref[END, END+16)`, in either orientation.
+  - START and END are as `load_truth_events` reads a DEL: POS (the 0-based first deleted
+    base) and INFO END.
+  - A read carries if some 31-base window of it is within **2 substitutions** of the probe.
+    Two is for the sample's SNPs and sequencing errors (case file, RF6).
+  - A deletion has no inserted bases, so all 31 positions are reference bases and the
+    tolerance covers all of them. RF13's lesson (tolerance against the smallest part that
+    decides) is met by the negatives below, and by the "what it cannot see" section.
+- **Verdict.** PASS at **1** or more carrying reads.
+- **Not evaluable (FAIL).** The ID is not `sim_del_N`, or START < 15.
+- **The other rows.** For DEL, `split_reads` becomes **advisory**. `split_reads_each_end`
+  already is. `coverage_ratio` stays counted: it is what measures that the bases were
+  removed. DUP, INV and BND are unchanged, since none was measured.
+
+**Smoke test, on data already seen.** These are the 70 saved RF6 runs, made with master
+`c0c9614`: the chr20 subset (10), the chr1 set (40) and the pipeline's 20 real HG002
+deletions on NA18488. Command: `rf14_planted.py k <dir> <ref>`.
+
+| Set | Carrying, all runs | Master `split_reads` FAIL | Judged negatives carrying | Indistinguishable |
+| --- | --- | --- | --- | --- |
+| chr20 subset | 10 of 10 (min 9) | 4 | 0 of 50 | 0 |
+| chr1 | 40 of 40 (min 5) | 3 | 0 of 200 | 0 |
+| pipeline | 20 of 20 (min 4) | 13 | 0 of 97 | 3 |
+
+- RF6's two SNP-in-probe events (chr20 runs 5 and 6) carry at 14 and 18. At tolerance 0 they
+  carry at 0 and 0, so the tolerance is what keeps them.
+- The 3 indistinguishable negatives (defined below) are pipeline event 1's N3 and event 14's
+  N2a and N2b. They carry at 11, 10 and 10, as the definition says they must.
+
+**What the row cannot see, decided from the reference before any read is counted**
+(`rf14_planted.py sites`).
+- **Indistinguishable negatives.** A wrong truth whose own probe, in either orientation, is
+  within 2 substitutions of some 31-base window of what spike planted,
+  `ref[START-2000, START) + ref[END, END+2000)` (the haplotype, to its 2 kb flanks). The
+  planted reads then spell that truth's join as well, and no rule reading 31 bases can tell
+  the two apart.
+  - Such a negative is listed with its carrier count, and not judged.
+  - Among the fresh K sites below it is **0 of 108** (36 spans x N2a, N2b, N3).
+- **Joins that are already reference sequence.** At **9 of the 12** fresh real sites, the
+  probe is within 2 substitutions of the reference within 1 kb of a breakpoint (RF6's guard
+  distance: 0 at 6 sites, 1 at 2, 2 at 1). At the 24 random spans it is 6 to 12.
+  - There, a read without the deletion spells the join too. So the row shows spike's reads
+    are there, but not that the bases were removed.
+  - `coverage_ratio`, still counted, is what measures removal.
+  - This limit is reported, not judged. RF6's all-reads row failed on exactly these sites.
+
+**Sites** (`scripts/rf14_sites.py`, seeds 20261021-3, `scripts/rf14_sites.tsv`, md5
+`f0c56b756a56f3debe96a1bf6f07b457`).
+- **Seen positions.** No site is within 2 kb of any of 982 seen positions:
+  - `rf14_seen_dels.txt`: CR4's chr20 40, the pipeline 20 and the realism probe's 15
+    deletions;
+  - the RF6 chr20 subset;
+  - the three insertion site lists (`rf11`, `rf13`, `rf13b`).
+- **`rand`.** 6 random benchmark sites. The start and all four ends (50, 300, 1000 and
+  10000 bp) are clean: at least 1 kb inside one benchmark interval, and at least 1 kb from
+  any HG002 variant of 10 bp or more.
+- **`hg`.** 12 real HG002 deletions, isolated, pure and single-ALT, drawn at random from the
+  candidates: 6 of the 68 at 50-299 bp and 6 of the 17 at 300 bp to 50 kb. They are 50 to
+  436 bp long.
+- **`null`.** 200 random benchmark sites, each with a clean POS and POS + 1000.
+
+**K** (`scripts/rf14_k.sh`; master `8b4b878` built in its own target dir and md5'd; 12
+threads; `--allow-resistant` on every run, as `validate_pipeline.sh` passes it).
+- **Positives.** Each `rand` site gets deletions of 50, 300, 1000 and 10000 bp at VAF 0.5,
+  and 1000 bp at `af=0.1`: 30 runs. Each `hg` deletion runs at its own POS and END at VAF
+  0.5: 12 runs.
+- **K+.** At least 38 of the 42 reach `validate`, and all but at most 1 of those that do have
+  1 or more carriers.
+- **K-.** On every positive run that reaches `validate`, each of these must have **0**
+  carriers, unless it is indistinguishable as defined above:
+  - N1: the unspiked `slice.bam`;
+  - N2a: END + 50;
+  - N2b: START - 50;
+  - N3: START + 1000 and END + 1000;
+  - N4: the ID renumbered to the next event.
+  - N5: 0 of the 200 `null` sites pass on the unedited 35x BAM, as `sim_del_1` from POS to
+    POS + 1000.
+- **Check of the check** (reported). On the `hg` runs' unspiked slices, with the name
+  filter off, HG002's own reads carry the join. That shows the filter is what keeps them
+  out.
+- **Reported, not judged.** Master's `split_reads` verdict on each positive, from its
+  `validate.json`.
+- **Outcome.** Refuted if K+ or K- fails: no code, and the finding is recorded. Otherwise,
+  code.
+
+**C, after code.**
+- **C1, tests first.** Each of these mutations must redden a test:
+  - dropping the name filter (a sample read carrying the join counts);
+  - dropping the ID match (another event's reads count);
+  - tolerance 0 (a SNP in the probe loses the read);
+  - tolerance 3;
+  - the probe's right half read from END + 1;
+  - only the START window scanned (a carrier placed at END is missed);
+  - `split_reads` left counted for DEL;
+  - `split_reads` made advisory for DUP too.
+
+  The full suite runs in debug and release, with no new clippy warning.
+- **C2.** The Rust row's observed count equals the replica's on every K positive, and on
+  N2a, N2b and N3.
+- **C3.** Master's and the new validate run on the same merged BAMs: the K positives, and
+  the 70 saved RF6 runs. **Pass: no run where master exits 0 and the new one does not.** How
+  many go from 1 to 0 is reported.
+
+**Also in this step.**
+- `slice_loop.sh` cuts `;af=...` off the event spec before it reads coordinates. Before,
+  `del:chr20:S-E;af=0.1` gave an end of `E;af=0.1`, and the slice arithmetic failed.
+- `validate_pipeline.sh`'s comment listing the advisory rows gains `ins_reads` (RF13) and,
+  if this lands, `split_reads` for DEL.
+
+**A change a user can see, if this lands.** A DEL truth record whose ID is not `sim_del_N`,
+from another tool or the realism probe's `real_del_*`, fails with a not-evaluable
+`del_planted` row. It is the same trade RF13 made for insertions.

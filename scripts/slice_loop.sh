@@ -34,9 +34,13 @@ out="$1"; spike="$2"; bam="$3"; ref="$4"; event="$5"; threads="${6:-4}"
 shift 6 2>/dev/null || shift 5
 PAD=100000
 
-# The event spec is `<type>:<chrom>:<start>-<end>` or `ins:<chrom>:<pos>:<len>`.
-chrom=$(echo "$event" | cut -d: -f2)
-coords=$(echo "$event" | cut -d: -f3)
+# The event spec is `<type>:<chrom>:<start>-<end>` or `ins:<chrom>:<pos>:<len>`,
+# either followed by options such as `;af=0.1`. The options are cut off before the
+# coordinates are read: `del:chr20:100-200;af=0.1` would otherwise give an end of
+# `200;af=0.1`, and the slice arithmetic below fails on it.
+spec="${event%%;*}"
+chrom=$(echo "$spec" | cut -d: -f2)
+coords=$(echo "$spec" | cut -d: -f3)
 start=$(echo "$coords" | cut -d- -f1)
 end=$(echo "$coords" | cut -d- -f2)
 [ "$end" = "$start" ] && end=$start
