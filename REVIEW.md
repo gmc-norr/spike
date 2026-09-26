@@ -5037,3 +5037,102 @@ README and the "What spike refuses" table wait on it.
   count of 9 was without them).
 - **CLI reference:** the README's copy matches `spike --help` apart from the one description
   line it has never carried.
+
+## RF6 -- a default check that reads the aligner, not the reads (2026-09-26)
+
+**The finding** (RF6 in `CLINICAL_SV_NEW_FINDINGS.md`): the default `split_reads` row failed
+4 of 40 correct 10 kb deletions on chr20 (events 15, 25, 33 and 34 of `cr4_placements.py`'s
+list), so those runs exit 1.
+
+**The cause, measured before this plan** on the run's saved `sim.bam` files (primary records
+within 500 bp of each breakpoint, any MAPQ):
+- The junction reads are there, and bwa-mem2 did split them: 10, 3+6, 11 and 1+7 reads carry
+  an `SA:Z` entry at the two ends of events 15, 25, 33 and 34.
+- But the supplementary piece lands on another chromosome (chr10, chr12, chrX, chr4, ...),
+  almost always at MAPQ 0. The sequence just past the far breakpoint is repeated elsewhere,
+  so the aligner cannot place the short piece.
+- Only 3 entries name the partner at all: two on event 25 and one on event 34, whose
+  primaries are at MAPQ 0 and 6, below `--min-mapq`.
+
+A real deletion at those loci would align the same way. The check measures where the aligner
+put the piece, not whether the reads carry the deletion. (README says these four had "no
+`SA:Z` entry at either end". That is wrong, and the docs step corrects it.)
+
+**The user's choice** (2026-09-26): option 1. A new default row reads the junction's bases,
+and `split_reads` becomes advisory for DEL.
+
+#### Plan: RF6, a `junction_sequence` row for DEL (locked before any code or any K run)
+
+**Principle.** A default check fails when the spike-in is wrong, not when the locus is hard
+for the aligner.
+
+**The row.** It is named `junction_sequence` and applies to DEL only.
+- **The probe.** `J = ref[start - 15, start) + ref[end, end + 16)`, 31 bases, with `start`
+  and `end` as `TruthEvent` holds a DEL. `J` exists only where the two sides are joined. A
+  read carries the junction if its bases hold `J` or its reverse complement.
+- **The reads.** Distinct names from `for_each_alignment` over 500 bp either side of either
+  breakpoint (the `split_reads` window), at `--min-mapq`: primary, mapped, non-duplicate,
+  non-QC-fail, non-supplementary.
+- **Pass:** at least 2 reads (`MIN_SPLIT_READS`).
+- **Not evaluable**, which is a failed row as in M10:
+  - `J` or its reverse complement is already in the reference within 1000 bp
+    (`INS_KMER_REF_PAD`) of either breakpoint, so unedited reads would match;
+  - or `start < 15`.
+- **The verdict.** The row is non-advisory. For DEL, `split_reads` and `split_reads_each_end`
+  become advisory (still printed); DUP, INV and BND are unchanged, since none was measured.
+  This adds a row to every DEL's text and `--json` output, which is a visible default change.
+- **Why 15 + 16.** It is `INS_KMER_LEN` (31), which `ins_sequence` already uses as a specific
+  k-mer inside a read, split across the two sides.
+
+**Criteria.** Each is run and its output recorded in the result commit.
+- **K, the kill test. It is run first, before any code**, as `scripts/rf6_kill.py` on the
+  saved T2 C4 runs (`/home/parlar_ai/spike-next-run/scratch/t2-c4`, events list md5
+  `8f30486221e221e76c7a863ae0755c4b`, the same 40 as CR4's C4). With `samtools` standing in
+  for the row:
+  - K1: at least 2 reads in `run/sim.bam` on **40 of 40**, including the four;
+  - K2: 0 reads in `slice.bam` (the donor, never spiked) on **40 of 40**;
+  - K3: 0 reads with `J` built from `END + 50` on **40 of 40**;
+  - K4: `J` in the reference near a breakpoint on **0 of 40**.
+
+  Any miss refutes the row as locked, and no code is written. `sim.bam` stands in for
+  `merged.bam`, which was not kept: `merged.bam` is the donor minus the replaced reads plus
+  `sim.bam`, and K2 shows the donor adds no carrier.
+- **C1, it fixes the known cases.** In a fresh slice-loop run of the 40 chr20 events
+  (`real_events.sh` with `BEFORE_SPIKE` set to master's binary, so both validates read the
+  same merged BAM), events 15, 25, 33 and 34 exit 1 under master and **0** under the new
+  validate.
+- **C2, it goes red.** On 8 chr20 slice-loop runs with `merged.bam` kept (the four, plus
+  events 1-4), `scripts/rf6_red.sh` must show, on **8 of 8** each:
+  - the truth VCF with `END + 50` on `merged.bam`: `junction_sequence` FAIL, and exit non-zero;
+  - the correct truth VCF on the unspiked `slice.bam`: `junction_sequence` FAIL at observed 0,
+    and exit non-zero.
+- **C3, no run that passes today fails.** Master's and the new validate run on the same
+  merged BAMs (`scripts/rf6_score.py`) for three sets:
+  - the 40 chr20 events;
+  - the 40 chr1 events (`cr4_placements.py BED chr1`, md5
+    `fdd0dcdb2b4ce2f38a338da8a4b81568`);
+  - the 20 real HG002 deletions `validate_pipeline.sh` spikes into NA18488
+    (`scripts/rf6_pipeline_events.txt`, md5 `3f72b53b6f670169feed3f411b4b4565`, with
+    `SPIKE_ARGS=--allow-resistant`), per RF8's lesson that real SV sites are the
+    population, not random spots.
+
+  **Pass: no event where master exits 0 and the new validate does not.** How many go from 1
+  to 0 is reported.
+- **C4, the tests bite.** Tests are written first and seen red. Each of these mutations must
+  redden at least one test:
+  - the probe taken from the wrong side (`ref[start, start + 15)`);
+  - the floor at 1;
+  - the reference guard removed;
+  - `split_reads` left non-advisory for DEL.
+
+  The full suite passes, and there is no clippy warning master does not have.
+
+**Also in this step.** `slice_loop.sh` and `real_events.sh` take `SPIKE_ARGS`, extra flags for
+spike itself; before, `EXTRA` reached only `spike validate`. The README's per-type check table
+and its "What each check establishes" section describe the row, and the wrong "no `SA:Z` entry"
+sentence is corrected with the numbers above.
+
+**Outcome rules.**
+- K fails: refuted as locked, no code; record which part failed.
+- K passes and C1-C4 pass: supported, keep.
+- C1, C2 or C3 fails: revert the code.

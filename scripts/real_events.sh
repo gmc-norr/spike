@@ -31,6 +31,8 @@ export -f one
 export HERE="$here" OUT="$out" SPIKE="$spike" BAM="$bam" REF="$ref" THREADS="$threads"
 # BEFORE_SPIKE, if set, is validated against each run's own merged BAM too.
 export BEFORE_SPIKE="${BEFORE_SPIKE:-}"
+# SPIKE_ARGS, if set, is passed to spike itself (see slice_loop.sh).
+export SPIKE_ARGS="${SPIKE_ARGS:-}"
 awk '{printf "%d %s\n", NR, $0}' "$out/events.txt" \
   | xargs -P "$parallel" -L 1 bash -c 'one "$0" "$1"'
 

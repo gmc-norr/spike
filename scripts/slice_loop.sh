@@ -61,8 +61,11 @@ echo "$slice_rc" > "$out/slice.exit"
 [ "$slice_rc" = 0 ] || exit 1
 samtools index -@ "$threads" "$out/slice.bam" >> "$out/slice.log" 2>&1
 
+# Extra spike flags, as $SPIKE_ARGS in the environment (e.g. --allow-resistant for
+# an event spike refuses since RF8); EXTRA... above goes to `spike validate` instead.
+read -ra spike_args <<< "${SPIKE_ARGS:-}"
 "$spike" --bam "$out/slice.bam" --reference "$ref" --event "$event" --seed 1 \
-  -o "$out/run" > "$out/spike.log" 2>&1
+  ${spike_args[@]+"${spike_args[@]}"} -o "$out/run" > "$out/spike.log" 2>&1
 echo $? > "$out/spike.exit"
 [ "$(cat "$out/spike.exit")" = 0 ] || exit 0   # a refused event is the caller's to report
 
