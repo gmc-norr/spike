@@ -36,5 +36,6 @@ export SPIKE_ARGS="${SPIKE_ARGS:-}"
 awk '{printf "%d %s\n", NR, $0}' "$out/events.txt" \
   | xargs -P "$parallel" -L 1 bash -c 'one "$0" "$1"'
 
-# The merged BAMs are the only large files and each has been scored by now.
-find "$out" -name 'merged.bam*' -delete
+# The merged BAMs are the only large files and each has been scored by now --
+# unless KEEP_MERGED=1, for a later validate against the same alignments.
+[ "${KEEP_MERGED:-0}" = 1 ] || find "$out" -name 'merged.bam*' -delete

@@ -5165,3 +5165,57 @@ A probe built from the plain reference cannot match reads that correctly carry t
 own base. On this data that is 2 of 40 junctions (5%). The idea dies at Gate B, having cost
 one script and no code. The outcome rule says no code: record it and stop. The case file
 gains the trap.
+
+#### Plan, second attempt: RF6, a junction row that tolerates the sample's own SNPs (locked before any code or K run)
+
+**The user's choice** (2026-09-26): retry with a mismatch-tolerant probe.
+
+**What changes from the first plan** (the rest stands as locked there):
+- **Carrier.** A read carries the junction if some 31-base window of its bases is within **2
+  substitutions** of `J` or its reverse complement.
+- **Why substitutions only, and why 2.** spike writes the sample's SNPs onto the event copy
+  but not its indels (CR3), and adds no indel errors by default. So a correct read differs
+  from `J` only by SNPs and base errors. Two covers a SNP plus an error, or two SNPs.
+- **Guard.** The row is not evaluable if `J` (or its reverse complement) is within **4
+  substitutions** of any 31-base window of the reference within 1000 bp of either
+  breakpoint. That is two more than the tolerance, so an unedited read needs three or more
+  errors or SNPs inside 31 bases to pass as a carrier.
+
+**The kill test runs on data never looked at.** The first plan's K has seen chr20's 40, so
+they cannot test a rule tuned after them. K runs `scripts/rf6_kill2.py` on two fresh
+`real_events.sh` runs, made with **master's binary** and `KEEP_MERGED=1`:
+- the **40 chr1** deletions (`cr4_placements.py BED chr1`, md5
+  `fdd0dcdb2b4ce2f38a338da8a4b81568`);
+- the pipeline's **20 real HG002 deletions on NA18488** (`scripts/rf6_pipeline_events.txt`,
+  md5 `3f72b53b6f670169feed3f411b4b4565`, with `SPIKE_ARGS=--allow-resistant`).
+
+It is judged on:
+- **K1:** on **every** event master's validate passes (exit 0), the guard is silent and at
+  least 2 reads carry the junction in `sim.bam`. Otherwise the row would turn a pass into a
+  fail.
+- **K2:** 0 carriers in the unspiked `slice.bam`, on every event. The one exception is an
+  event whose donor holds `J` *exactly* in 2 or more reads: that is the background carrying
+  the same deletion, and it is reported and left out. A donor match at 1-2 substitutions only
+  fails K2.
+- **K3:** 0 carriers with `J` built from `END + 50`, on every event.
+- **K1b** (reported, not judged): of the events master's `split_reads` fails, how many would
+  the row pass.
+
+Any miss in K1, K2 or K3 refutes the rule as locked, and no code is written.
+
+**After code** (unchanged from the first plan, on these sets):
+- **C1:** chr20 events 15, 25, 33 and 34 go from exit 1 to exit 0. They are re-run with
+  master's binary and `KEEP_MERGED=1` from `scripts/rf6_chr20_subset.txt` (events 1-4, 8, 10,
+  15, 25, 33, 34; md5 `82a4a45150da8e43bb7c5ad675178f11`), and both validates run on the same
+  merged BAMs.
+- **C2:** on 8 of those runs (the four, plus 1-4), `END + 50` and the unspiked donor each FAIL
+  the row, with a non-zero exit.
+- **C3:** no event, in any of the three sets, where master exits 0 and the new validate does
+  not.
+- **C4:** tests first, with the first plan's four mutations plus one more: tolerance 0 (an
+  exact match) must redden the test with a SNP inside the probe.
+
+`real_events.sh` gains `KEEP_MERGED=1`, which keeps the merged BAMs so the new validate can
+read the same alignments later.
+
+**Outcome rules** are as in the first plan.
