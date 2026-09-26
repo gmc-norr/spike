@@ -4853,3 +4853,97 @@ quiet on the good recorded runs. A test pins it.
   fixed:** validate is off any hot path and T2 disclosed the cost, but it is a named follow-up, and
   the next advisory row on this mechanism adds three more queries with no shared record stream to add
   it to. Filed as **RF10**.
+
+## RF8 -- refuse an event whose reads cannot back its truth record (2026-09-26)
+
+**The finding** (`NEW-FINDINGS.md` of the run after the census, RF8): on
+`del:chr20:27100000-27110000` spike could edit 18 of the 5749 reads over the event, planted
+from a 0.2x pool, exited 0 and wrote a truth VCF for a 10 kb deletion. Both censuses warned;
+nothing refused. T4 measured two more accepted loci like it (`SIM_RESIST` 0.998 and 0.995).
+
+**The user's choice** (2026-09-26): refuse by default, with an override flag. This lifts
+CR4's measure-and-warn rule ("no run that works today may start failing") for this one
+case, on purpose.
+
+#### Plan: RF8, refuse above SIM_RESIST 0.5 (locked before any code or any chr1 measurement)
+
+**Principle.** spike does not write a truth record that the reads beside it cannot back.
+
+**Claim.** Refusing an event whose `SIM_RESIST` is above 0.5 stops the RF8 runs, refuses no
+more than 1 of 40 ordinary deletions on a chromosome never measured, and changes nothing in
+any run it accepts.
+
+**Metric.** `SIM_RESIST` exactly as CR4 defined it (`census::Census::fraction`, unchanged):
+the share of the primary, mapped, non-duplicate, non-QC-fail reads over the event, at any
+MAPQ, that spike cannot edit.
+
+**Rule.** In `main`, right after an event's census and before anything is written: if
+`R > 0.5` and `--allow-resistant` was not given, stop with a non-zero exit. The message names
+the event, `resistant of counted`, `R`, and the way out. With `--allow-resistant`, spike
+does exactly what it does today: it warns, records `SIM_RESIST`, and goes on.
+
+**Why 0.5, set before any value on the test data is seen.** The event that reaches the
+reads is about `VAF x (1 - R)`, because the resistant reads are never removed or replaced.
+Measured at one point (CR4): AF 1 on the lowmap probe, `R` = 1038/2074, left 37.5x of 75x
+inside the deletion, which is `1 x (1 - 0.5)`. Above 0.5 the reads carry less than half of
+what the truth record claims, so it is more wrong than right.
+
+**Units** (the T3 rule in `.claude/judgment-gate-cases.md`). The threshold is not borrowed
+from another quantity. It is set on `SIM_RESIST` itself, and the rule tests `SIM_RESIST`.
+The one point linking `R` to the planted fraction is the same census on the lowmap probe.
+
+**What has already been seen.** On chr20, ordinary `R` runs 0.003-0.083 (CR4's C4) and the
+accepted hard loci run 0.995-0.998 (T4). Any threshold between 0.083 and 0.995 splits that
+data, so chr20 can neither choose the threshold nor test it for noise. The noise test
+therefore runs on **chr1**, where no `SIM_RESIST` has ever been measured.
+
+**Why not a depth floor.** A locus where the sample truly has low depth is real, and spike
+copies it faithfully. The defect is the gap between what spike edited and what is there,
+and `R` measures that gap in one unit.
+
+**Criteria.** Each is run and its output recorded in the result commit.
+
+- **K, the kill test. It is run first, before any code, on master's binary** (`463465f`,
+  built in its own target dir, md5 `dd49305a58a0375ea6cb3b06407b67dd`). The 40 deletions
+  that `scripts/cr4_placements.py BED chr1` draws (10 kb, seeded, inside the HG002 T2T-Q100
+  SV benchmark; md5 of the list `fdd0dcdb2b4ce2f38a338da8a4b81568`) are each run on their own
+  by `scripts/cr4_run.sh ... chr1` on the 35x HG002 BAM at `--seed 1` and the default AF, and
+  scored by `scripts/rf8_score.py`. **Pass: `R > 0.5` on at most 1 of 40.** A run that exits
+  non-zero on master has no `R`. It is listed and left out of the count, and more than 4 such
+  runs makes K inconclusive.
+- **C1, it fires on the known cases.** With the new binary at `--seed 1`, each of the six
+  events in `scripts/rf8_known_cases.txt` (T4's DEL and DUP at the three accepted hard loci)
+  exits non-zero, prints the refusal, and writes no `truth.vcf`, `R1.fq.gz` or
+  `R2.fq.gz`. **C1b:** the lowmap probe (`scripts/rf8_probes.py`, `R` 1038/2074 = 0.5005)
+  is refused the same way.
+- **C2, the flag lifts only the refusal.** The same seven runs with `--allow-resistant` exit
+  0. `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt`, `events.bed` and `truth.vcf` (compared
+  without its `##fileDate` line) are byte-identical to master's (`scripts/rf8_compare.sh`,
+  `scripts/rf8_probes.py`).
+- **C3, it changes nothing it accepts.** Every chr1 deletion that master accepts with
+  `R <= 0.5` gives the same five files, byte-identical to master's, with the new binary,
+  with and without the flag. The uniform probe does the same.
+- **C4, the tests bite.** Unit tests are written first and seen red. Each of these mutations
+  must redden at least one of them:
+  - `>` to `>=`, so exactly 0.5 is refused;
+  - the refusal removed;
+  - the flag ignored.
+
+  The full suite passes, and there is no clippy warning that master does not have.
+
+**Also measured, not pass/fail:** `del:chr20:27100000-27110000` at `--min-mapq 0`, its exit
+and `R`. The refusal message offers lowering `--min-mapq` as a way out **only if** that run
+is accepted with `R <= 0.5`. Otherwise the message names only `--allow-resistant`.
+
+**Also in the code step:** every repo script that runs spike on the lowmap BAM
+(`review_sv_model.py`, `cr4_probes.py`, `t1_probes.py`, `probe_donors.py`) gets
+`--allow-resistant` where it needs it, so each one measures what it measured before. The
+README's "What spike refuses" table and its "Reads spike cannot edit" section, and
+`--help`, say what the rule is.
+
+**Outcome rules.**
+- K fails (2 or more of 40 above 0.5): the rule is refuted as locked. No code is written;
+  record the distribution. A different threshold needs a new plan on another chromosome.
+- K is inconclusive: no code is written; report why the runs failed.
+- K passes, then C1-C4 pass: supported, keep.
+- C1, C2 or C3 fails: revert the code.
