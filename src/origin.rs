@@ -152,12 +152,207 @@ pub fn chance_within(placements: &[Placement], footprint: &Span) -> f64 {
         .sum()
 }
 
+use noodles::sam::alignment::record::cigar::op::Kind;
+
+/// A read's unclipped 5' end: where its first sequenced base would align.
+/// Duplicate marking keys a fragment on its two mates' 5' ends.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FivePrime {
+    pub chrom: String,
+    pub pos: u64,
+    pub reverse: bool,
+}
+
+/// Clipped bases at the start and at the end of a CIGAR.
+fn clips(ops: &[Op]) -> (u64, u64) {
+    let clipped = |op: &&Op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip);
+    let lead = ops.iter().take_while(clipped).map(|op| op.len() as u64).sum();
+    let trail = ops.iter().rev().take_while(clipped).map(|op| op.len() as u64).sum();
+    (lead, trail)
+}
+
+/// The unclipped 5' end of a read aligned at `start` (0-based) with `ops`.
+pub fn five_prime(chrom: &str, start: u64, ops: &[Op], reverse: bool) -> FivePrime {
+    let (lead, trail) = clips(ops);
+    let pos = if reverse {
+        start + reference_length(ops) + trail
+    } else {
+        start.saturating_sub(lead)
+    };
+    FivePrime {
+        chrom: chrom.to_string(),
+        pos,
+        reverse,
+    }
+}
+
+/// One primary record, as far as `origin` needs it.
+#[derive(Debug, Clone)]
+pub struct OriginRecord {
+    pub name: String,
+    /// Read 1 of its pair; the two records of one name differ here.
+    pub first: bool,
+    /// The primary placement first, then the `XA` hits.
+    pub placements: Vec<Placement>,
+    pub duplicate: bool,
+    pub qc_fail: bool,
+    pub mate_unmapped: bool,
+    pub five_prime: FivePrime,
+}
+
+impl OriginRecord {
+    /// Where the aligner put the read.
+    pub fn primary(&self) -> &Placement {
+        &self.placements[0]
+    }
+}
+
+/// The records of one read name that `origin` read: one or both mates.
+#[derive(Debug, Clone)]
+pub struct Fragment<'a> {
+    pub name: &'a str,
+    pub mates: Vec<&'a OriginRecord>,
+}
+
+impl Fragment<'_> {
+    /// The mate whose own placement is surest: the highest primary chance,
+    /// ties to the higher chance of having come from `footprint`. One mate
+    /// pinned uniquely somewhere pins the fragment there.
+    fn surest(&self, footprint: &Span) -> &OriginRecord {
+        self.mates
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                a.primary().chance.total_cmp(&b.primary().chance).then(
+                    chance_within(&a.placements, footprint)
+                        .total_cmp(&chance_within(&b.placements, footprint)),
+                )
+            })
+            .expect("a fragment has at least one mate")
+    }
+
+    /// `p_origin`: the chance this fragment came from `footprint`, its
+    /// surest mate's.
+    pub fn chance(&self, footprint: &Span) -> f64 {
+        chance_within(&self.surest(footprint).placements, footprint)
+    }
+
+    /// Whether spike's new reads can replace this fragment (R4): every mate
+    /// has a placement wholly inside `footprint`, and a mate `origin` did not
+    /// read is unmapped. The new fragments never reach past the footprint,
+    /// so removing one that sticks out would leave a depth dip.
+    pub fn removable(&self, footprint: &Span) -> bool {
+        let every_mate_read = self.mates.len() == 2 || self.mates.iter().all(|m| m.mate_unmapped);
+        every_mate_read
+            && self
+                .mates
+                .iter()
+                .all(|m| m.placements.iter().any(|p| footprint.holds(&p.span)))
+    }
+
+    /// Whether the aligner put a mate inside `footprint`, where the sample's
+    /// phase call applies. Elsewhere the copy is unknown.
+    pub fn at_spot(&self, footprint: &Span) -> bool {
+        self.mates.iter().any(|m| footprint.holds(&m.primary().span))
+    }
+
+    /// The duplicate family: the mates' 5' ends, sorted. Duplicates of one
+    /// molecule share it (R3).
+    pub fn family(&self) -> Vec<FivePrime> {
+        let mut ends: Vec<FivePrime> = self.mates.iter().map(|m| m.five_prime.clone()).collect();
+        ends.sort();
+        ends
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noodles::sam::alignment::record::cigar::op::Kind;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    /// A record placed at `start..start+100` with `alternatives` as its XA.
+    pub(super) fn record(name: &str, first: bool, start: u64, mapq: u8, alternatives: &[Span]) -> OriginRecord {
+        OriginRecord {
+            name: name.to_string(),
+            first,
+            placements: placements(Span::new("chr1", start, start + 100), mapq, alternatives),
+            duplicate: false,
+            qc_fail: false,
+            mate_unmapped: false,
+            five_prime: FivePrime { chrom: "chr1".to_string(), pos: start, reverse: !first },
+        }
+    }
+
+    fn fp() -> Span {
+        Span::new("chr1", 0, 1000)
+    }
+
+    #[test]
+    fn test_five_prime_steps_back_over_a_leading_clip_or_past_a_trailing_one() {
+        let fwd = [Op::new(Kind::SoftClip, 5), Op::new(Kind::Match, 95)];
+        assert_eq!(five_prime("chr1", 100, &fwd, false).pos, 95);
+        let rev = [Op::new(Kind::Match, 95), Op::new(Kind::SoftClip, 5)];
+        assert_eq!(five_prime("chr1", 300, &rev, true).pos, 400);
+    }
+
+    #[test]
+    fn test_a_pair_takes_its_surest_mates_chance() {
+        let a = record("p", true, 100, 60, &[]);
+        let b = record("p", false, 300, 0, &[Span::new("chr1", 5000, 5100)]);
+        let f = Fragment { name: "p", mates: vec![&a, &b] };
+        assert!(close(f.chance(&fp()), 1.0 - 1e-6));
+    }
+
+    #[test]
+    fn test_a_tie_on_the_primary_goes_to_the_higher_footprint_chance() {
+        // Both MAPQ 0 with one hit (1/2 each). a's hit is outside (1/2 in the
+        // footprint); b's is inside too (1).
+        let a = record("p", true, 100, 0, &[Span::new("chr1", 5000, 5100)]);
+        let b = record("p", false, 300, 0, &[Span::new("chr1", 600, 700)]);
+        let f = Fragment { name: "p", mates: vec![&a, &b] };
+        assert!(close(f.chance(&fp()), 1.0));
+    }
+
+    #[test]
+    fn test_a_pair_is_removable_only_when_every_mate_could_come_from_the_footprint() {
+        // R4.
+        let a = record("p", true, 100, 60, &[]);
+        let inside = record("p", false, 300, 60, &[]);
+        let outside = record("p", false, 1200, 60, &[]);
+        let outside_with_hit_inside = record("p", false, 1200, 0, &[Span::new("chr1", 700, 800)]);
+        assert!(Fragment { name: "p", mates: vec![&a, &inside] }.removable(&fp()));
+        assert!(!Fragment { name: "p", mates: vec![&a, &outside] }.removable(&fp()));
+        assert!(Fragment { name: "p", mates: vec![&a, &outside_with_hit_inside] }.removable(&fp()));
+    }
+
+    #[test]
+    fn test_an_unseen_mate_blocks_removal_unless_it_is_unmapped() {
+        let alone = record("p", true, 100, 60, &[]);
+        assert!(!Fragment { name: "p", mates: vec![&alone] }.removable(&fp()));
+        let orphan = OriginRecord { mate_unmapped: true, ..record("p", true, 100, 60, &[]) };
+        assert!(Fragment { name: "p", mates: vec![&orphan] }.removable(&fp()));
+    }
+
+    #[test]
+    fn test_at_spot_means_a_mate_the_aligner_put_inside_the_footprint() {
+        let here = record("p", true, 100, 0, &[Span::new("chr1", 5000, 5100)]);
+        let there = record("q", true, 5000, 0, &[Span::new("chr1", 100, 200)]);
+        assert!(Fragment { name: "p", mates: vec![&here] }.at_spot(&fp()));
+        assert!(!Fragment { name: "q", mates: vec![&there] }.at_spot(&fp()));
+    }
+
+    #[test]
+    fn test_duplicates_share_a_family_and_other_fragments_do_not() {
+        let (a1, a2) = (record("a", true, 100, 60, &[]), record("a", false, 300, 60, &[]));
+        let (d1, d2) = (record("d", true, 100, 60, &[]), record("d", false, 300, 60, &[]));
+        let (o1, o2) = (record("o", true, 110, 60, &[]), record("o", false, 300, 60, &[]));
+        let fam = |x: &OriginRecord, y: &OriginRecord| Fragment { name: "x", mates: vec![x, y] }.family();
+        assert_eq!(fam(&a1, &a2), fam(&d2, &d1));
+        assert_ne!(fam(&a1, &a2), fam(&o1, &o2));
     }
 
     #[test]
