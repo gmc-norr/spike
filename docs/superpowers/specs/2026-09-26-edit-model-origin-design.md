@@ -150,8 +150,10 @@ placement" assumption is checked by the physics test below, not assumed in the r
     adds that placement's chance: at the spot, and at look-alikes through their `XA`.
     Duplicate and QC-fail records add nothing (R3). This is in **read** units.
   - **Conversion to fragment units.** Multiply by `f`: the pool's summed fragment spans
-    divided by its summed aligned read lengths, over the **whole pool** (R1).
+    divided by its summed read lengths, over the **whole pool** (R1).
     - It depends on fragment and read lengths, not on the spot.
+    - Read lengths are whole reads, since pool pairs keep no CIGAR. A soft-clipped read
+      covers fewer bases than its length, so where clips are common `f` runs a little low.
     - The pool holds at least `MIN_DONOR_PAIRS` pairs, so `f` is never 0/0, even when no pool
       read lies in the footprint.
   - The result is in fragment coverage, the unit the tiling count already uses. This follows
@@ -170,6 +172,8 @@ placement" assumption is checked by the physics test below, not assumed in the r
   depth beside today's.
 - `truth.vcf` keeps its fields. `SIM_RESIST` keeps its meaning (reads spike could not edit).
   Under `origin` that should be near 0, so RF8's refusal will rarely fire; that is expected.
+  - `SIM_DEPTH_FOLD` under `origin` measures each bin with origin depth, the estimator the
+    tiling count came from (the T3 rule). The pool's depth is 0 inside a perfect twin.
 - **Input check.** Under `origin`, if the footprint holds MAPQ 0 records and none of them
   carries `XA`, spike stops with an error that names the problem. Otherwise every MAPQ 0 read
   would silently get 1/6.
@@ -182,7 +186,7 @@ placement" assumption is checked by the physics test below, not assumed in the r
 
 | Assumption | How it is checked |
 | --- | --- |
-| The BAM keeps bwa-mem's `XA` tags | the input check above; counted on Monday's BAMs before any plan |
+| The BAM keeps bwa-mem's `XA` tags | the input check above; counted on Monday's BAMs before any plan. The 35x HG002 BAM used so far fails it: at chr20:7118000-7121000, 0 of 1070 primary records carry `XA`, and 618 are MAPQ 0 (measured 2026-09-27) |
 | MAPQ follows bwa-mem's meaning | same aligner family; the physics test measures it |
 | The aligner places equally good hits at random | the physics test measures depth at L and P |
 | The replacement reads' aligner (`align.sh`, bwa-mem2) acts like the one that made the donor BAM (the user's: bwa-mem) | reported on Monday; the physics test uses one aligner for both |
