@@ -59,8 +59,8 @@ struct TruthEvent {
     /// `start`; an INS's `start` is the VCF POS under the SV convention where a
     /// small variant's is POS - 1, so an insertion put there would enter the
     /// haplotype enumeration `allele_freq` votes against, one base off, and
-    /// move a non-advisory row. This field is read by [`INS_SEQUENCE`] and by
-    /// nothing else.
+    /// move a non-advisory row. This field is read by [`ins_alt_sequence`],
+    /// which is the only reader of it anywhere.
     ins_alt: Option<Vec<u8>>,
     /// The census numbers spike recorded for this event, as INFO holds them.
     census: CensusInfo,
@@ -350,9 +350,20 @@ const ALLELE_FREQ: &str = "allele_freq";
 /// The "no check applies to this event" fallback row's name (M11).
 const EVENT_CHECKED: &str = "event_checked";
 
-// The eight check-name constants above name every row `check_event` pushes,
-// and `print_usage` lists the same rows from the same constants, so a renamed
-// row cannot print one name and document another. The boundary is deliberate
+// The eight check-name constants above name every row `check_event` pushes.
+// `print_usage` names only the five **non-advisory** ones from these same
+// constants -- `COVERAGE_RATIO`, `SPLIT_READS`, `INS_READS`, `ALLELE_FREQ` and
+// `EVENT_CHECKED`. The three advisory rows -- `COVERAGE_ANY_MAPQ`,
+// `SPLIT_READS_EACH_END` and `INS_SEQUENCE` -- appear nowhere in it: the usage
+// text is byte-frozen for this work, so they are documented in README.md
+// instead (the table at "Which check covers which type", and a section each).
+// So read this as the hazard and not the reassurance: **a renamed advisory row
+// can print one name and document another**. Rename `INS_SEQUENCE` and the
+// table prints the new name while `--help` says nothing about the row at all
+// and README.md still spells the old one, with nothing in the build to notice.
+// Whoever renames one of the three edits README.md by hand.
+//
+// The boundary of the shared-constant idiom is deliberate
 // and stops there: `insert_size`, `dup_rate` and `mean_mapq` are `run()`'s
 // global rows rather than `check_event`'s, and `check_ins_reads` and the
 // allele-frequency path still spell their own names out where they build their
@@ -6543,6 +6554,13 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
     const INS_LONG_MIDDLE_POS: u64 = 14_000;
     const INS_SHORT_POS: u64 = 17_000;
 
+    /// How far before the insertion point the inverted copy of the ALT's first
+    /// probe k-mer sits in [`inverted_repeat_contig`]: inside
+    /// [`INS_KMER_REF_PAD`], so the reference guard reads it, and inside
+    /// [`INS_SEQUENCE_PAD`] as well, so an *unedited* read over the insertion
+    /// point carries it in its own bases.
+    const INVERTED_REPEAT_OFFSET: usize = 60;
+
     /// One single-end read of a one-contig chrA fixture with its CIGAR and its
     /// bases given explicitly.
     ///
@@ -6698,6 +6716,110 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         }
 
         let cram_path = write_indexed_cram(&dir, "ins_sequence", &fasta_path, &header, &records);
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// chrA with the **reverse complement** of `carried_insertion()`'s first
+    /// [`INS_KMER_LEN`] bases written in [`INVERTED_REPEAT_OFFSET`] bases
+    /// before [`INS_CARRIED_POS`] -- an inverted repeat of the insertion
+    /// itself, which is the case the reference guard's reverse-complement half
+    /// exists to catch. The probe's **forward** orientation is nowhere in the
+    /// contig; only its reverse complement is, and only within
+    /// [`INS_KMER_REF_PAD`] of POS.
+    fn inverted_repeat_contig() -> Vec<u8> {
+        let mut seq = cycling_contig();
+        let inverted = revcomp_of(&carried_insertion()[..INS_KMER_LEN]);
+        let at = INS_CARRIED_POS as usize - INVERTED_REPEAT_OFFSET;
+        seq[at..at + inverted.len()].copy_from_slice(&inverted);
+        seq
+    }
+
+    /// One indexed CRAM on [`inverted_repeat_contig`] holding, at
+    /// [`INS_CARRIED_POS`], three reads that carry `carried_insertion()` whole
+    /// as an `I` operation and two **unedited** reads whose plain
+    /// [`TEST_READ_LEN`] match spans the inverted repeat. The second pair is
+    /// the hazard in the flesh: reads spike never touched whose own bases hold
+    /// a probe k-mer, because the reference under them does.
+    fn inverted_repeat_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = inverted_repeat_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "ins_inverted", &seq);
+        let header = one_contig_header(seq.len());
+
+        let carried = carried_insertion();
+        let flank = (TEST_READ_LEN - carried.len()) / 2;
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        // The unedited reads first: they start further left and the CRAM has to
+        // be coordinate-sorted.
+        for i in 0..2usize {
+            records.push(one_contig_record(
+                &seq,
+                &format!("unedited{}", i),
+                INS_CARRIED_POS as usize + i - TEST_READ_LEN,
+                60,
+                noodles::sam::alignment::record_buf::Data::default(),
+            ));
+        }
+        for i in 0..3usize {
+            let start0 = INS_CARRIED_POS as usize + i - flank;
+            let mut bases = seq[start0..start0 + flank].to_vec();
+            bases.extend_from_slice(&carried);
+            bases.extend_from_slice(&seq[start0 + flank..start0 + 2 * flank]);
+            records.push(one_contig_spliced_record(
+                &format!("carried{}", i),
+                start0,
+                &[
+                    (Kind::Match, flank),
+                    (Kind::Insertion, carried.len()),
+                    (Kind::Match, flank),
+                ],
+                &bases,
+            ));
+        }
+
+        let cram_path = write_indexed_cram(&dir, "ins_inverted", &fasta_path, &header, &records);
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// One indexed CRAM on the cycling chrA holding two reads at
+    /// [`INS_CARRIED_POS`] that carry `carried_insertion()` as an `I` operation
+    /// spelled **lowercase** -- soft-masked bases, which a read's stored
+    /// sequence may hold and which must still count against an uppercase ALT.
+    fn lowercase_read_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "ins_lower", &seq);
+        let header = one_contig_header(seq.len());
+
+        let carried = carried_insertion().to_ascii_lowercase();
+        let flank = (TEST_READ_LEN - carried.len()) / 2;
+        let mut records: Vec<noodles::cram::Record> = Vec::new();
+        for i in 0..2usize {
+            let start0 = INS_CARRIED_POS as usize + i - flank;
+            let mut bases = seq[start0..start0 + flank].to_vec();
+            bases.extend_from_slice(&carried);
+            bases.extend_from_slice(&seq[start0 + flank..start0 + 2 * flank]);
+            records.push(one_contig_spliced_record(
+                &format!("lower{}", i),
+                start0,
+                &[
+                    (Kind::Match, flank),
+                    (Kind::Insertion, carried.len()),
+                    (Kind::Match, flank),
+                ],
+                &bases,
+            ));
+        }
+
+        let cram_path = write_indexed_cram(&dir, "ins_lower", &fasta_path, &header, &records);
         (
             dir,
             fasta_path.to_str().unwrap().to_string(),
@@ -6939,6 +7061,137 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
         assert!(named(&graded, INS_SEQUENCE).pass);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_an_inverted_alt_kmer_in_the_reference_makes_the_row_not_evaluable() {
+        // The guard's reverse-complement half, on its own. A read's stored
+        // sequence is in reference-forward orientation and `holds_a_probe`
+        // matches `probe` **or** `revcomp(probe)`, so a reference holding
+        // `revcomp(probe)` near POS -- an inverted repeat of the insertion,
+        // within 1 kb -- is matched by reads spike never touched exactly as a
+        // forward copy would be. The row must decline it.
+        //
+        // `test_an_alt_kmer_already_in_the_reference_makes_the_row_not_evaluable`
+        // cannot see this: its `ACGT`-repeat ALT is in the `ACGT`-cycling contig
+        // forwards as well, so a forward-only guard would fire there too. Here
+        // the forward probe is absent from the whole contig, so only a guard
+        // that searches both orientations declines the row.
+        let carried = carried_insertion();
+        let k = INS_KMER_LEN;
+        let seq = inverted_repeat_contig();
+        for probe in [&carried[..k], &carried[carried.len() - k..]] {
+            assert!(
+                !seq.windows(k).any(|w| w == probe),
+                "the contig must hold neither probe k-mer in its forward \
+                 orientation, or a forward-only guard would fire too"
+            );
+        }
+        assert!(
+            seq.windows(k)
+                .any(|w| w == revcomp_of(&carried[..k]).as_slice()),
+            "and it must hold the first probe's reverse complement"
+        );
+        // The hazard spelled out on the very bases an unedited read over POS
+        // reads: they match a probe, so counting them would mean nothing.
+        let under_an_unedited_read =
+            &seq[INS_CARRIED_POS as usize - TEST_READ_LEN..INS_CARRIED_POS as usize];
+        assert!(
+            holds_a_probe(under_an_unedited_read, &alt_probe_kmers(&carried, k)),
+            "an unedited read over the inverted repeat would be counted as \
+             support, which is exactly why the row cannot be graded here"
+        );
+
+        let (dir, fasta, cram) = inverted_repeat_cram("ins_seq_inverted");
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &carried));
+
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.expected, ins_sequence_expected(k));
+        assert_eq!(
+            r.observed, "kmer in ref",
+            "a reverse-complemented copy in the reference is as disqualifying \
+             as a forward one"
+        );
+        assert!(!r.pass, "not evaluable is a FAILED row (M10)");
+        assert!(r.advisory);
+        // And the evidence really is there: `ins_reads` counts the three reads
+        // that carry the insertion, so the declined row is about the reference
+        // and not about there being nothing to see.
+        let r = named(&rows, INS_READS);
+        assert_eq!(r.observed, "3");
+        assert!(r.pass);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_lowercase_alt_grades_as_its_uppercase_spelling_does() {
+        // A soft-masked ALT is legal VCF -- `bcftools` and some callers emit
+        // one -- and `alt_probe_kmers` uppercases before it cuts its probes, so
+        // the reads that pass on an uppercase ALT pass on the lowercase
+        // spelling of the same bases. Without that uppercasing this is an
+        // advisory FAIL reading `observed 0` on a correct run, with nothing in
+        // the output to say why.
+        let (dir, fasta, cram) = inserted_sequence_cram("ins_seq_lower_alt");
+        let upper = carried_insertion();
+        let lower = upper.to_ascii_lowercase();
+        assert_ne!(lower, upper, "the two spellings differ as bytes");
+
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &lower));
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.expected, ins_sequence_expected(INS_KMER_LEN));
+        assert_eq!(
+            r.observed, "3",
+            "all three reads carry the bases the lowercase ALT names"
+        );
+        assert!(r.pass, "so a soft-masked ALT grades, and PASSes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_lowercase_read_bases_hold_an_uppercase_probe() {
+        // The other half of the same rule and the other `to_ascii_uppercase`:
+        // a read whose stored sequence is soft-masked counts against an
+        // uppercase ALT. Pinned end to end on a CRAM whose records really do
+        // carry lowercase bases, and then on `holds_a_probe` itself, which is
+        // where the uppercasing that makes it work lives.
+        let inserted = carried_insertion();
+        let (dir, fasta, cram) = lowercase_read_cram("ins_seq_lower_read");
+        // The fixture is only worth anything if the lowercase bases survive the
+        // CRAM round trip, so read them back and check before grading on them.
+        let mut soft_masked = 0usize;
+        for_each_alignment(
+            &cram,
+            &fasta,
+            "chrA",
+            INS_CARRIED_POS - INS_SEQUENCE_PAD,
+            INS_CARRIED_POS + INS_SEQUENCE_PAD,
+            0,
+            &mut |_name, _start, _ops, seq| {
+                if seq.iter().any(|b| b.is_ascii_lowercase()) {
+                    soft_masked += 1;
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            soft_masked, 2,
+            "both records really do hand back lowercase bases"
+        );
+
+        let rows = ins_rows(&cram, &fasta, &ins_event_with_alt(INS_CARRIED_POS, &inserted));
+        let r = named(&rows, INS_SEQUENCE);
+        assert_eq!(r.observed, "2", "both soft-masked reads count");
+        assert!(r.pass, "so soft-masked reads grade, and PASS");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // And the same rule at the one line that implements it, so a reader of
+        // `holds_a_probe` sees why its uppercasing is not redundant with the
+        // one `fetch_window` already did for the reference.
+        let probes = alt_probe_kmers(&inserted, INS_KMER_LEN);
+        assert!(
+            holds_a_probe(&inserted.to_ascii_lowercase(), &probes),
+            "lowercase bases hold an uppercase probe"
+        );
     }
 
     #[test]

@@ -817,16 +817,21 @@ asks only that they are **present**: not that they are at the right offset, not
 that the insertion is in the orientation the truth record names, not that they
 occur the right number of times, and not at what allele fraction -- a read
 carrying the k-mer anywhere in its 151 bases counts, and like the two rows above
-it is a count without a denominator. Nor does it read the whole insertion. Only
-the first and last `k` bases are ever inside a read, so for a **2000 bp
-insertion it verifies 62 of 2000 bases** and says nothing whatever about the
-other 1938; the middle is unreachable by construction, which is why the probes
-are taken from the ends and not from the middle (a 2000 bp insertion's middle
-k-mer sits 1000 bases in, far past the reach of a 151 bp read). And it believes
-the file it reads: the inserted bases come from the truth VCF's ALT, so a truth
-VCF edited between the run that wrote it and the validation that reads it is
-taken at its word -- which is also what makes the row's own separation
-measurable, by validating one run's BAM against another run's truth VCF.
+it is a count without a denominator. Nor does it read the whole insertion. Two
+limits stack there, and only the second is the row's own. First, only sequence
+near the insertion's two **ends** is reachable at all: a read anchored beside
+the insertion point reads into it by soft-clipping, and by at most about its own
+length, so of a 2000 bp insertion roughly the first and last 150 bases can sit
+inside a read and the middle cannot -- that insertion's middle k-mer sits 1000
+bases in, far past the reach of a 151 bp read, which is why the probes are taken
+from the ends and not from the middle. Second, of what is reachable the row
+probes `k = 31` bases at each end and no more, not the ~150 a read could show
+it. So for a **2000 bp insertion it verifies 62 of 2000 bases** and says nothing
+whatever about the other 1938. And it believes the file it reads: the inserted
+bases come from the truth VCF's ALT, so a truth VCF edited between the run that
+wrote it and the validation that reads it is taken at its word -- which is also
+what makes the row's own separation measurable, by validating one run's BAM
+against another run's truth VCF.
 
 Two inputs it declines rather than grades, both reported as failed rows and both
 harmless in the exit status because the row is advisory: an insertion of fewer
