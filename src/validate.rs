@@ -270,6 +270,28 @@ const COVERAGE_RATIO: &str = "coverage_ratio";
 /// thing; `test_the_any_mapq_row_does_not_move_the_status_column` pins that.
 const COVERAGE_ANY_MAPQ: &str = "coverage_any_mapq";
 
+/// The pooled split-read row's name: the minimum required over both
+/// breakpoint windows together.
+const SPLIT_READS: &str = "split_reads";
+
+/// The advisory split-read row's name: the same evidence, the same minimum,
+/// required at **each** breakpoint (NF5).
+///
+/// 20 characters against the Check column's `{:<18}`, so this row's own later
+/// columns sit two characters right of every other row's. That was weighed and
+/// accepted when the row was specified: renaming it was not this run's call,
+/// and widening the column would move the non-advisory rows' spacing, which is
+/// forbidden. `{:<18}` pads short names and only overflows long ones, so no
+/// other row is affected; `test_the_each_end_row_is_the_only_row_its_width_moves`
+/// pins both halves of that.
+const SPLIT_READS_EACH_END: &str = "split_reads_each_end";
+
+/// At least this many split reads must join an event's two breakpoints --
+/// pooled over both ends for `split_reads`, and at each end on its own for
+/// `split_reads_each_end`. Reads with an SA tag occur anywhere; reads joining
+/// these two points do not.
+const MIN_SPLIT_READS: usize = 2;
+
 /// Run every check that applies to one truth event, pushing one result per
 /// check. An event no check applies to gets one failed "not evaluable"
 /// result, so a truth VCF of such events cannot report all-PASS (M11).
@@ -316,8 +338,28 @@ fn check_event(
     // Split reads joining the two breakpoints (not INS: its inserted
     // sequence has no second reference breakpoint).
     if matches!(event.sv_type.as_str(), "DEL" | "DUP" | "INV" | "BND") {
-        let r = check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq);
-        results.push(check_outcome(&label, "split_reads", r, false));
+        // One pair of queries, two rows. `split_reads` requires its minimum
+        // over the **union** of the two breakpoint windows, so an event whose
+        // every split read sits at one end still passes while its `expected`
+        // string reads as though each end contributed (NF5). The advisory
+        // `split_reads_each_end` requires the same minimum at each end.
+        //
+        // Both rows are built from the same two name sets, so they can never
+        // disagree about what evidence exists -- including when the BAM could
+        // not be read at all, where the one error becomes both rows. The error
+        // is re-wrapped rather than cloned (`anyhow::Error` is not `Clone`);
+        // `{:#}` of the re-wrap is the same flattened chain the single row
+        // printed before, so the pooled row's Observed did not move.
+        let (pooled, each_end) =
+            match check_split_reads(&args.bam_path, &args.ref_path, event, args.min_mapq) {
+                Ok((pooled, each_end)) => (Ok(pooled), Ok(each_end)),
+                Err(e) => (
+                    Err(anyhow::anyhow!("{:#}", e)),
+                    Err(anyhow::anyhow!("{:#}", e)),
+                ),
+            };
+        results.push(check_outcome(&label, SPLIT_READS, pooled, false));
+        results.push(check_outcome(&label, SPLIT_READS_EACH_END, each_end, true));
     }
 
     // Reads carrying the inserted sequence (INS only: it is the one event
@@ -859,15 +901,19 @@ fn coverage_ratio_result(
 
 /// Check for split reads joining the event's two breakpoints: reads at one
 /// breakpoint whose SA:Z alignment lands at the other.
+///
+/// Returns **both** split-read rows, `(split_reads, split_reads_each_end)`,
+/// out of the same two queries. One pair of queries rather than two is not an
+/// optimisation: it is what stops the two rows disagreeing about what evidence
+/// exists, since neither can see a read the other did not (NF5). Neither row
+/// is stamped advisory here -- `check_outcome` at the call site is the only
+/// place that flag is set.
 fn check_split_reads(
     bam_path: &str,
     ref_path: &str,
     event: &TruthEvent,
     min_mapq: u8,
-) -> Result<CheckResult> {
-    // At least this many split reads must join the breakpoints. Reads with
-    // an SA tag occur anywhere; reads joining these two points do not.
-    const MIN_SPLIT_READS: usize = 2;
+) -> Result<(CheckResult, CheckResult)> {
     let pad = 500u64;
     let label = format_event_label(event);
     let partner = event
@@ -876,7 +922,7 @@ fn check_split_reads(
         .with_context(|| format!("{}: no partner breakpoint for split reads", label))?;
     let here = (event.chrom.clone(), event.start);
 
-    let mut names = split_reads_to_partner(
+    let at_here = split_reads_to_partner(
         bam_path,
         ref_path,
         &here.0,
@@ -886,7 +932,7 @@ fn check_split_reads(
         &partner,
         pad,
     )?;
-    names.extend(split_reads_to_partner(
+    let at_partner = split_reads_to_partner(
         bam_path,
         ref_path,
         &partner.0,
@@ -895,16 +941,47 @@ fn check_split_reads(
         min_mapq,
         &here,
         pad,
-    )?);
+    )?;
 
-    Ok(CheckResult {
-        event_label: label,
-        check_name: "split_reads".to_string(),
-        expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
-        observed: format!("{}", names.len()),
-        pass: names.len() >= MIN_SPLIT_READS,
-        advisory: false,
-    })
+    Ok(split_read_rows(label, &partner, at_here, at_partner))
+}
+
+/// The two split-read rows for one event, from the two sets of read names its
+/// breakpoint windows gave.
+///
+/// The pooled row counts the **union** of the two sets, exactly as it always
+/// has: a read name seen at both ends is one read, and it votes once. The
+/// per-end row takes each set's own size and requires the minimum of each,
+/// which is why a junction whose every split read sits at one breakpoint fails
+/// it while the pooled row still passes.
+fn split_read_rows(
+    label: String,
+    partner: &(String, u64),
+    at_here: HashSet<String>,
+    at_partner: HashSet<String>,
+) -> (CheckResult, CheckResult) {
+    let (n_here, n_partner) = (at_here.len(), at_partner.len());
+    let mut pooled = at_here;
+    pooled.extend(at_partner);
+
+    (
+        CheckResult {
+            event_label: label.clone(),
+            check_name: SPLIT_READS.to_string(),
+            expected: format!(">={} joining {}:{}", MIN_SPLIT_READS, partner.0, partner.1 + 1),
+            observed: format!("{}", pooled.len()),
+            pass: pooled.len() >= MIN_SPLIT_READS,
+            advisory: false, // stamped by check_outcome
+        },
+        CheckResult {
+            event_label: label,
+            check_name: SPLIT_READS_EACH_END.to_string(),
+            expected: format!(">={} at each end", MIN_SPLIT_READS),
+            observed: format!("{}/{}", n_here, n_partner),
+            pass: n_here >= MIN_SPLIT_READS && n_partner >= MIN_SPLIT_READS,
+            advisory: false, // stamped by check_outcome
+        },
+    )
 }
 
 /// Longest clip an insertion of any size is required to produce. A read is at
@@ -5545,7 +5622,11 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         );
         assert_eq!(
             failure_message(&results, true).as_deref(),
-            Some("3/3 validation checks failed"),
+            // Four rows on a DEL since T5: this row, `coverage_ratio`,
+            // `split_reads` and the advisory `split_reads_each_end`. The
+            // default count above is the half that matters and it did not
+            // move -- both advisory rows are still out of it.
+            Some("4/4 validation checks failed"),
             "--strict counts it with the rest"
         );
 
@@ -5640,4 +5721,377 @@ chr7\t55201\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500;SIM_GENE=EGFR\tGT\t0/1
         assert!(!checked.advisory, "it is the row that fails the run");
     }
 
+    // --- NF5: the split-read minimum at each breakpoint, not pooled ---
+
+    /// A one-contig chrA CRAM holding three deletion junctions that differ
+    /// only in **where** the split reads sit. Every record is 100 bp, primary,
+    /// mapped, unmarked, MAPQ 60, and carries an `SA:Z` entry; `split_reads`
+    /// keys on that tag, so a record without one is invisible to both rows.
+    /// The three junctions, with the 500 bp windows the check reads
+    /// (1-based, inclusive):
+    ///
+    /// * **one-sided**, `chrA:10000-12000`: three reads in `[9501,10500]`
+    ///   carrying `SA:Z:chrA,12001,...` and three in `[11501,12500]` carrying
+    ///   `SA:Z:chrA,1501,...` -- present at the partner breakpoint, but
+    ///   pointing somewhere else entirely, so nothing joins back. 3 here, 0
+    ///   there.
+    /// * **two-sided**, `chrA:5000-7000`: three reads in `[4501,5500]`
+    ///   pointing at chrA:7001 and three in `[6501,7500]` pointing back at
+    ///   chrA:5001. 3 here, 3 there.
+    /// * **one name at both ends**, `chrA:15000-17000`: a single read *name*
+    ///   with one record in each window, each pointing at the other -- a pair
+    ///   whose two mates straddle the junction, which is what a real BAM looks
+    ///   like. 1 here, 1 there, and **1** pooled, not 2.
+    ///
+    /// The three pairs of windows are disjoint, so no junction's reads are
+    /// visible to another's query. Returns `(dir, fasta_path, cram_path)`; the
+    /// caller removes `dir`.
+    fn one_sided_split_read_cram(tag: &str) -> (std::path::PathBuf, String, String) {
+        let seq = cycling_contig();
+        let dir = fixture_dir(tag);
+        let fasta_path = write_one_contig_fasta(&dir, "split_ends", &seq);
+        let header = one_contig_header(seq.len());
+
+        // (name, 0-based start, the 1-based position its SA:Z names).
+        let mut plan: Vec<(String, usize, u64)> = Vec::new();
+        for i in 0..3usize {
+            // One-sided: the left window points at the right breakpoint, the
+            // right window points at chrA:1501 -- neither near chrA:10001.
+            plan.push((format!("one_sided_left{}", i), 9_900 + i * 50, 12_001));
+            plan.push((format!("one_sided_right{}", i), 11_900 + i * 50, 1_501));
+            // Two-sided: each end points at the other.
+            plan.push((format!("two_sided_left{}", i), 4_900 + i * 50, 7_001));
+            plan.push((format!("two_sided_right{}", i), 6_900 + i * 50, 5_001));
+        }
+        // The same name in both windows of the third junction.
+        plan.push(("both_ends".to_string(), 14_950, 17_001));
+        plan.push(("both_ends".to_string(), 16_950, 15_001));
+        plan.sort_by_key(|&(_, start0, _)| start0);
+
+        let record = |name: &str, start0: usize, sa_pos: u64| {
+            let tags: noodles::sam::alignment::record_buf::Data = [(
+                noodles::sam::alignment::record::data::field::Tag::new(b'S', b'A'),
+                noodles::sam::alignment::record_buf::data::field::Value::from(
+                    format!("chrA,{},+,50M50S,60,0;", sa_pos).as_str(),
+                ),
+            )]
+            .into_iter()
+            .collect();
+            noodles::cram::Record::builder()
+                .set_bam_flags(noodles::sam::alignment::record::Flags::from(0u16))
+                .set_flags(noodles::cram::record::Flags::QUALITY_SCORES_STORED_AS_ARRAY)
+                .set_reference_sequence_id(0)
+                .set_read_length(TEST_READ_LEN)
+                .set_alignment_start(noodles::core::Position::new(start0 + 1).unwrap())
+                .set_name(name)
+                .set_mapping_quality(
+                    noodles::sam::alignment::record::MappingQuality::new(60).unwrap(),
+                )
+                .set_bases(noodles::sam::alignment::record_buf::Sequence::from(
+                    seq[start0..start0 + TEST_READ_LEN].to_vec(),
+                ))
+                .set_quality_scores(
+                    noodles::sam::alignment::record_buf::QualityScores::from(vec![
+                        40u8;
+                        TEST_READ_LEN
+                    ]),
+                )
+                .set_tags(tags)
+                .build()
+        };
+
+        let records: Vec<noodles::cram::Record> = plan
+            .iter()
+            .map(|(name, start0, sa_pos)| record(name, *start0, *sa_pos))
+            .collect();
+        let cram_path = write_indexed_cram(&dir, "split_ends", &fasta_path, &header, &records);
+
+        (
+            dir,
+            fasta_path.to_str().unwrap().to_string(),
+            cram_path.to_str().unwrap().to_string(),
+        )
+    }
+
+    /// The two split-read rows for one junction of the fixture above.
+    fn split_rows(cram: &str, fasta: &str, start: u64, end: u64) -> Vec<CheckResult> {
+        let args = args_for(cram, fasta);
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &del_event("chrA", start, end), &NearbyRecords::default(), &mut results);
+        results
+    }
+
+    #[test]
+    fn test_the_each_end_row_fails_evidence_that_all_sits_at_one_breakpoint() {
+        // NF5 on one input: three reads join the left breakpoint to the right
+        // and nothing joins back, so the pooled row's two-name minimum is met
+        // at one end alone and it PASSes -- while its own `expected` reads as
+        // though each end contributed. The per-end row is the one that says
+        // so. The two rows disagreeing here is the whole point of the row.
+        let (dir, fasta, cram) = one_sided_split_read_cram("split_one_sided");
+        let results = split_rows(&cram, &fasta, 10_000, 12_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let pooled = named(&results, "split_reads");
+        assert_eq!(pooled.expected, ">=2 joining chrA:12001");
+        assert_eq!(pooled.observed, "3", "three distinct names, all at one end");
+        assert!(pooled.pass, "the pooled row passes one-sided evidence");
+        assert!(!pooled.advisory, "split_reads stays a real check");
+
+        let each_end = named(&results, "split_reads_each_end");
+        assert_eq!(each_end.observed, "3/0", "nothing joins back from the partner");
+        assert!(!each_end.pass, "0 at the partner breakpoint is below the minimum");
+        assert!(each_end.advisory, "the per-end row is always advisory");
+    }
+
+    #[test]
+    fn test_the_each_end_row_passes_a_junction_with_reads_at_both_breakpoints() {
+        // The other side of the same fixture: a junction whose reads really do
+        // sit at both ends must pass. Without this, a row that always failed
+        // would look as "right" as one that reads each end.
+        let (dir, fasta, cram) = one_sided_split_read_cram("split_two_sided");
+        let results = split_rows(&cram, &fasta, 5_000, 7_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let pooled = named(&results, "split_reads");
+        assert_eq!(pooled.observed, "6", "three names at each end, all distinct");
+        assert!(pooled.pass);
+
+        let each_end = named(&results, "split_reads_each_end");
+        assert_eq!(each_end.observed, "3/3");
+        assert!(each_end.pass, "three at each end clears a minimum of two");
+        assert!(each_end.advisory, "a passing per-end row is advisory too");
+    }
+
+    #[test]
+    fn test_a_read_name_at_both_breakpoints_counts_once_in_the_pooled_row() {
+        // The pooled count is the **union** of the two name sets, not their
+        // sum: one read name with a record in each window is one read, and it
+        // votes once. Summing would read 2 and PASS on the evidence of a
+        // single read.
+        let (dir, fasta, cram) = one_sided_split_read_cram("split_both_ends");
+        let results = split_rows(&cram, &fasta, 15_000, 17_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let pooled = named(&results, "split_reads");
+        assert_eq!(pooled.observed, "1", "one name at both ends is one read");
+        assert!(!pooled.pass, "one read is below the pooled minimum of two");
+
+        let each_end = named(&results, "split_reads_each_end");
+        assert_eq!(each_end.observed, "1/1", "each end sees that one name");
+        assert!(!each_end.pass, "one at each end is below the minimum");
+    }
+
+    #[test]
+    fn test_the_each_end_expectation_is_the_minimum_split_reads_asks_for() {
+        // Both rows say what they ask for by naming the constant, not by
+        // repeating "2" in a string: a changed minimum must change both
+        // printed expectations with it.
+        let (dir, fasta, cram) = one_sided_split_read_cram("split_expectation");
+        let results = split_rows(&cram, &fasta, 10_000, 12_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            named(&results, "split_reads_each_end").expected,
+            format!(">={} at each end", MIN_SPLIT_READS)
+        );
+        assert_eq!(
+            named(&results, "split_reads").expected,
+            format!(">={} joining chrA:12001", MIN_SPLIT_READS),
+            "the pooled row's expected string did not move"
+        );
+    }
+
+    #[test]
+    fn test_the_each_end_row_is_advisory_in_the_table_and_in_the_json() {
+        // No BAM here: a check that cannot run must stay advisory too, or a
+        // missing file would start failing runs that exit 0 today (T1's F1).
+        // Both rows come out of one pair of queries, so one unreadable BAM is
+        // one error reported twice -- once in the exit status, once beside it.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &del_event("chrA", 10_000, 12_000), &NearbyRecords::default(), &mut results);
+
+        let each_end = named(&results, "split_reads_each_end");
+        assert!(each_end.advisory, "an errored per-end row is still advisory");
+        assert_eq!(each_end.expected, "check runs");
+        assert!(!each_end.pass);
+        assert!(
+            !named(&results, "split_reads").advisory,
+            "the pooled row's error stays in the exit status"
+        );
+        assert_eq!(
+            failure_message(&results, false).as_deref(),
+            Some("2/2 validation checks failed"),
+            "neither advisory row is in the count or the total"
+        );
+        assert_eq!(
+            failure_message(&results, true).as_deref(),
+            Some("4/4 validation checks failed"),
+            "--strict counts them with the rest"
+        );
+
+        let report = text_report(&results, false);
+        assert!(
+            line_for(&report, "split_reads_each_end").ends_with("FAIL (advisory)"),
+            "the table must mark the row; got {:?}",
+            line_for(&report, "split_reads_each_end")
+        );
+        // A trailing space, so the name does not match the longer row's line:
+        // `{:<18}` pads `split_reads` to 18 and the format adds one more.
+        assert!(
+            line_for(&report, "split_reads ").ends_with(" FAIL"),
+            "the real check's row is untouched; got {:?}",
+            line_for(&report, "split_reads ")
+        );
+
+        let mut json: Vec<u8> = Vec::new();
+        print_results_json(&mut json, &results, results.len(), 0).unwrap();
+        let json = String::from_utf8(json).unwrap();
+        assert!(
+            line_for(&json, "\"check\": \"split_reads_each_end\"").contains("\"advisory\": true"),
+            "{}",
+            json
+        );
+        assert!(
+            line_for(&json, "\"check\": \"split_reads\",").contains("\"advisory\": false"),
+            "{}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_the_each_end_row_covers_the_types_split_reads_covers_and_no_others() {
+        // The row is the same evidence at a stricter bar, so it applies
+        // exactly where a junction between two breakpoints means something:
+        // DEL, DUP, INV and BND, and nothing else. INS is out for the reason
+        // `split_reads` is: an inserted sequence has no second reference
+        // breakpoint.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+        let event_of = |sv_type: &str| TruthEvent {
+            sv_type: sv_type.to_string(),
+            ..del_event("chrA", 10_000, 12_000)
+        };
+
+        for sv_type in ["DEL", "DUP", "INV", "BND"] {
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event_of(sv_type), &NearbyRecords::default(), &mut results);
+            let names = row_names(&results);
+            assert!(
+                names.contains(&"split_reads") && names.contains(&"split_reads_each_end"),
+                "{} must get both split-read rows; got {:?}",
+                sv_type,
+                names
+            );
+        }
+
+        for sv_type in ["INS", "SNP", "CNV"] {
+            let mut results: Vec<CheckResult> = Vec::new();
+            check_event(&args, &event_of(sv_type), &NearbyRecords::default(), &mut results);
+            let names = row_names(&results);
+            assert!(
+                !names.contains(&"split_reads_each_end"),
+                "{} has no second breakpoint, so it gets no per-end row; got {:?}",
+                sv_type,
+                names
+            );
+            assert!(
+                !names.contains(&"split_reads"),
+                "{} gets no split_reads either -- the two rows must cover the same types; got {:?}",
+                sv_type,
+                names
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_each_end_row_is_the_only_row_its_width_moves() {
+        // The Check column is `{:<18}`, which *grows* past a longer name
+        // rather than truncating it: T2's review measured a 19-character name
+        // putting Status at 98 where every other row has it at 97.
+        // `split_reads_each_end` is 20 characters, so this row's own later
+        // columns sit two characters right -- the cost the plan weighed and
+        // accepted rather than rename the row or widen the column. What has to
+        // hold is that it costs nothing anywhere else: `{:<18}` pads short
+        // names, so the rows either side keep the offset they had.
+        let report = text_report(
+            &[
+                row(COVERAGE_RATIO, true, false),
+                row(SPLIT_READS, true, false),
+                row(SPLIT_READS_EACH_END, true, true),
+                row("ins_reads", true, false),
+            ],
+            false,
+        );
+        let status_at = |name: &str| {
+            let line = line_for(&report, name);
+            line.find("PASS")
+                .unwrap_or_else(|| panic!("no status on {:?}", line))
+        };
+
+        assert_eq!(
+            SPLIT_READS_EACH_END.len(),
+            20,
+            "the accepted overflow of the 18-wide Check column is two characters"
+        );
+        assert_eq!(
+            status_at(SPLIT_READS_EACH_END),
+            status_at(COVERAGE_RATIO) + 2,
+            "the per-end row's Status sits exactly two characters right:\n{}",
+            report
+        );
+        // A trailing space on the pooled name, so it cannot match the longer
+        // row's line.
+        for name in [COVERAGE_RATIO, "split_reads ", "ins_reads"] {
+            assert_eq!(
+                status_at(name),
+                status_at(COVERAGE_RATIO),
+                "{} must keep the offset every other row has:\n{}",
+                name,
+                report
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_each_end_row_is_never_a_check_of_the_event() {
+        // M11 with the per-end row in play. Two halves, because no event type
+        // can receive the per-end row *without* also receiving the pooled
+        // non-advisory row -- so "only advisory rows" cannot be built out of
+        // this row, and what is checkable is that the fallback still counts
+        // the non-advisory rows only, and that the row stays out of the
+        // default exit status on its own.
+        let args = args_for("/nonexistent/no.bam", "/nonexistent/no.fa");
+
+        // An event no real check covers still reports `event_checked FAIL`,
+        // and gets neither split-read row.
+        let cnv = TruthEvent {
+            sv_type: "CNV".to_string(),
+            census: CensusInfo::from_info("SIM_RESIST=0.500;SIM_DEPTH_FOLD=3.88"),
+            ..del_event("chrA", 10_000, 12_000)
+        };
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &cnv, &NearbyRecords::default(), &mut results);
+        assert_eq!(row_names(&results), vec!["resistant", "depth_fold", "event_checked"]);
+        let checked = named(&results, "event_checked");
+        assert!(!checked.pass, "an event no check covers may not pass");
+        assert!(!checked.advisory, "it is the row that fails the run");
+
+        // A DEL is covered, so the fallback must not fire beside four rows of
+        // which two are advisory.
+        let mut results: Vec<CheckResult> = Vec::new();
+        check_event(&args, &del_event("chrA", 10_000, 12_000), &NearbyRecords::default(), &mut results);
+        assert!(
+            !row_names(&results).contains(&"event_checked"),
+            "a DEL is checked; got {:?}",
+            row_names(&results)
+        );
+
+        // And the per-end row alone never fails a run by default.
+        let i = results
+            .iter()
+            .position(|r| r.check_name == "split_reads_each_end")
+            .unwrap();
+        assert_eq!(failure_message(&results[i..=i], false), None);
+    }
 }

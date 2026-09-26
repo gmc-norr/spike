@@ -547,13 +547,13 @@ events it was given. Which check covers which type:
 
 | Truth event | Per-event checks |
 | --- | --- |
-| DEL, DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` |
-| INV, BND | `split_reads` |
+| DEL, DUP | `coverage_ratio`, `split_reads`, and the advisory `coverage_any_mapq` and `split_reads_each_end` |
+| INV, BND | `split_reads`, and the advisory `split_reads_each_end` |
 | INS | `ins_reads` |
 | SNP, small indel and MNV (explicit REF and ALT) | `allele_freq` |
 | anything else (e.g. `SVTYPE=CNV`) | none -- `event_checked` FAIL |
 
-Three rows are **advisory**: printed and counted with the rest, but left out of
+Four rows are **advisory**: printed and counted with the rest, but left out of
 the exit status unless `--strict` is given (see below).
 
 `coverage_any_mapq` is `coverage_ratio` recomputed with **no MAPQ floor**. It
@@ -574,6 +574,33 @@ Event                               Check              Expected                 
 DEL chrA:10000-11000 (hidden)       coverage_ratio     0.00                      0.00            PASS
 DEL chrA:10000-11000 (hidden)       coverage_any_mapq  0.00                      0.50            FAIL (advisory)
 ```
+
+`split_reads_each_end` is `split_reads` with its minimum required at **each**
+breakpoint instead of pooled over both. It covers the same event types, DEL,
+DUP, INV and BND, and it is built from the **same two queries** as the pooled
+row -- the same 500 bp windows, the same `SA:Z` test, the same minimum of two
+distinct read names -- so the two rows can never disagree about what evidence
+exists. The pooled row counts the union of the two windows' read names and
+passes on two *in total*; this row takes each window's own count and passes only
+if each reaches two. Its `Expected` reads `>=2 at each end` and its `Observed`
+is the two counts, `<at the event's own breakpoint>/<at the partner's>`. On the
+one-contig chrA CRAM this repo's own unit tests write --
+`one_sided_split_read_cram` in `src/validate.rs` -- whose middle junction has
+three reads joining the left breakpoint to the right and nothing joining back,
+the two rows read:
+
+```
+Event                               Check              Expected                  Observed        Status
+DEL chrA:10001-12000 (one_sided)    split_reads        >=2 joining chrA:12001    3               PASS
+DEL chrA:10001-12000 (one_sided)    split_reads_each_end >=2 at each end           3/0             FAIL (advisory)
+```
+
+That second line is two characters wider than it looks: `split_reads_each_end`
+is 20 characters and the Check column is 18, so **this one row's own later
+columns sit two characters right of every other row's**. The alternative was
+renaming the row or widening the column, and widening it would move the spacing
+of every non-advisory row, so the raggedness is deliberate. It affects no other
+row: the column pads short names and only overflows long ones.
 
 The other two advisory rows are the **census spike recorded**, and a record gets
 each one whenever it carries that row's field, whatever the event's type. `resistant` reports the record's
@@ -653,7 +680,9 @@ over the two breakpoints, sit within 500 bp of one breakpoint and carry an
 other. Pooled is the operative word: the two reads may both sit at the *same*
 breakpoint, with nothing seen at the other, and the check still passes -- its
 own `expected` string (`>=2 joining chr:pos`) reads as though each end must
-contribute, and it does not. That is the whole of it. The SA parser reads an entry's first two
+contribute, and it does not. The advisory `split_reads_each_end` row beside it
+is the same evidence with the minimum required at each end, and it is the row
+that says so. That is the whole of it. The SA parser reads an entry's first two
 fields -- contig and position -- and stops: the strand, CIGAR, MAPQ and NM
 fields of the same entry are never looked at. So the check does not verify that
 the two segments are on opposite strands, which for an INV is the one thing
@@ -666,6 +695,27 @@ no SA tag at all, so a spike-in whose sequence is right can still fail:
 measured on the harness's chr20 window, a correctly planted 505 bp DEL emitted
 188 ALT fragment pairs of which **0** carried an `SA:Z` tag, and `split_reads`
 scored 0 -- a FAIL (`N1` in `REVIEW.md`).
+
+`split_reads_each_end` establishes the same thing at **each** breakpoint rather
+than pooled over both: two distinct read names within 500 bp of the event's own
+breakpoint carrying an `SA:Z` entry that names the partner, **and** two within
+500 bp of the partner carrying one back. That is what the pooled row's own
+`expected` string reads as though it asked for, and it is what catches the
+one-sided case above -- three reads at one end and nothing at the other reads
+`3/0` here and FAILs, on the same input the pooled row PASSes. What it does
+**not** add is any new kind of evidence: it is built from the same two queries
+and reads the same two fields of an `SA:Z` entry, the contig and the position,
+so it checks neither strand -- for an INV, still the one thing separating its
+junctions from any other pair of splits -- nor the breakpoint the CIGAR implies,
+nor a single base of sequence, nor any fraction. Both rows remain counts without
+denominators. And because it is the pooled row's own evidence at a strictly
+stronger bar, it can only fail **at least as often**: every event the pooled row
+fails, this row fails too, and it adds the events whose evidence is one-sided.
+That includes the case above where the aligner represented a correct deletion
+with no `SA:Z` entry at all, which is why the row is advisory and out of the
+exit status unless `--strict` is given. How much more often it fails on correct real
+data is being measured separately and is not in this document yet:
+**PREDICTED (not run)**.
 
 `ins_reads` establishes that at least **two** reads leave the reference within
 100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
