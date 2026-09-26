@@ -26,9 +26,26 @@
 
 ## Measured before planning
 
-- **The 35x HG002 BAM has no `XA` tags.** At `chr20:7118000-7121000` in `data/giab_hg38/HG002/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam`, 0 of 1070 primary records carry `XA`, and 618 are MAPQ 0. `origin` must stop on it with the input-check error (Task 9 checks that). Monday's BAMs must keep `XA`.
+- **The 35x HG002 BAM keeps `XA` tags** (`data/giab_hg38/HG002/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam`):
+  - Its first 100,000 records hold 15,255 with `XA`, the first at record 64.
+  - `chr20:10000000-11000000` holds 2,841 of 298,950 with `XA`.
+  - The Task 9 slice `chr20:14500000-14600000` holds 328 of 29,427, the first at record 498.
+  - Some spots have MAPQ 0 reads without `XA`. At `chr20:7117236-7121236`, 822 are MAPQ 0 and 1 carries `XA`. In Task 9's footprint `chr20:14546421-14550735`, 4 are MAPQ 0 and none carries it, while 1 MAPQ 40 read does. Under bwa-mem's `-h 5` rule those reads have more than 5 hits.
+  - This plan's first revision (`84ca4c8`) said the BAM had no `XA`, from one window. That was wrong. The input check is now on the file (spec R8).
 - **Tools found:** `wgsim`, `bwa-mem2`, `bwa` and `samtools` are in `/home/parlar_ai/.pixi/bin`, and python has `pysam 0.23.3`.
 - **The tests pass on `94f3f20`:** `cargo test`: 554 passed, 0 failed, 1 ignored.
+
+## Revision 2 (2026-09-27, before any run)
+
+A review of the first revision (`84ca4c8`) found five gaps. Each was checked against the code or the BAM before this revision. Nothing had been built or run, so the gate's order holds: this revision is itself a `plan:` commit.
+
+| | Gap | Fix | Where |
+| --- | --- | --- | --- |
+| P1 | origin depth counted fragments R4 keeps (spec R6) | depth over removable fragments only | Task 5 |
+| P2 | phasing skips duplicates, so a family could split on its shared draw (spec R7) | the family's phase call, one fate at its highest member's total | Task 6 |
+| P3 | the gate counted a crashed control as evidence | NO VERDICT unless `origin` and `--min-mapq 0` finish and `clean` finishes or stops with its expected refusal | Task 12 |
+| P4 | the XA check passed on any record with `XA`; a per-spot check cannot tell a stripped tag from more than 5 hits (spec R8) | `require_xa` on the file's first 100,000 records | Tasks 7, 9 |
+| P5 | M12's test put every pool pair outside the footprint, so it could not catch early suppression | a test with pool pairs inside it | Tasks 8, 11 |
 
 ## File structure
 
@@ -385,7 +402,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `Span`, `Placement`, `chance_within`, `reference_length` (Task 2).
-- Produces: `pub struct FivePrime { chrom, pos: u64, reverse: bool }` (Ord); `pub fn five_prime(chrom: &str, start: u64, ops: &[Op], reverse: bool) -> FivePrime`; `pub struct OriginRecord { name, first, mapq, has_xa, placements, duplicate, qc_fail, mate_unmapped, five_prime }` with `fn primary(&self) -> &Placement`; `pub struct Fragment<'a> { name: &'a str, mates: Vec<&'a OriginRecord> }` with `chance(&self, &Span) -> f64`, `removable(&self, &Span) -> bool`, `at_spot(&self, &Span) -> bool`, `family(&self) -> Vec<FivePrime>`.
+- Produces: `pub struct FivePrime { chrom, pos: u64, reverse: bool }` (Ord); `pub fn five_prime(chrom: &str, start: u64, ops: &[Op], reverse: bool) -> FivePrime`; `pub struct OriginRecord { name, first, placements, duplicate, qc_fail, mate_unmapped, five_prime }` with `fn primary(&self) -> &Placement`; `pub struct Fragment<'a> { name: &'a str, mates: Vec<&'a OriginRecord> }` with `chance(&self, &Span) -> f64`, `removable(&self, &Span) -> bool`, `at_spot(&self, &Span) -> bool`, `family(&self) -> Vec<FivePrime>`.
 
 - [ ] **Step 1: Write the failing tests** (add to `origin::tests`)
 
@@ -397,8 +414,6 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         OriginRecord {
             name: name.to_string(),
             first,
-            mapq,
-            has_xa: !alternatives.is_empty(),
             placements: placements(Span::new("chr1", start, start + 100), mapq, alternatives),
             duplicate: false,
             qc_fail: false,
@@ -524,9 +539,6 @@ pub struct OriginRecord {
     pub name: String,
     /// Read 1 of its pair; the two records of one name differ here.
     pub first: bool,
-    pub mapq: u8,
-    /// Whether the record carries an `XA` tag at all.
-    pub has_xa: bool,
     /// The primary placement first, then the `XA` hits.
     pub placements: Vec<Placement>,
     pub duplicate: bool,
@@ -794,6 +806,17 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
     }
 
     #[test]
+    fn test_reads_spike_cannot_remove_add_no_depth() {
+        // R6: a read at L whose mapped mate spike never read is kept (R4),
+        // so its depth must not pay for new reads on top of it.
+        let mut site = twin_site();
+        let copy = site.records[0].clone();
+        site.records.push(OriginRecord { name: "stray".into(), mate_unmapped: false, ..copy });
+        assert!(!site.removable_names().contains(&"stray".to_string()));
+        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+    }
+
+    #[test]
     fn test_fragments_are_the_names_with_a_placement_in_the_footprint() {
         let mut site = twin_site();
         site.records.push(record("unique_at_p", true, 12_500, 60, &[]));
@@ -884,7 +907,9 @@ impl OriginSite {
     /// Read depth that came from around `pos` on `chrom`. At up to 50 points
     /// over `window` (the points `simulate::estimate_coverage_at` samples),
     /// sum the chances of every placement covering the point, then average.
-    /// Duplicate and QC-fail reads add nothing, since spike's new reads are
+    /// Only fragments spike can remove count (R6): one kept by R4 stays in
+    /// the BAM, so counting it would add new reads on top of it. Duplicate
+    /// and QC-fail reads add nothing either, since spike's new reads are
     /// never flagged (R3).
     pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
         let start = pos.saturating_sub(window / 2);
@@ -892,10 +917,11 @@ impl OriginSite {
         let range = end - start;
         let n = range.min(50).max(1);
         let step = if n > 1 { range / n } else { 1 };
+        let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
         let placed: Vec<&Placement> = self
             .records
             .iter()
-            .filter(|r| !r.duplicate && !r.qc_fail)
+            .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
             .flat_map(|r| r.placements.iter())
             .filter(|p| p.span.chrom == chrom && p.span.start < end && start < p.span.end)
             .collect();
@@ -943,13 +969,13 @@ pub fn fragment_to_read_ratio(pool: &ReadPool) -> Result<f64> {
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `CARGO_TARGET_DIR=$S/target-t5 cargo test -j 16 origin:: -- --test-threads=16`
-Expected: 22 passed.
+Expected: 23 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/origin.rs
-git commit -m "code: origin -- the site, origin depth (R3 no flagged depth) and f over the whole pool (R1)
+git commit -m "code: origin -- the site, origin depth (R3 no flagged depth, R6 only removable fragments) and f over the whole pool (R1)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1019,6 +1045,33 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         assert_eq!(split, 0);
         assert!((400..600).contains(&(removed.len() / 2)), "{} removed", removed.len());
     }
+
+    #[test]
+    fn test_a_duplicate_takes_its_familys_phase_call() {
+        // R7: phasing skips duplicates (src/loh.rs:628), so only the original
+        // is in read_copy. At VAF 0.5 it gets rate 1, and so must its duplicate.
+        let orig = OriginRecord { mate_unmapped: true, ..record("orig", true, 100, 60, &[]) };
+        let dup = OriginRecord { name: "dup".into(), duplicate: true, ..orig.clone() };
+        let site = OriginSite { footprint: fp(), lookalikes: vec![], records: vec![orig, dup], f: 1.0 };
+        let on_event: HashMap<String, bool> = [("orig".to_string(), true)].into();
+        let chances = site.removal_chances(&on_event, 0.5);
+        assert_eq!(chances.len(), 2);
+        assert!(close(chances[0].chance, chances[1].chance), "{:?}", chances);
+        // On the other copy the original's rate is 0, and so is its duplicate's.
+        let on_other: HashMap<String, bool> = [("orig".to_string(), false)].into();
+        assert!(site.removal_chances(&on_other, 0.5).is_empty());
+    }
+
+    #[test]
+    fn test_a_family_shares_one_fate_even_when_its_chances_differ() {
+        // R7: one draw per family, against its highest member's total. Member
+        // by member, a draw between 0.5 and 0.99 would remove only "orig".
+        let chances = [chance("orig", 7, 0.99), chance("dup", 7, 0.5)];
+        for seed in 0..200 {
+            let removed = decide(&chances, &mut StdRng::seed_from_u64(seed));
+            assert_eq!(removed.contains("orig"), removed.contains("dup"), "seed {}", seed);
+        }
+    }
 ```
 
 - [ ] **Step 2: Run them and see them fail**
@@ -1040,22 +1093,42 @@ pub struct Chance {
 impl OriginSite {
     /// This event's chance of removing each fragment it can remove:
     /// `p_origin x copy_rate(copy, vaf)`. At the spot `copy` is the sample's
-    /// phase call from `read_copy`. A fragment the aligner put only at a
-    /// look-alike has none, so its rate is `vaf`.
+    /// phase call for the fragment's duplicate family (R7): phasing skips
+    /// duplicates (`src/loh.rs:628`), so a family takes the call of whichever
+    /// member has one, and members that disagree get none. A fragment the
+    /// aligner put only at a look-alike has no call, so its rate is `vaf`.
     pub fn removal_chances(&self, read_copy: &HashMap<String, bool>, vaf: f64) -> Vec<Chance> {
-        self.fragments()
+        let fragments: Vec<Fragment<'_>> = self
+            .fragments()
             .into_iter()
             .filter(|f| f.removable(&self.footprint))
+            .collect();
+        let mut family_copy: BTreeMap<Vec<FivePrime>, Option<bool>> = BTreeMap::new();
+        for f in &fragments {
+            if let Some(&copy) = read_copy.get(f.name) {
+                family_copy
+                    .entry(f.family())
+                    .and_modify(|call| {
+                        if *call != Some(copy) {
+                            *call = None;
+                        }
+                    })
+                    .or_insert(Some(copy));
+            }
+        }
+        fragments
+            .into_iter()
             .filter_map(|f| {
+                let family = f.family();
                 let copy = if f.at_spot(&self.footprint) {
-                    read_copy.get(f.name).copied()
+                    family_copy.get(&family).copied().flatten()
                 } else {
                     None
                 };
                 let chance = f.chance(&self.footprint) * copy_rate(copy, vaf);
                 (chance > 0.0).then(|| Chance {
                     name: f.name.to_string(),
-                    family: f.family(),
+                    family,
                     chance,
                 })
             })
@@ -1067,9 +1140,9 @@ impl OriginSite {
 ///
 /// A fragment came from one copy, so "it came from event 1's edited copy"
 /// and "it came from event 2's" cannot both be true: its chances add,
-/// capped at 1. There is one draw per duplicate family, in family order, so
-/// a duplicate shares its original's fate (R3). Each fragment is removed
-/// when its family's draw is below its own total.
+/// capped at 1. One molecule has one origin, so a duplicate family is
+/// removed or kept whole (R3, R7). There is one draw per family, in family
+/// order, against its highest member's total.
 pub fn decide(chances: &[Chance], rng: &mut StdRng) -> BTreeSet<String> {
     let mut totals: BTreeMap<&str, (&[FivePrime], f64)> = BTreeMap::new();
     for c in chances {
@@ -1078,14 +1151,19 @@ pub fn decide(chances: &[Chance], rng: &mut StdRng) -> BTreeSet<String> {
             .or_insert((c.family.as_slice(), 0.0))
             .1 += c.chance;
     }
-    let mut draws: BTreeMap<&[FivePrime], f64> =
-        totals.values().map(|(family, _)| (*family, 0.0)).collect();
-    for draw in draws.values_mut() {
-        *draw = rng.gen::<f64>();
+    let mut families: BTreeMap<&[FivePrime], f64> = BTreeMap::new();
+    for (family, total) in totals.values() {
+        let highest = families.entry(*family).or_insert(0.0);
+        *highest = highest.max(total.min(1.0));
     }
+    let removed_families: BTreeSet<&[FivePrime]> = families
+        .into_iter()
+        .filter(|(_, highest)| rng.gen::<f64>() < *highest)
+        .map(|(family, _)| family)
+        .collect();
     totals
         .into_iter()
-        .filter(|(_, (family, total))| draws[family] < total.min(1.0))
+        .filter(|(_, (family, _))| removed_families.contains(family))
         .map(|(name, _)| name.to_string())
         .collect()
 }
@@ -1094,13 +1172,13 @@ pub fn decide(chances: &[Chance], rng: &mut StdRng) -> BTreeSet<String> {
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `CARGO_TARGET_DIR=$S/target-t6 cargo test -j 16 origin:: -- --test-threads=16`
-Expected: 26 passed.
+Expected: 29 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/origin.rs
-git commit -m "code: origin -- removal chances; chances add over events, one draw per family (R5, R3)
+git commit -m "code: origin -- removal chances; chances add over events, one draw and one phase call per family (R5, R3, R7)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1115,7 +1193,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Tasks 2–6. It also uses `crate::extract::{is_cram, build_fasta_repository, open_cram_reader_for_region, record_is_on_queried_reference, safe_noodles_position}`, the same calls `validate::scan_region` makes (`src/validate.rs:3279-3355`).
-- Produces: `pub fn gather(bam_path: &str, ref_path: &str, footprint: &Span, read_length: usize, pool: &ReadPool) -> Result<OriginSite>`; `pub(crate) fn test_fixtures::write_one_contig_bam(path: &Path, contig: &str, contig_len: usize, records: &[RecordBuf]) -> String`.
+- Produces: `pub fn gather(bam_path: &str, ref_path: &str, footprint: &Span, read_length: usize, pool: &ReadPool) -> Result<OriginSite>`; `pub const XA_PROBE_RECORDS: usize = 100_000`; `pub fn first_xa_record(bam_path: &str, ref_path: &str, limit: usize) -> Result<Option<usize>>`; `pub fn require_xa(bam_path: &str, ref_path: &str) -> Result<usize>`; `pub(crate) fn test_fixtures::write_one_contig_bam(path: &Path, contig: &str, contig_len: usize, records: &[RecordBuf]) -> String`.
 
 - [ ] **Step 1: Add the fixture** (to `extract::test_fixtures`; this is test code, so no red step)
 
@@ -1246,16 +1324,53 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn test_gather_stops_when_the_mapq0_reads_carry_no_xa() {
-        let dir = scratch("noxa");
+    /// Two MAPQ 0 reads at the spot, with no XA anywhere in the file.
+    fn noxa_bam(dir: &std::path::Path) -> String {
         let records = [
             bam_record("z", 0x63, 21_001, 0, None, 21_201),
             bam_record("z", 0x93, 21_201, 0, None, 21_001),
         ];
-        let bam = crate::extract::test_fixtures::write_one_contig_bam(&dir.join("noxa.bam"), "chrT", 60_000, &records);
-        let err = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap_err().to_string();
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("noxa.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_gather_does_not_stop_at_a_spot_whose_mapq0_reads_lack_xa() {
+        // R8: under bwa-mem's -h 5 rule such reads have more than 5 hits, so
+        // each gets 1/6. Whether the file kept XA at all is `require_xa`'s question.
+        let dir = scratch("spot_noxa");
+        let bam = noxa_bam(&dir);
+        let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
+        let z = site.fragments().into_iter().find(|f| f.name == "z").unwrap();
+        assert!(close(z.chance(&site.footprint), 1.0 / 6.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_first_xa_record_counts_records_up_to_the_first_xa() {
+        // In `twin_bam` the first record with XA is b's read 1, the third.
+        let dir = scratch("first_xa");
+        let bam = twin_bam(&dir);
+        assert_eq!(first_xa_record(&bam, "", 100).unwrap(), Some(3));
+        assert_eq!(first_xa_record(&bam, "", 2).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_require_xa_stops_a_file_without_xa() {
+        // R8.
+        let dir = scratch("require_xa");
+        let err = require_xa(&noxa_bam(&dir), "").unwrap_err().to_string();
         assert!(err.contains("XA") && err.contains("--edit-model clean"), "{}", err);
+        assert_eq!(require_xa(&twin_bam(&dir), "").unwrap(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_first_xa_record_reads_a_cram() {
+        // The two-contig CRAM carries SA:Z on every record and no XA.
+        let dir = scratch("cram_xa");
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
+        assert_eq!(first_xa_record(&cram, &fasta, 100).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1274,7 +1389,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 3: Run them and see them fail**
 
 Run: `CARGO_TARGET_DIR=$S/target-t7 cargo test -j 16 origin:: -- --test-threads=16`
-Expected: a compile error, `cannot find function gather`.
+Expected: a compile error, `cannot find function gather` (and `first_xa_record`, `require_xa`).
 
 - [ ] **Step 4: Implement.** Change the top-level anyhow import to `use anyhow::{bail, Context, Result};`, then:
 
@@ -1310,8 +1425,6 @@ fn origin_record(
     Some(OriginRecord {
         name,
         first: flags.is_first_segment(),
-        mapq,
-        has_xa: xa.is_some(),
         placements: placements(
             Span::new(&chrom, start, start + reference_length(ops)),
             mapq,
@@ -1363,12 +1476,65 @@ fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>
     Ok(out)
 }
 
-/// Read everything `origin` needs for one event: the footprint, its
-/// look-alike regions and `f` (see [`OriginSite`]).
+/// How many records, from the start of the file, [`require_xa`] reads
+/// looking for an `XA` tag. The 35x HG002 BAM's first `XA` is on record 64.
+pub const XA_PROBE_RECORDS: usize = 100_000;
+
+/// The number of records read up to and including the first that carries
+/// `XA`, or `None` when none of the first `limit` does.
+pub fn first_xa_record(bam_path: &str, ref_path: &str, limit: usize) -> Result<Option<usize>> {
+    use noodles::sam::alignment::record::data::field::Tag;
+    let xa = Tag::new(b'X', b'A');
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let mut reader = noodles::cram::io::reader::Builder::default()
+            .set_reference_sequence_repository(repository)
+            .build_from_path(bam_path)
+            .with_context(|| format!("failed to open CRAM: {}", bam_path))?;
+        let header = reader.read_header()?;
+        for (i, result) in reader.records(&header).take(limit).enumerate() {
+            let buf = result?.try_into_alignment_record(&header)?;
+            if buf.data().get(&xa).is_some() {
+                return Ok(Some(i + 1));
+            }
+        }
+    } else {
+        let mut reader = noodles::bam::io::reader::Builder
+            .build_from_path(bam_path)
+            .with_context(|| format!("failed to open BAM: {}", bam_path))?;
+        reader.read_header()?;
+        for (i, result) in reader.records().take(limit).enumerate() {
+            if result?.data().get(&xa).is_some() {
+                return Ok(Some(i + 1));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Stop unless the file keeps the aligner's `XA` tags (R8); otherwise every
+/// MAPQ 0 read would silently get 1/6 and no look-alike would be found.
 ///
-/// It stops when the footprint holds MAPQ 0 reads and none of them carries
-/// `XA`. Otherwise every such read would silently get 1/6, and no look-alike
-/// would be found.
+/// The check is on the file, not the spot: a spot whose MAPQ 0 reads carry
+/// no `XA` is normal, since under bwa-mem's `-h 5` rule their hits number
+/// more than 5. Returns the record the first `XA` is on.
+pub fn require_xa(bam_path: &str, ref_path: &str) -> Result<usize> {
+    match first_xa_record(bam_path, ref_path, XA_PROBE_RECORDS)? {
+        Some(n) => Ok(n),
+        None => bail!(
+            "--edit-model origin needs the aligner's XA tags (its alternative hits), but none \
+             of the first {} records of {} carries one. bwa-mem and bwa-mem2 write XA by \
+             default, and a later step can strip it. Re-align with one of them, or use \
+             --edit-model clean.",
+            XA_PROBE_RECORDS,
+            bam_path,
+        ),
+    }
+}
+
+/// Read everything `origin` needs for one event: the footprint, its
+/// look-alike regions and `f` (see [`OriginSite`]). Whether the file keeps
+/// `XA` at all is [`require_xa`]'s check, made once per run.
 pub fn gather(
     bam_path: &str,
     ref_path: &str,
@@ -1377,17 +1543,6 @@ pub fn gather(
     pool: &ReadPool,
 ) -> Result<OriginSite> {
     let spot = scan(bam_path, ref_path, footprint)?;
-    let mapq0 = spot.iter().filter(|r| r.mapq == 0).count();
-    if mapq0 > 0 && !spot.iter().any(|r| r.has_xa) {
-        bail!(
-            "--edit-model origin needs the aligner's XA tags (its alternative hits), but none \
-             of the {} MAPQ 0 reads over {} carries one. bwa-mem and bwa-mem2 write XA by \
-             default, and a later step can strip it. Re-align with one of them, or use \
-             --edit-model clean.",
-            mapq0,
-            footprint,
-        );
-    }
     let lookalikes = lookalike_regions(&spot, footprint, read_length as u64);
     let mut seen: BTreeSet<(String, bool)> =
         spot.iter().map(|r| (r.name.clone(), r.first)).collect();
@@ -1411,13 +1566,13 @@ pub fn gather(
 - [ ] **Step 5: Run the tests and see them pass**
 
 Run: `CARGO_TARGET_DIR=$S/target-t7 cargo test -j 16 origin:: -- --test-threads=16`
-Expected: 29 passed.
+Expected: 35 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/origin.rs src/extract.rs
-git commit -m "code: origin -- gather a site from BAM or CRAM, with the missing-XA input check
+git commit -m "code: origin -- gather a site from BAM or CRAM; the XA check reads the file, not the spot (R8)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1450,8 +1605,6 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         OriginRecord {
             name: name.to_string(),
             first,
-            mapq: 60,
-            has_xa: false,
             placements: origin::placements(Span::new("chr1", start, start + 150), 60, &[]),
             duplicate: false,
             qc_fail: false,
@@ -1502,6 +1655,24 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         assert!(!out.chimeric_pairs.is_empty());
         assert_eq!(out.origin_chances.len(), 80);
         assert!(out.origin_chances.iter().all(|c| (c.chance - 0.5 * (1.0 - 1e-6)).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_origin_leaves_the_pool_pairs_inside_the_footprint_for_the_final_draw() {
+        // These are the pairs `clean` suppresses here, at rate 1/2. Under
+        // origin every one comes back kept: `origin::decide` removes them only
+        // after every event's chances are summed (R5).
+        let mut hap = del_haplotype(2000, 1000);
+        let pool = make_covering_pool(0, 4000, 100);
+        assert!(pool.pairs.iter().all(|p| p.ref_end <= 5000), "every pair lies inside chr1:0-5000");
+        let site = origin_site(Span::new("chr1", 0, 5000));
+        let mut rng = StdRng::seed_from_u64(42);
+        let out = simulate_event_origin(
+            1, &origin_del_event(), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, Some(&site), &mut rng,
+        )
+        .unwrap();
+        assert_eq!(out.suppressed_count, 0);
+        assert_eq!(out.kept_originals.len(), 100);
     }
 
     #[test]
@@ -1827,7 +1998,7 @@ pub fn apply_removals(outputs: &mut [SplicedOutput], removed: &BTreeSet<String>)
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `CARGO_TARGET_DIR=$S/target-t8 cargo test -j 16 -- --test-threads=16`
-Expected: every test passes, including the 5 new ones and every existing `simulate::` test. If `test_merge_script_aborts_when_original_bam_does_not_match_replaced_reads` fails, it is the known flaky test: re-run it alone and report both outputs.
+Expected: every test passes, including the 6 new ones and every existing `simulate::` test. If `test_merge_script_aborts_when_original_bam_does_not_match_replaced_reads` fails, it is the known flaky test: re-run it alone and report both outputs.
 
 - [ ] **Step 5: Commit**
 
@@ -1846,7 +2017,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `src/main.rs`: the event loop (`src/main.rs:537-640`), the block after the refusal bail (`:642-660`), and a new `origin_footprint` next to `build_haplotype` (`:1439`). Add tests in `mod tests`.
 
 **Interfaces:**
-- Consumes: `origin::{gather, decide, Span, OriginSite, Chance}`, `simulate::{is_additive, simulate_event_origin, apply_removals}`, `HAP_FLANK` (`src/main.rs:201`), `SharedReference::chromosome_length(&str) -> Option<u64>`.
+- Consumes: `origin::{require_xa, gather, decide, Span, OriginSite, Chance}`, `simulate::{is_additive, simulate_event_origin, apply_removals}`, `HAP_FLANK` (`src/main.rs:201`), `SharedReference::chromosome_length(&str) -> Option<u64>`.
 - Produces: `fn origin_footprint(event: &SimEvent, contig_len: u64) -> Option<origin::Span>`.
 
 - [ ] **Step 1: Write the failing test** (in `main.rs` `mod tests`)
@@ -1895,9 +2066,14 @@ fn origin_footprint(event: &SimEvent, contig_len: u64) -> Option<origin::Span> {
 ```rust
     let edit_origin = args.edit_model == "origin";
     if edit_origin {
+        // R8: once per run, on the file. A spot whose MAPQ 0 reads lack XA is
+        // normal (more than 5 hits); a file with no XA at all was stripped.
+        let first = origin::require_xa(&args.bam, &args.reference)?;
         log::info!(
             "--edit-model origin (experimental): reads are removed by their chance of having \
-             come from each event's edited copy, at the event and at its look-alikes"
+             come from each event's edited copy, at the event and at its look-alikes. The BAM \
+             keeps XA tags (the first is on record {}).",
+            first,
         );
     }
     // Under origin: each event's label and site, for the removal log after
@@ -2057,14 +2233,25 @@ git worktree remove $S/origin-c1/base
 
 Expected: the three rows hold the same four md5s. A row that differs fails Global Constraint 1; stop and report it.
 
-- [ ] **Step 6: Check that origin stops on a BAM without `XA`, on real data**
+- [ ] **Step 6: Run origin on real data, with the XA tags kept and with them stripped**
 
 ```bash
+# Kept: the slice holds 328 records with XA ("Measured before planning").
 $S/target-t9/release/spike $E --edit-model origin -o $S/origin-c1/new_origin 2> $S/origin-c1/new_origin.log; echo "exit $?"
-grep -c "needs the aligner's XA tags" $S/origin-c1/new_origin.log
+grep -E "keeps XA tags|origin:|origin depth|origin removed" $S/origin-c1/new_origin.log
+# Stripped: the same slice without any XA.
+samtools view -b -x XA -o $S/origin-c1/slice_noxa.bam $S/origin-c1/slice.bam && samtools index $S/origin-c1/slice_noxa.bam
+samtools view $S/origin-c1/slice_noxa.bam | grep -c "XA:Z:"
+$S/target-t9/release/spike --bam $S/origin-c1/slice_noxa.bam --reference $REF --event del:chr20:14548422-14548735 --seed 1 --allow-resistant --edit-model origin -o $S/origin-c1/noxa_origin 2> $S/origin-c1/noxa_origin.log; echo "exit $?"
+grep -c "needs the aligner's XA tags" $S/origin-c1/noxa_origin.log
 ```
 
-Expected: a non-zero exit and a count of at least 1 (the 35x BAM has no `XA`; see "Measured before planning").
+Expected (PREDICTED, not run):
+- The kept run exits 0 and logs a `keeps XA tags` line, an `origin:` line, an `origin depth` line and an `origin removed` line.
+- The stripped slice counts 0 `XA:Z:`.
+- The stripped run exits non-zero, with at least 1 matching error line.
+
+Record the actual lines.
 
 - [ ] **Step 7: Commit**
 
@@ -2094,7 +2281,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Chances from several events add up. A duplicate shares its original's fate.
 - The number of new reads comes from where reads came from (the origin depth). It does not come from the donor pool, which can be empty inside a perfect twin.
 
-It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the MAPQ 0 reads over an event carries one. The 35x HG002 BAM used above has none: at `chr20:7118000-7121000`, 0 of 1070 primary records carry `XA`, and 618 of them are MAPQ 0. The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
+It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the first 100,000 records of the BAM carries one. A spot whose MAPQ 0 reads lack `XA` is normal: under bwa-mem's `-h 5` rule their hits number more than 5, so each gets a chance of 1/6. At `chr20:7117236-7121236` in the 35x HG002 BAM, 822 reads are MAPQ 0 and 1 carries `XA`, yet the file's first 100,000 records hold 15,255 with it. The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
 ```
 
 - [ ] **Step 2: Paste the `--edit-model` entry.** Build the release binary, run `$S/target-t9/release/spike --help`, and copy its `--edit-model <EDIT_MODEL>` entry verbatim into the CLI reference block after `--dup-model`.
@@ -2125,15 +2312,20 @@ Apply each mutation alone and run `CARGO_TARGET_DIR=$S/target-mut cargo test -j 
 | M7 | `decide` draws once per chance and removes on any hit (a union) | `test_two_events_at_both_twins_remove_half_not_seven_sixteenths` |
 | M8 | `decide` keys draws by name, not family | `test_a_duplicate_shares_its_originals_fate` |
 | M9 | `LOOKALIKE_MIN_READS` 2 → 1 | `test_a_region_one_read_points_into_is_not_a_lookalike` |
-| M10 | `gather` skips the XA input check | `test_gather_stops_when_the_mapq0_reads_carry_no_xa` |
+| M10 | `require_xa` returns `Ok(0)` without reading the file | `test_require_xa_stops_a_file_without_xa` |
 | M11 | `scan` (CRAM) drops `record_is_on_queried_reference` | `test_gather_reads_only_the_queried_contig_of_a_cram` |
-| M12 | `replaceable` drops `origin.is_none() &&` | `test_origin_keeps_an_event_whose_pool_has_no_read_in_the_footprint` |
-| M13 | the origin arm calls `donor_coverage_for_tiling` | same |
+| M12 | `replaceable` drops `origin.is_none() &&` | `test_origin_leaves_the_pool_pairs_inside_the_footprint_for_the_final_draw` |
+| M13 | the origin arm calls `donor_coverage_for_tiling` | `test_origin_keeps_an_event_whose_pool_has_no_read_in_the_footprint` |
 | M14 | `apply_removals` leaves `kept_originals` alone | `test_apply_removals_moves_removed_pool_pairs_to_suppressed` |
 | M15 | `removal_chances` uses `copy = None` always | `test_removal_chance_is_p_origin_times_the_copy_rate` |
 | M16 | `fragment_to_read_ratio` divides by the pair count | `test_f_is_fragment_span_over_read_bases_across_the_whole_pool` |
+| M17 | `read_coverage_at` drops `removable.contains(&r.name)` (R6) | `test_reads_spike_cannot_remove_add_no_depth` |
+| M18 | `removal_chances` takes `read_copy.get(f.name)` instead of the family's call (R7) | `test_a_duplicate_takes_its_familys_phase_call` |
+| M19 | `decide` removes a name when its family's draw is below the name's own total (R7) | `test_a_family_shares_one_fate_even_when_its_chances_differ` |
+| M20 | `first_xa_record`'s CRAM branch returns `Ok(Some(1))` | `test_first_xa_record_reads_a_cram` |
+| M21 | `gather` stops when the spot's MAPQ 0 reads carry no `XA` (the per-spot check R8 replaced) | `test_gather_does_not_stop_at_a_spot_whose_mapq0_reads_lack_xa` |
 
-- [ ] **Step 1: Run M1–M16 and record the red tests per mutation** in `$S/origin-mut.txt`.
+- [ ] **Step 1: Run M1–M21 and record the red tests per mutation** in `$S/origin-mut.txt`.
 - [ ] **Step 2: Confirm `git status --short` shows only ` M .gitignore` and `?? .ignore`.** Nothing is committed in this task; its record goes into the result commit (Task 12).
 
 ---
@@ -2152,10 +2344,12 @@ Apply each mutation alone and run `CARGO_TARGET_DIR=$S/target-mut cargo test -j 
 - **Samples.** Truth seeds 1 and 2: copy A with `[24500,25500)` removed, plus copy B. Donor seed 3: both copies intact. spike `--seed 7 --allow-resistant`, three ways: `clean`, `--min-mapq 0` and `--edit-model origin`. Each goes through `align.sh` and `merge.sh` with 8 threads.
 - **Measured.** Mean depth from `samtools depth -a` (default flags; any MAPQ) over L = `chrT:24600-25400` and P = `chrT:54600-55400`. Each is divided by the length-weighted mean over `chrT:5000-15000`, `35000-45000` and `65000-75000`.
 - **Band.** For X in {L, P}: `[min(truth1_X, truth2_X) − 0.05, max(truth1_X, truth2_X) + 0.05]`.
-- **Verdict:**
+- **Verdict**, checked in this order. A control counts as evidence only when it ran as meant:
+  - **NO VERDICT** in three cases: `origin` exits non-zero; `--min-mapq 0` exits non-zero; or `clean` exits non-zero without its expected refusal, whose log line holds `has no donor coverage`. Nothing was measured. Fix the cause, commit it as `code:`, run again, and report that it happened.
   - **INCONCLUSIVE** if `--min-mapq 0` lies inside both bands, or `clean` exits 0 and lies inside both. The test then cannot tell the models apart. Stop and report.
-  - **SUPPORTED** if `origin` exits 0 and lies inside both bands.
+  - **SUPPORTED** if `origin` lies inside both bands.
   - **REFUTED** otherwise. The default stays `clean` and no tuning follows. Report and stop.
+  - So the gate can reject only a `--min-mapq 0` run that finished and landed outside a band, and a `clean` run that finished outside a band or stopped with its expected refusal.
 - **Harness check (not a verdict).** In the donor BAM, at `chrT:22500-27500`, count primary records, MAPQ 0 records, and records with `XA`. If the MAPQ 0 records carry no `XA`, the harness is broken: fix it and re-run. This is not a verdict.
 - **Prediction on paper** (spec table, PREDICTED, not run): truth ≈ 0.75 at L and P; `--min-mapq 0` ≈ 0.5 at L and ≈ 1 at P; `origin` ≈ 0.75 at both; `clean` refused.
 
@@ -2312,9 +2506,18 @@ def main(out, spike_bin, threads="8"):
     mapq0_rc, mapq0 = runs["mapq0"]
     clean_rc, clean = runs["clean"]
     origin_rc, origin = runs["origin"]
-    if (mapq0_rc == 0 and inside(mapq0)) or (clean_rc == 0 and inside(clean)):
+    with open(f"{out}/clean.log") as fh:
+        clean_refused_as_expected = clean_rc != 0 and "has no donor coverage" in fh.read()
+    # A control is evidence only when it ran as meant.
+    if origin_rc != 0:
+        print("NO VERDICT: origin failed to run -- fix it and run again")
+    elif mapq0_rc != 0:
+        print("NO VERDICT: the --min-mapq 0 control failed to run -- fix it and run again")
+    elif clean_rc != 0 and not clean_refused_as_expected:
+        print("NO VERDICT: the clean control failed, but not with its expected refusal")
+    elif inside(mapq0) or (clean_rc == 0 and inside(clean)):
         print("VERDICT: INCONCLUSIVE -- the test cannot tell the models apart")
-    elif origin_rc == 0 and inside(origin):
+    elif inside(origin):
         print("VERDICT: SUPPORTED")
     else:
         print("VERDICT: REFUTED")
@@ -2341,7 +2544,7 @@ python3 scripts/origin_physics.py $S/origin-physics $S/target-t12/release/spike 
 grep -h "origin" $S/origin-physics/origin.log | head -20
 ```
 
-Record the full output. Do not re-run with other seeds, windows or margins. If the harness check fails, fix the harness, commit that fix as `code:`, and run again. Report that it happened.
+Record the full output. Do not re-run with other seeds, windows or margins. Only a harness-check failure or a NO VERDICT allows a second run. Fix the cause, commit the fix as `code:`, run again, and report that it happened and why.
 
 - [ ] **Step 4: Write the result into `REVIEW.md`.** It holds the locked rule (pointing to this plan), the harness check line, the table of truth1, truth2, clean, mapq0 and origin (exit, L, P), the bands and the verdict. Add the Task 9 byte-identity md5 rows and the Task 11 mutation record. For each measured number, give the command that produced it. Update the spec's Status line to say whether the physics test passed. Update the README section's last paragraph with the verdict in one sentence.
 

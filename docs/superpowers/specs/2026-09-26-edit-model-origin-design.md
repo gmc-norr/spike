@@ -1,7 +1,8 @@
 # `--edit-model origin`: edit reads by where they came from
 
 Date: 2026-09-26. Status: design agreed with the user in four parts; revised 2026-09-27 for
-five gaps a review found (R1-R5 below); not built.
+five gaps a review found (R1-R5 below), and for three more a review of the plan found
+(R6-R8); not built.
 
 ## Goal
 
@@ -129,9 +130,12 @@ placement" assumption is checked by the physics test below, not assumed in the r
     as today, would give 1 - (3/4)^2 = 7/16.
 - **Duplicate and QC-fail records (R3)** are removed by the same chance. A duplicate is a
   copy of one molecule, so it came from where that molecule came from.
-  - A duplicate family shares one draw, compared with each member's own total. A family is
-    the records with the same fragment ends: chromosome, and each mate's unclipped 5'
-    position and strand.
+  - A duplicate family is the records with the same fragment ends: chromosome, and each
+    mate's unclipped 5' position and strand.
+  - A family shares one phase call (R7). Phasing skips duplicates (`src/loh.rs:628`), so
+    without this a phased original at VAF 0.5 gets rate 1 and its duplicate rate 1/2.
+  - A family shares one fate (R7): one draw, against its highest member's total, so it is
+    removed or kept whole.
   - They add nothing to the new reads' depth (below), because the new reads are never
     flagged.
 - **Pool pairs** are re-emitted when kept, as today. Their chance is now `p_origin`, not 1.
@@ -149,6 +153,8 @@ placement" assumption is checked by the physics test below, not assumed in the r
   - **Origin read depth.** For each candidate read, each of its placements inside the window
     adds that placement's chance: at the spot, and at look-alikes through their `XA`.
     Duplicate and QC-fail records add nothing (R3). This is in **read** units.
+  - **Only fragments spike can remove count (R6).** A fragment kept by R4 stays in the BAM;
+    counting its depth would add new reads on top of it.
   - **Conversion to fragment units.** Multiply by `f`: the pool's summed fragment spans
     divided by its summed read lengths, over the **whole pool** (R1).
     - It depends on fragment and read lengths, not on the spot.
@@ -174,9 +180,15 @@ placement" assumption is checked by the physics test below, not assumed in the r
   Under `origin` that should be near 0, so RF8's refusal will rarely fire; that is expected.
   - `SIM_DEPTH_FOLD` under `origin` measures each bin with origin depth, the estimator the
     tiling count came from (the T3 rule). The pool's depth is 0 inside a perfect twin.
-- **Input check.** Under `origin`, if the footprint holds MAPQ 0 records and none of them
-  carries `XA`, spike stops with an error that names the problem. Otherwise every MAPQ 0 read
-  would silently get 1/6.
+- **Input check (R8).** Under `origin`, spike reads up to the first 100,000 records of the
+  BAM. If none carries `XA`, it stops with an error that names the problem, since the tag
+  was stripped. Otherwise every MAPQ 0 read would silently get 1/6.
+  - The check is on the file, not the spot. A spot whose MAPQ 0 reads carry no `XA` is
+    normal: under bwa-mem's `-h 5` rule their hits number more than 5.
+  - Measured on the 35x HG002 BAM (2026-09-27):
+    - chr20:7117236-7121236: 822 MAPQ 0 reads, 1 with `XA`;
+    - Task 9's footprint (chr20:14546421-14550735): 4 MAPQ 0 reads, none with `XA`;
+    - yet the first 100,000 records of the file hold 15,255 with `XA`, the first at record 64.
 - **Known side effect, out of scope.** `spike validate`'s coverage rows expect a normal spot,
   where a het deletion halves the depth. At a look-alike the true drop is smaller (3/4 in the
   twin case), so they may flag correct events. That is RF14's kind of problem and is handled
@@ -186,7 +198,7 @@ placement" assumption is checked by the physics test below, not assumed in the r
 
 | Assumption | How it is checked |
 | --- | --- |
-| The BAM keeps bwa-mem's `XA` tags | the input check above; counted on Monday's BAMs before any plan. The 35x HG002 BAM used so far fails it: at chr20:7118000-7121000, 0 of 1070 primary records carry `XA`, and 618 are MAPQ 0 (measured 2026-09-27) |
+| The BAM keeps bwa-mem's `XA` tags | the input check above; counted on Monday's BAMs before any plan. The 35x HG002 BAM keeps them (numbers above). An earlier revision said it had none, from one window at chr20:7118000-7121000 whose 618 MAPQ 0 reads carry no `XA`. That was wrong: under bwa-mem's `-h 5` rule, those reads have more than 5 hits. |
 | MAPQ follows bwa-mem's meaning | same aligner family; the physics test measures it |
 | The aligner places equally good hits at random | the physics test measures depth at L and P |
 | The replacement reads' aligner (`align.sh`, bwa-mem2) acts like the one that made the donor BAM (the user's: bwa-mem) | reported on Monday; the physics test uses one aligner for both |
@@ -209,6 +221,10 @@ All of it follows the judgment gate: plan commit, then code, then result commit.
      unmapped mate does not block (R4);
    - duplicate and QC-fail records add no depth, and a duplicate family gets one fate (R3);
    - two events at both copies of a twin give a removal chance of 1/2, not 7/16 (R5);
+   - a fragment spike cannot remove adds no depth (R6);
+   - a duplicate takes its family's phase call and fate, even when their chances differ (R7);
+   - the input check stops a file with no `XA` in its first 100,000 records, and not a spot
+     whose MAPQ 0 reads lack it (R8);
    - kept non-pool candidates are neither re-emitted nor listed for removal;
    - the missing-`XA` input check;
    - `clean` output is byte-identical to today's.
@@ -264,3 +280,12 @@ toy alignments before this revision.
 | R3 | duplicate and QC-fail depth became unflagged new reads | removed by origin, no depth added, one draw per duplicate family |
 | R4 | non-pool pairs sticking out of the footprint were removed, leaving a dip | the Inside rule for every candidate, through `XA` at look-alikes |
 | R5 | separate draws per event give 7/16 where the answer is 1/2 | chances add over events; one draw per pair |
+
+A second review, of the plan (`84ca4c8`), found three more design gaps. Each was checked
+against the code or the BAM first.
+
+| | Gap | Fix |
+| --- | --- | --- |
+| R6 | origin depth counted fragments R4 keeps, so new reads were added on top of reads that stay | depth over removable fragments only |
+| R7 | phasing skips duplicates, so a phased original (rate 1 at VAF 0.5) and its duplicate (1/2) could split on a shared draw | a family shares its phase call, and one fate at its highest member's total |
+| R8 | the XA check passed on any record with `XA`; and a per-spot check cannot tell a stripped tag from a spot with more than 5 hits | check the file's first 100,000 records instead |

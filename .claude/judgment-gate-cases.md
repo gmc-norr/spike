@@ -159,3 +159,23 @@ what was claimed, what the claim actually rested on, and which gate would have c
   of spike's own safety defaults, the plan says what the row must do on the events that
   default exists to stop, or judges them apart. `SIM_RESIST` is only known after spike runs,
   so it cannot be filtered at draw time without running spike.**
+
+## 2026-09-27 -- origin: "the 35x HG002 BAM has no XA tags", from one window
+
+- **What was claimed.** The 35x HG002 BAM carries no `XA` tags, so `--edit-model origin`
+  cannot run on it. It was written into the spec, the plan (`84ca4c8`), a README draft and
+  the notes to the user.
+- **What it rested on.** One 3 kb window at chr20:7118000-7121000, where 0 of 1070 primary
+  records carry `XA` and 618 are MAPQ 0. That spot is a repeat whose MAPQ 0 reads have more
+  than 5 hits, so bwa-mem leaves `XA` off by its `-h 5` rule. The file keeps the tag: its
+  first 100,000 records hold 15,255 with `XA`, and chr20:10-11 Mb holds 2,841.
+- **How it was caught.** A review of the plan found a MAPQ 40 read with `XA` in Task 9's
+  footprint. The counts above were then measured over the whole file's start and a 1 Mb
+  window.
+- **What else it hid.** The spec's per-spot input check ("MAPQ 0 reads and none with `XA`:
+  stop") would have stopped `origin` at exactly the repeats it exists for. The check is now
+  on the file.
+- **Which gate would have caught it earlier.** Gate D3 (*did I measure it, or infer it?*). A
+  count from one window was stated as a fact about the file. **Rule for this repo: a claim
+  about a whole file is measured on the whole file, or on more than one region of it, and
+  says which. An absence at one spot is a fact about that spot.**
