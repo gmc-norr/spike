@@ -16,11 +16,12 @@
 > | RF3 | Open. The shape of `summary` was not in T1's locked plan, and changing it is a default output change for existing `--json` parsers. |
 > | RF4 | Open. The `<=` comparison is what T1's plan locked, and no spike version writes a negative value. |
 > | RF5 | Open. T1's plan allowed the help text one new flag line; the footer sentences were added, extending the checks table was not ratified. README.md covers both rows. |
-> | RF6 | Open. The cause is in the aligner's representation, not in the check's arithmetic, and changing the default verdict is exactly the default change this run's standing choice forbids. |
+> | RF6 | Open, and two fixes refuted before any code (branch `rf6`, "RF6" at the end of `REVIEW.md`). The cause is measured: the supplementary piece lands on another chromosome at MAPQ 0 because the far side is repeat sequence. A junction-sequence row failed its kill tests twice: an exact probe misses reads carrying the sample's own SNP (2 of 40), and at 14 of 20 real SV sites the junction is already reference sequence. The real fix belongs to CR9. |
 > | RF7 | Open. Adding the worst bin to `truth.vcf` for every event changes what spike emits; a per-event column in the run README would be the cheap fix, and it is a design decision rather than a defect. |
 > | RF8 | **Fixed** (branch `rf8`, the user's choice: refuse by default). spike refuses an event whose `SIM_RESIST` is above 0.5 and lists every such event at once; `--allow-resistant` restores the old behaviour byte for byte. Plan, code and result are under "RF8" at the end of `REVIEW.md`. Real SV sites hit it far more often than random spots (6 of `validate_pipeline.sh`'s 20 vs 0 of 40 on chr1), so that script passes the flag and counts them. |
+> | RF12 | Open, and new (2026-09-26, found while testing RF6). See RF12 at the end of this file. |
 >
-> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26) and are written up at the end
+> RF1–RF8 are from the run after the CR4 and CR2 census (2026-09-26), RF12 from the RF6 work the same day, and all are written up at the end
 > of this file, under their own heading.
 
 # NEW-FINDINGS — found during this run, not fixed
@@ -334,3 +335,24 @@
   within 100 bp of POS — and changing a default check's verdict is the default change this run's
   standing choice forbids. One event is also not a rate: the 24-insertion C4 set, at 50 bp and above,
   had `ins_reads` pass 24 of 24.
+
+### RF12 — `validate_pipeline.sh`'s "clean" background already has low depth at many of its truth deletions
+
+- **Where:** `scripts/validate_pipeline.sh`. It spikes HG002's het chr20 deletions into a
+  1000 Genomes sample (NA18488) as a clean background, then measures an SV caller's recall on them.
+- **What:** before any spiking, NA18488's own depth inside the event over its 1 kb flanks, at any
+  MAPQ, is **0.62 or less at 10 of the 20** deletions the script's step 2 keeps today: 0.29,
+  0.62, 0.57, 0.24, 0.59, 0.24, **0.00**, 0.55, 0.35 and 0.38. At `chr20:63093345-63094243`
+  there is no read at all across 898 bp, against 32.8x flanks. That is what a deletion on both
+  copies looks like. Common SVs are shared between people, so the background likely carries
+  many of the deletions, and a caller that "finds" one may be finding NA18488's own.
+- **Also measured there:** master's `spike validate` fails 15 of the 20 once spiked (with
+  `--allow-resistant`), with `split_reads` failing on 13 and `coverage_ratio` on 9.
+- **How I know:** `samtools depth -a` on each event's `slice.bam` (the unspiked background),
+  at `-Q 0` and `-Q 20`, in the RF6 second attempt's runs (`REVIEW.md`, "RF6").
+- **Severity:** High for anyone reading the pipeline's recall as a caller's sensitivity. The
+  truth set and the background are not independent.
+- **Not fixed:** the fix is a design choice. One way is to drop truth events whose background
+  depth is already reduced; another is to pick a background without them. Either changes what
+  the pipeline measures.
+

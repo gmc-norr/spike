@@ -824,7 +824,12 @@ deletions inside the HG002 T2T-Q100 SV benchmark on chr20, each spiked into the
 contribution is **2 of 40**. Both of those two carried **7** joining reads at one
 breakpoint and **1** at the other, which the pooled row passes at `observed 8`:
 they are the one-sided evidence this row exists to name. The other four are the
-pooled row's own failures, where no `SA:Z` entry exists at either end.
+pooled row's own failures, where no `SA:Z` entry *names the partner* at either end.
+The entries exist: in those runs' `sim.bam` the junction reads are split, and 10,
+3+6, 11 and 1+7 of them carry `SA:Z` at the two ends. But 35 of those 38 entries put
+the supplementary piece on another chromosome, 32 of them at MAPQ 0. The sequence just
+past the far breakpoint is repeated elsewhere, so the aligner cannot place the short
+piece. A real deletion there would align the same way (RF6 in `REVIEW.md`).
 
 `ins_reads` establishes that at least **two** reads leave the reference within
 100 bp of POS, by an `I` operation of at least `min(SVLEN, 50)` bases or by a
