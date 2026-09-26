@@ -5268,3 +5268,71 @@ survives is measured:
 - On real SV sites, validate's DEL checks as a whole are unreliable.
 
 That is CR9's territory (the validate redesign), not a one-row patch.
+
+## RF12 -- the pipeline's background already carries many of its truth deletions (2026-09-26)
+
+**Measured before this plan** (the `CLINICAL_SV_NEW_FINDINGS.md` RF12 entry has the depth
+side). Short-read callers were run on the unspiked `NA18488.chr20.noalt.bam` and matched to
+the pipeline's 20 truth DELs (PASS, reciprocal overlap at least 0.5):
+
+| Caller | Finds | Which events |
+| --- | --- | --- |
+| Delly 1.5.0 | 7 | 1, 6, 7, 10, 15, 16, 19 |
+| CNVpytor 1.3.2, 100 bp bins | 5 | 1, 10, 15, 16, 19; 1 passing its e-value and q0 filter |
+| Manta 1.6.0 | 4 | 1, 7, 10, 16 |
+| TIDDIT 3.9.7 | 2 | 1, 16 |
+
+- **Together they find Delly's 7.**
+- **Depth finds more.** Depth at 0.62 or less adds events 13, 14, 17 and 20 (570-1527 bp, in
+  repeats), which no caller sees.
+- **HG001 confirms the depth signal is real.** NA12878's CRAM comes from the same 1000 Genomes
+  pipeline (bwa 0.7.15 against hs38DH). At all 10 sites where HG001's pbsv long-read calls
+  have a DEL, its short-read depth is 0.00-0.74. At 9 of the 10 others it is 0.90-1.16; event
+  1 reads 0.74 with no pbsv call.
+- **The background BAM crashes Manta and TIDDIT.** Its SA tags name decoy contigs the
+  re-headered BAM does not have, and 4,622 mates sit on removed contigs. A cleaned copy was
+  needed to run them. Delly and CNVpytor accept the BAM as it is.
+
+**The user's choice** (2026-09-26): option 2. Keep all the truth deletions, and score recall
+only over the ones the background's own Delly run does not recover. The pipeline already
+computes that control in step 7b. The 4 depth-only deletions stay in the denominator, on
+purpose; the README will say so.
+
+#### Plan: RF12, recall outside the background control (locked before any code)
+
+**Principle.** A recovered deletion the background already carries says nothing about the
+spike-in, so it counts in neither the numerator nor the denominator.
+
+**Change.**
+- **The helper.** `recall_outside_background <spiked truvari dir> <control truvari dir>` reads
+  the spiked run's `tp-base.vcf.gz` and `fn.vcf.gz`, which together are the base-side truth
+  events Truvari scored, and the control's `tp-base.vcf.gz`, keyed on CHROM, POS and ID. It
+  prints `<n_outside> <tp_outside> <recall_outside>`:
+  - the events and TPs not in the control's TP set;
+  - recall to 4 decimals, or `N/A` when `n_outside` is 0.
+- **When the control is missing.** If the control's `tp-base.vcf.gz` is missing or
+  unreadable, the helper prints nothing and returns non-zero. A missing control must never
+  read as an empty exclusion set.
+- **Step 8** adds three columns at the end of `validation_summary.tsv`: `N_outside_bg`,
+  `TP_outside_bg` and `Recall_outside_bg`. The background row shows `n/a`. The existing
+  columns are computed as before.
+- **`--min-recall`** now applies to `Recall_outside_bg`. It is off by default.
+
+**Criteria.**
+- **C1, tests first** (Rust tests that source the script, as the existing ones do). The
+  fixture has spiked TP {a,b,c}, spiked FN {d,e} and control TP {a,d}, and must give
+  `3 2 0.6667`. Each of these mutations must redden a test:
+  - excluding control events from the numerator only;
+  - not excluding a control event that is FN in the spiked run;
+  - a missing control file giving numbers instead of nothing.
+
+  The full suite passes, and there is no new clippy warning.
+- **C2, the real pipeline end to end** (`scripts/validate_pipeline.sh --background-bam
+  data/validation/background/NA18488.chr20.noalt.bam` with a scratch `--outdir` and the
+  current spike). At every VAF, the new columns must satisfy:
+  - `N_outside_bg = TP + FN - |control TP within the scored base set|`;
+  - `TP_outside_bg <= TP`;
+  - `Recall_outside_bg = TP_outside_bg / N_outside_bg`.
+
+  The verdict gates other than `--min-recall` are unchanged by construction (they use the old
+  columns); the run's verdict and its failure list are reported as they come.
