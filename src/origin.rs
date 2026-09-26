@@ -11,6 +11,8 @@
 //! `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`; comments
 //! name its fixes R1-R5.
 
+use std::collections::BTreeSet;
+
 use noodles::sam::alignment::record::cigar::Op;
 
 /// A reference interval, 0-based half-open.
@@ -265,6 +267,52 @@ impl Fragment<'_> {
     }
 }
 
+/// `XA` hits within this many bases of each other form one look-alike region.
+const LOOKALIKE_GAP: u64 = 1000;
+/// A region is a look-alike only when this many reads point into it.
+const LOOKALIKE_MIN_READS: usize = 2;
+
+/// The look-alike regions of `footprint`: the `XA` hits of the reads placed
+/// over it that lie outside it, grouped when within [`LOOKALIKE_GAP`] of each
+/// other and grown by `read_length` on each side. A region counts only when
+/// at least [`LOOKALIKE_MIN_READS`] reads point into it.
+pub fn lookalike_regions(spot: &[OriginRecord], footprint: &Span, read_length: u64) -> Vec<Span> {
+    let mut hits: Vec<(&Span, (&str, bool))> = spot
+        .iter()
+        .flat_map(|r| {
+            r.placements[1..]
+                .iter()
+                .map(move |p| (&p.span, (r.name.as_str(), r.first)))
+        })
+        .filter(|(span, _)| !footprint.overlaps(span))
+        .collect();
+    hits.sort();
+
+    let mut regions = Vec::new();
+    let mut i = 0;
+    while i < hits.len() {
+        let (first, _) = hits[i];
+        let mut end = first.end;
+        let mut reads: BTreeSet<(&str, bool)> = BTreeSet::new();
+        while i < hits.len()
+            && hits[i].0.chrom == first.chrom
+            && hits[i].0.start <= end + LOOKALIKE_GAP
+        {
+            end = end.max(hits[i].0.end);
+            reads.insert(hits[i].1);
+            i += 1;
+        }
+        if reads.len() >= LOOKALIKE_MIN_READS {
+            regions.push(Span::new(
+                &first.chrom,
+                first.start.saturating_sub(read_length),
+                end + read_length,
+            ));
+        }
+    }
+    regions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +445,47 @@ mod tests {
     fn test_a_placement_sticking_out_of_the_footprint_does_not_count() {
         let placed = placements(Span::new("chr1", 950, 1100), 60, &[]);
         assert!(close(chance_within(&placed, &Span::new("chr1", 0, 1000)), 0.0));
+    }
+
+    #[test]
+    fn test_hits_within_a_kilobase_form_one_region_grown_by_the_read_length() {
+        let spot = [
+            record("b", true, 200, 0, &[Span::new("chr1", 40_000, 40_100)]),
+            record("b", false, 400, 0, &[Span::new("chr1", 40_900, 41_000)]),
+        ];
+        assert_eq!(
+            lookalike_regions(&spot, &fp(), 150),
+            vec![Span::new("chr1", 39_850, 41_150)]
+        );
+    }
+
+    #[test]
+    fn test_a_region_one_read_points_into_is_not_a_lookalike() {
+        let spot = [
+            record("b", true, 200, 0, &[Span::new("chr1", 40_000, 40_100)]),
+            record("c", true, 300, 0, &[Span::new("chr1", 50_000, 50_100)]),
+        ];
+        assert!(lookalike_regions(&spot, &fp(), 150).is_empty());
+    }
+
+    #[test]
+    fn test_hits_inside_the_footprint_are_not_lookalikes() {
+        let spot = [
+            record("b", true, 200, 0, &[Span::new("chr1", 600, 700)]),
+            record("b", false, 400, 0, &[Span::new("chr1", 650, 750)]),
+        ];
+        assert!(lookalike_regions(&spot, &fp(), 150).is_empty());
+    }
+
+    #[test]
+    fn test_hits_more_than_a_kilobase_apart_are_two_regions() {
+        let spot = [
+            record("b", true, 200, 0, &[Span::new("chr1", 40_000, 40_100), Span::new("chr1", 60_000, 60_100)]),
+            record("c", true, 300, 0, &[Span::new("chr1", 40_050, 40_150), Span::new("chr1", 60_050, 60_150)]),
+        ];
+        assert_eq!(
+            lookalike_regions(&spot, &fp(), 100),
+            vec![Span::new("chr1", 39_900, 40_250), Span::new("chr1", 59_900, 60_250)]
+        );
     }
 }
