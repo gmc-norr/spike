@@ -334,15 +334,23 @@ pub struct OriginSite {
 }
 
 impl OriginSite {
-    /// The fragments with a placement inside the footprint, in name order.
+    /// The fragments with a placement inside the footprint, in name order,
+    /// each one's records in the order the site holds them.
+    ///
+    /// The records are grouped by a stable sort of their indices on the
+    /// thread pool: over a 3 Mb event's 1.29 million records a `BTreeMap`
+    /// took about a second, and a site asks for its fragments six times.
     pub fn fragments(&self) -> Vec<Fragment<'_>> {
-        let mut by_name: BTreeMap<&str, Vec<&OriginRecord>> = BTreeMap::new();
-        for r in &self.records {
-            by_name.entry(r.name.as_str()).or_default().push(r);
-        }
-        by_name
-            .into_iter()
-            .map(|(name, mates)| Fragment { name, mates })
+        let records = &self.records;
+        let mut order: Vec<usize> = (0..records.len()).collect();
+        order.par_sort_by(|&a, &b| records[a].name.cmp(&records[b].name));
+        let groups: Vec<&[usize]> = order.chunk_by(|&a, &b| records[a].name == records[b].name).collect();
+        groups
+            .into_par_iter()
+            .map(|group| Fragment {
+                name: records[group[0]].name.as_str(),
+                mates: group.iter().map(|&i| &records[i]).collect(),
+            })
             .filter(|f| {
                 f.mates
                     .iter()
@@ -1498,6 +1506,36 @@ mod tests {
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_fragments_are_what_one_map_over_the_records_gives() {
+        // fragments() may group on the thread pool; it must give what one
+        // BTreeMap over the records in order gives: names sorted, each name's
+        // records in the order the site holds them, and only fragments with
+        // a placement inside the footprint.
+        let records: Vec<OriginRecord> = (0..20_000u64)
+            .map(|i| record(&format!("q{}", (i * 7919) % 6007), i % 2 == 0, (i * 37) % 1900, (i % 61) as u8, &[]))
+            .collect();
+        let site = OriginSite { footprint: fp(), lookalikes: vec![], records, f: 1.0 };
+        let mut by_name: BTreeMap<&str, Vec<&OriginRecord>> = BTreeMap::new();
+        for r in &site.records {
+            by_name.entry(r.name.as_str()).or_default().push(r);
+        }
+        type Grouped<'a> = Vec<(&'a str, Vec<*const OriginRecord>)>;
+        let expected: Grouped = by_name
+            .into_iter()
+            .filter(|(_, mates)| mates.iter().any(|m| m.placements.iter().any(|p| site.footprint.holds(&p.span))))
+            .map(|(name, mates)| (name, mates.into_iter().map(|m| m as *const _).collect()))
+            .collect();
+        assert!(expected.iter().any(|(_, mates)| mates.len() > 2), "no name repeats");
+        assert!(expected.len() < 6007, "the footprint filter drops nothing");
+        let fragments = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| site.fragments());
+        let got: Grouped = fragments
+            .iter()
+            .map(|f| (f.name, f.mates.iter().map(|&m| m as *const _).collect()))
+            .collect();
+        assert!(got == expected, "fragments() differs from one map over the records");
     }
 
     #[test]
