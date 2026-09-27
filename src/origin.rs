@@ -359,38 +359,35 @@ impl OriginSite {
             .collect()
     }
 
-    /// Read depth that came from around `pos` on `chrom`. At up to 50 points
-    /// over `window` (the points `simulate::estimate_coverage_at` samples),
-    /// sum the chances of every placement covering the point, then average.
+    /// Read depth that came from around `pos` on `chrom`. At the points
+    /// [`crate::simulate::coverage_sample_points`] gives -- the ones the pool's
+    /// depth is sampled at -- sum the chances of every placement covering the
+    /// point, then average.
     /// Only fragments spike can remove count (R6): one kept by R4 stays in
     /// the BAM, so counting it would add new reads on top of it. Duplicate
     /// and QC-fail reads add nothing either, since spike's new reads are
     /// never flagged (R3).
     pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
-        let start = pos.saturating_sub(window / 2);
-        let end = pos.saturating_add(window / 2);
-        let range = end - start;
-        let n = range.clamp(1, 50);
-        let step = if n > 1 { range / n } else { 1 };
+        let points = crate::simulate::coverage_sample_points(pos, window);
+        let (first, last) = (points[0], points[points.len() - 1]);
         let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
         let placed: Vec<&Placement> = self
             .records
             .iter()
             .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
             .flat_map(|r| r.placements.iter())
-            .filter(|p| p.span.chrom == chrom && p.span.start <= start + (n - 1) * step && start < p.span.end)
+            .filter(|p| p.span.chrom == chrom && p.span.start <= last && first < p.span.end)
             .collect();
-        let total: f64 = (0..n)
-            .map(|i| {
-                let at = start + i * step;
-                placed
+        // Folded from +0.0: an empty f64 sum is -0.0 (PD-32).
+        let total = points.iter().fold(0.0, |total, &at| {
+            total
+                + placed
                     .iter()
                     .filter(|p| p.span.start <= at && at < p.span.end)
                     .map(|p| p.chance)
                     .sum::<f64>()
-            })
-            .sum();
-        total / n as f64
+        });
+        total / points.len() as f64
     }
 
     /// [`read_coverage_at`](Self::read_coverage_at) in the fragment units the
@@ -952,6 +949,16 @@ mod tests {
         site.records.push(OriginRecord { name: "stray".into(), mate_unmapped: false, ..copy });
         assert!(!site.removable_names().contains(&"stray".to_string()));
         assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+    }
+
+    #[test]
+    fn test_origin_depth_where_no_read_lies_is_positive_zero() {
+        // An empty f64 sum is -0.0, which a warning printed as "-0.0x"
+        // (PD-32). The pool estimator gives +0.0 there.
+        let site = twin_site();
+        let depth = site.read_coverage_at("chr1", 40_000, 2000);
+        assert_eq!(depth, 0.0);
+        assert!(depth.is_sign_positive(), "{:?}", depth);
     }
 
     #[test]

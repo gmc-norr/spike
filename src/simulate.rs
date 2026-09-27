@@ -1136,23 +1136,10 @@ fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthF
 /// Only pairs on `chrom` count: a fusion pool holds both partners, and the
 /// other partner's reads can sit at the same coordinates (M9).
 fn estimate_coverage_at(pool: &ReadPool, chrom: &str, pos: u64, window: u64) -> f64 {
-    let start = pos.saturating_sub(window / 2);
-    let end = pos.saturating_add(window / 2);
-
-    let n_samples: u64 = 50;
-    let range = end - start;
-    // For very small windows, use fewer sample points (at least 1).
-    let actual_samples = range.min(n_samples).max(1);
-    let step = if actual_samples > 1 {
-        range / actual_samples
-    } else {
-        1
-    };
-
+    let points = coverage_sample_points(pos, window);
     let mut total = 0usize;
 
-    for i in 0..actual_samples {
-        let sample_pos = start + i * step;
+    for &sample_pos in &points {
         // Binary search: skip pairs that start after sample_pos (they can't
         // overlap it). The pool is sorted by ref_start, so partition_point
         // gives us the exact cutoff.
@@ -1166,7 +1153,20 @@ fn estimate_coverage_at(pool: &ReadPool, chrom: &str, pos: u64, window: u64) -> 
         total += count;
     }
 
-    total as f64 / actual_samples as f64
+    total as f64 / points.len() as f64
+}
+
+/// The points [`estimate_coverage_at`] and `origin`'s read depth sample:
+/// up to 50, evenly spaced from `pos - window / 2`. One grid for both, so the
+/// two depths R1 compares count at the same points (PD-5).
+pub(crate) fn coverage_sample_points(pos: u64, window: u64) -> Vec<u64> {
+    let start = pos.saturating_sub(window / 2);
+    let end = pos.saturating_add(window / 2);
+    let range = end - start;
+    // For very small windows, use fewer sample points (at least 1).
+    let n = range.clamp(1, 50);
+    let step = if n > 1 { range / n } else { 1 };
+    (0..n).map(|i| start + i * step).collect()
 }
 
 #[cfg(test)]
@@ -3557,6 +3557,34 @@ mod tests {
         let by_origin = depth_fold_by(&hap, cov, &|c, p, w| site.fragment_coverage_at(c, p, w));
         assert_eq!(out.depth_fold, by_origin);
         assert_ne!(out.depth_fold, depth_fold(&hap, &pool, cov));
+    }
+
+    #[test]
+    fn test_origin_and_pool_depth_sample_the_same_points() {
+        // R1 compares the two estimators, so they must sample one grid (PD-5).
+        // A 1-base read at x counts at a sampled point only when that point
+        // is x: for every x around each window, pool and origin depth agree.
+        let mut pool = make_pool(vec![make_pair("r", 0, 1)]);
+        let mut site = OriginSite { footprint: Span::new("chr1", 0, 10_000), lookalikes: vec![], records: vec![], f: 1.0 };
+        for (pos, window) in [(1000, 0), (1000, 1), (1003, 2), (1000, 7), (1000, 49), (1001, 50), (1000, 51), (1000, 100), (1200, 2000), (1500, 2001)] {
+            let (lo, hi) = (pos - window / 2 - 2, pos + window / 2 + 2);
+            for x in lo..=hi {
+                pool.pairs = vec![make_pair("r", x, x + 1)];
+                site.records = vec![OriginRecord {
+                    placements: vec![origin::Placement { span: Span::new("chr1", x, x + 1), chance: 1.0 }],
+                    mate_unmapped: true,
+                    ..origin_read("r", true, x)
+                }];
+                assert_eq!(
+                    estimate_coverage_at(&pool, "chr1", pos, window),
+                    site.read_coverage_at("chr1", pos, window),
+                    "pos {} window {} read at {}",
+                    pos,
+                    window,
+                    x
+                );
+            }
+        }
     }
 
     #[test]
