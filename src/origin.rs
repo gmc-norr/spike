@@ -12,10 +12,14 @@
 //! name its fixes R1-R8.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use noodles::sam::alignment::record::cigar::Op;
+use rand::rngs::StdRng;
+use rand::Rng;
 
+use crate::synth::copy_rate;
 use crate::types::ReadPool;
 
 /// A reference interval, 0-based half-open.
@@ -416,6 +420,92 @@ pub fn fragment_to_read_ratio(pool: &ReadPool) -> Result<f64> {
     Ok(spans as f64 / bases as f64)
 }
 
+/// One event's chance of removing one fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chance {
+    pub name: String,
+    pub family: Vec<FivePrime>,
+    pub chance: f64,
+}
+
+impl OriginSite {
+    /// This event's chance of removing each fragment it can remove:
+    /// `p_origin x copy_rate(copy, vaf)`. At the spot `copy` is the sample's
+    /// phase call for the fragment's duplicate family (R7): phasing skips
+    /// duplicates (`src/loh.rs:628`), so a family takes the call of whichever
+    /// member has one, and members that disagree get none. A fragment the
+    /// aligner put only at a look-alike has no call, so its rate is `vaf`.
+    pub fn removal_chances(&self, read_copy: &HashMap<String, bool>, vaf: f64) -> Vec<Chance> {
+        let fragments: Vec<Fragment<'_>> = self
+            .fragments()
+            .into_iter()
+            .filter(|f| f.removable(&self.footprint))
+            .collect();
+        let mut family_copy: BTreeMap<Vec<FivePrime>, Option<bool>> = BTreeMap::new();
+        for f in &fragments {
+            if let Some(&copy) = read_copy.get(f.name) {
+                family_copy
+                    .entry(f.family())
+                    .and_modify(|call| {
+                        if *call != Some(copy) {
+                            *call = None;
+                        }
+                    })
+                    .or_insert(Some(copy));
+            }
+        }
+        fragments
+            .into_iter()
+            .filter_map(|f| {
+                let family = f.family();
+                let copy = if f.at_spot(&self.footprint) {
+                    family_copy.get(&family).copied().flatten()
+                } else {
+                    None
+                };
+                let chance = f.chance(&self.footprint) * copy_rate(copy, vaf);
+                (chance > 0.0).then(|| Chance {
+                    name: f.name.to_string(),
+                    family,
+                    chance,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Which fragments to remove, over every event's chances at once (R5).
+///
+/// A fragment came from one copy, so "it came from event 1's edited copy"
+/// and "it came from event 2's" cannot both be true: its chances add,
+/// capped at 1. One molecule has one origin, so a duplicate family is
+/// removed or kept whole (R3, R7). There is one draw per family, in family
+/// order, against its highest member's total.
+pub fn decide(chances: &[Chance], rng: &mut StdRng) -> BTreeSet<String> {
+    let mut totals: BTreeMap<&str, (&[FivePrime], f64)> = BTreeMap::new();
+    for c in chances {
+        totals
+            .entry(c.name.as_str())
+            .or_insert((c.family.as_slice(), 0.0))
+            .1 += c.chance;
+    }
+    let mut families: BTreeMap<&[FivePrime], f64> = BTreeMap::new();
+    for (family, total) in totals.values() {
+        let highest = families.entry(*family).or_insert(0.0);
+        *highest = highest.max(total.min(1.0));
+    }
+    let removed_families: BTreeSet<&[FivePrime]> = families
+        .into_iter()
+        .filter(|(_, highest)| rng.gen::<f64>() < *highest)
+        .map(|(family, _)| family)
+        .collect();
+    totals
+        .into_iter()
+        .filter(|(_, (family, _))| removed_families.contains(family))
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +768,84 @@ mod tests {
     fn test_f_refuses_a_pool_without_bases() {
         let p = pool(vec![pair("r", 0, 400, 0)]);
         assert!(fragment_to_read_ratio(&p).is_err());
+    }
+
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use std::collections::HashMap;
+
+    fn chance(name: &str, family: u64, p: f64) -> Chance {
+        Chance { name: name.to_string(), family: vec![FivePrime { chrom: "chr1".into(), pos: family, reverse: false }], chance: p }
+    }
+
+    #[test]
+    fn test_removal_chance_is_p_origin_times_the_copy_rate() {
+        // At the spot the phase call applies; at a look-alike the rate is vaf.
+        let site = twin_site();
+        let read_copy: HashMap<String, bool> = [("l0".to_string(), true)].into();
+        let chances = site.removal_chances(&read_copy, 0.5);
+        let of = |n: &str| chances.iter().find(|c| c.name == n).unwrap().chance;
+        assert!(close(of("l0"), 0.5 * 1.0));
+        assert!(close(of("l1"), 0.5 * 0.5));
+        assert!(close(of("p0"), 0.5 * 0.5));
+    }
+
+    #[test]
+    fn test_two_events_at_both_twins_remove_half_not_seven_sixteenths() {
+        // R5: each event gives 1/2 x 1/2 = 1/4; together 1/2. Separate draws
+        // would give 1 - (3/4)^2 = 7/16.
+        let chances: Vec<Chance> = (0..20_000u64)
+            .flat_map(|i| [chance(&format!("f{}", i), i, 0.25), chance(&format!("f{}", i), i, 0.25)])
+            .collect();
+        let removed = decide(&chances, &mut StdRng::seed_from_u64(1));
+        let share = removed.len() as f64 / 20_000.0;
+        assert!((0.48..0.52).contains(&share), "removed share {}", share);
+    }
+
+    #[test]
+    fn test_a_total_above_one_always_removes() {
+        let chances = [chance("a", 1, 0.7), chance("a", 1, 0.7)];
+        for seed in 0..20 {
+            assert!(decide(&chances, &mut StdRng::seed_from_u64(seed)).contains("a"));
+        }
+    }
+
+    #[test]
+    fn test_a_duplicate_shares_its_originals_fate() {
+        // R3: 1000 families of two, each at 1/2.
+        let chances: Vec<Chance> = (0..1000u64)
+            .flat_map(|i| [chance(&format!("o{}", i), i, 0.5), chance(&format!("d{}", i), i, 0.5)])
+            .collect();
+        let removed = decide(&chances, &mut StdRng::seed_from_u64(2));
+        let split = (0..1000).filter(|i| removed.contains(&format!("o{}", i)) != removed.contains(&format!("d{}", i))).count();
+        assert_eq!(split, 0);
+        assert!((400..600).contains(&(removed.len() / 2)), "{} removed", removed.len());
+    }
+
+    #[test]
+    fn test_a_duplicate_takes_its_familys_phase_call() {
+        // R7: phasing skips duplicates (src/loh.rs:628), so only the original
+        // is in read_copy. At VAF 0.5 it gets rate 1, and so must its duplicate.
+        let orig = OriginRecord { mate_unmapped: true, ..record("orig", true, 100, 60, &[]) };
+        let dup = OriginRecord { name: "dup".into(), duplicate: true, ..orig.clone() };
+        let site = OriginSite { footprint: fp(), lookalikes: vec![], records: vec![orig, dup], f: 1.0 };
+        let on_event: HashMap<String, bool> = [("orig".to_string(), true)].into();
+        let chances = site.removal_chances(&on_event, 0.5);
+        assert_eq!(chances.len(), 2);
+        assert!(close(chances[0].chance, chances[1].chance), "{:?}", chances);
+        // On the other copy the original's rate is 0, and so is its duplicate's.
+        let on_other: HashMap<String, bool> = [("orig".to_string(), false)].into();
+        assert!(site.removal_chances(&on_other, 0.5).is_empty());
+    }
+
+    #[test]
+    fn test_a_family_shares_one_fate_even_when_its_chances_differ() {
+        // R7: one draw per family, against its highest member's total. Member
+        // by member, a draw between 0.5 and 0.99 would remove only "orig".
+        let chances = [chance("orig", 7, 0.99), chance("dup", 7, 0.5)];
+        for seed in 0..200 {
+            let removed = decide(&chances, &mut StdRng::seed_from_u64(seed));
+            assert_eq!(removed.contains("orig"), removed.contains("dup"), "seed {}", seed);
+        }
     }
 }
