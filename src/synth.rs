@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use rand::rngs::StdRng;
 use rand::Rng;
+use rayon::prelude::*;
 
 use crate::extract::reverse_complement;
 use crate::haplotype::VariantHaplotype;
@@ -73,6 +74,7 @@ const N_QUAL: u8 = b'!' + 2; // Q2
 ///    Used when a base-conditioned bin has too few observations.
 ///
 /// Both levels store sorted Vec<u8> for O(1) CDF sampling.
+#[cfg_attr(test, derive(PartialEq))]
 pub struct QualityProfile {
     /// Base-conditioned quality for read1.
     /// `r1_base_quals[cycle][base_idx]` = sorted Vec<u8> of Phred+33 values.
@@ -104,6 +106,102 @@ pub struct QualityProfile {
     r2_markov_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
 }
 
+/// Pairs per chunk when a [`QualityProfile`] is learned on the thread pool.
+const PROFILE_CHUNK: usize = 8192;
+
+/// The unsorted bins a [`QualityProfile`] is learned into.
+struct ProfileBins {
+    r1_base: Vec<[Vec<u8>; 4]>,
+    r2_base: Vec<[Vec<u8>; 4]>,
+    r1_cycle: Vec<Vec<u8>>,
+    r2_cycle: Vec<Vec<u8>>,
+    r1_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
+    r2_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
+    r1_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
+    r2_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
+}
+
+impl ProfileBins {
+    fn new(read_length: usize) -> Self {
+        Self {
+            r1_base: (0..read_length).map(|_| Default::default()).collect(),
+            r2_base: (0..read_length).map(|_| Default::default()).collect(),
+            r1_cycle: (0..read_length).map(|_| Vec::new()).collect(),
+            r2_cycle: (0..read_length).map(|_| Vec::new()).collect(),
+            r1_mkv_base: (0..read_length).map(|_| Default::default()).collect(),
+            r2_mkv_base: (0..read_length).map(|_| Default::default()).collect(),
+            r1_mkv_cycle: (0..read_length).map(|_| Default::default()).collect(),
+            r2_mkv_cycle: (0..read_length).map(|_| Default::default()).collect(),
+        }
+    }
+
+    /// Put one pair's qualities in their bins. Uses the read's own sequence
+    /// bases (seq1/seq2) as the conditioning context.
+    fn add(&mut self, pair: &ReadPair, read_length: usize) {
+        let r1_len = read_length.min(pair.qual1.len()).min(pair.seq1.len());
+        for c in 0..r1_len {
+            let q = pair.qual1[c];
+            self.r1_cycle[c].push(q);
+            if let Some(bi) = base_index(pair.seq1[c]) {
+                self.r1_base[c][bi].push(q);
+            }
+            // Markov: record transition from previous quality (cycle > 0).
+            if c > 0 {
+                let pbin = prev_q_bin(pair.qual1[c - 1]);
+                self.r1_mkv_cycle[c][pbin].push(q);
+                if let Some(bi) = base_index(pair.seq1[c]) {
+                    self.r1_mkv_base[c][bi][pbin].push(q);
+                }
+            }
+        }
+
+        let r2_len = read_length.min(pair.qual2.len()).min(pair.seq2.len());
+        for c in 0..r2_len {
+            let q = pair.qual2[c];
+            self.r2_cycle[c].push(q);
+            if let Some(bi) = base_index(pair.seq2[c]) {
+                self.r2_base[c][bi].push(q);
+            }
+            if c > 0 {
+                let pbin = prev_q_bin(pair.qual2[c - 1]);
+                self.r2_mkv_cycle[c][pbin].push(q);
+                if let Some(bi) = base_index(pair.seq2[c]) {
+                    self.r2_mkv_base[c][bi][pbin].push(q);
+                }
+            }
+        }
+    }
+
+    /// Every bin, in one fixed order.
+    fn each_bin(&mut self) -> Vec<&mut Vec<u8>> {
+        let mut all: Vec<&mut Vec<u8>> = Vec::new();
+        for cycle in self.r1_base.iter_mut().chain(self.r2_base.iter_mut()) {
+            all.extend(cycle.iter_mut());
+        }
+        all.extend(self.r1_cycle.iter_mut().chain(self.r2_cycle.iter_mut()));
+        for cycle in self.r1_mkv_base.iter_mut().chain(self.r2_mkv_base.iter_mut()) {
+            all.extend(cycle.iter_mut().flat_map(|base| base.iter_mut()));
+        }
+        for cycle in self.r1_mkv_cycle.iter_mut().chain(self.r2_mkv_cycle.iter_mut()) {
+            all.extend(cycle.iter_mut());
+        }
+        all
+    }
+
+    /// `self`'s values, then `other`'s, bin by bin.
+    fn joined(mut self, mut other: Self) -> Self {
+        for (mine, theirs) in self.each_bin().into_iter().zip(other.each_bin()) {
+            mine.append(theirs);
+        }
+        self
+    }
+
+    /// Sort every bin, on the thread pool.
+    fn sort(&mut self) {
+        self.each_bin().into_par_iter().for_each(|bin| bin.sort_unstable());
+    }
+}
+
 impl QualityProfile {
     /// Learn quality profile from extracted read pairs.
     ///
@@ -111,98 +209,40 @@ impl QualityProfile {
     /// These are in FASTQ orientation (matching the quality scores) and are ~99%
     /// correct, so they faithfully represent the base the sequencer was reading.
     pub fn from_read_pairs(pairs: &[ReadPair], read_length: usize) -> Self {
-        // Marginal accumulators (existing).
-        let mut r1_base: Vec<[Vec<u8>; 4]> = (0..read_length).map(|_| Default::default()).collect();
-        let mut r2_base: Vec<[Vec<u8>; 4]> = (0..read_length).map(|_| Default::default()).collect();
-        let mut r1_cycle: Vec<Vec<u8>> = (0..read_length).map(|_| Vec::new()).collect();
-        let mut r2_cycle: Vec<Vec<u8>> = (0..read_length).map(|_| Vec::new()).collect();
+        Self::from_read_pairs_in_chunks(pairs, read_length, PROFILE_CHUNK)
+    }
 
-        // Markov transition accumulators.
-        let mut r1_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]> =
-            (0..read_length).map(|_| Default::default()).collect();
-        let mut r2_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]> =
-            (0..read_length).map(|_| Default::default()).collect();
-        let mut r1_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]> =
-            (0..read_length).map(|_| Default::default()).collect();
-        let mut r2_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]> =
-            (0..read_length).map(|_| Default::default()).collect();
+    /// [`from_read_pairs`](Self::from_read_pairs), `chunk` pairs at a time on
+    /// the thread pool. Every bin is sorted after the chunks are joined, so the
+    /// chunking cannot change what it holds.
+    fn from_read_pairs_in_chunks(pairs: &[ReadPair], read_length: usize, chunk: usize) -> Self {
+        let bins = pairs
+            .par_chunks(chunk.max(1))
+            .map(|part| {
+                let mut bins = ProfileBins::new(read_length);
+                for pair in part {
+                    bins.add(pair, read_length);
+                }
+                bins
+            })
+            .reduce(|| ProfileBins::new(read_length), ProfileBins::joined);
+        Self::from_bins(bins, pairs.len(), read_length)
+    }
 
-        for pair in pairs {
-            let r1_len = read_length.min(pair.qual1.len()).min(pair.seq1.len());
-            for c in 0..r1_len {
-                let q = pair.qual1[c];
-                r1_cycle[c].push(q);
-                if let Some(bi) = base_index(pair.seq1[c]) {
-                    r1_base[c][bi].push(q);
-                }
-                // Markov: record transition from previous quality (cycle > 0).
-                if c > 0 {
-                    let pbin = prev_q_bin(pair.qual1[c - 1]);
-                    r1_mkv_cycle[c][pbin].push(q);
-                    if let Some(bi) = base_index(pair.seq1[c]) {
-                        r1_mkv_base[c][bi][pbin].push(q);
-                    }
-                }
-            }
-
-            let r2_len = read_length.min(pair.qual2.len()).min(pair.seq2.len());
-            for c in 0..r2_len {
-                let q = pair.qual2[c];
-                r2_cycle[c].push(q);
-                if let Some(bi) = base_index(pair.seq2[c]) {
-                    r2_base[c][bi].push(q);
-                }
-                if c > 0 {
-                    let pbin = prev_q_bin(pair.qual2[c - 1]);
-                    r2_mkv_cycle[c][pbin].push(q);
-                    if let Some(bi) = base_index(pair.seq2[c]) {
-                        r2_mkv_base[c][bi][pbin].push(q);
-                    }
-                }
-            }
-        }
-
+    /// The profile `bins` hold, learned from `n_pairs` pairs.
+    fn from_bins(mut bins: ProfileBins, n_pairs: usize, read_length: usize) -> Self {
         // Sort all distributions for CDF sampling.
-        for cycle in r1_base.iter_mut() {
-            for bin in cycle.iter_mut() {
-                bin.sort_unstable();
-            }
-        }
-        for cycle in r2_base.iter_mut() {
-            for bin in cycle.iter_mut() {
-                bin.sort_unstable();
-            }
-        }
-        for v in r1_cycle.iter_mut() {
-            v.sort_unstable();
-        }
-        for v in r2_cycle.iter_mut() {
-            v.sort_unstable();
-        }
-        for cycle in r1_mkv_base.iter_mut() {
-            for base_bins in cycle.iter_mut() {
-                for bin in base_bins.iter_mut() {
-                    bin.sort_unstable();
-                }
-            }
-        }
-        for cycle in r2_mkv_base.iter_mut() {
-            for base_bins in cycle.iter_mut() {
-                for bin in base_bins.iter_mut() {
-                    bin.sort_unstable();
-                }
-            }
-        }
-        for cycle in r1_mkv_cycle.iter_mut() {
-            for bin in cycle.iter_mut() {
-                bin.sort_unstable();
-            }
-        }
-        for cycle in r2_mkv_cycle.iter_mut() {
-            for bin in cycle.iter_mut() {
-                bin.sort_unstable();
-            }
-        }
+        bins.sort();
+        let ProfileBins {
+            r1_base,
+            r2_base,
+            r1_cycle,
+            r2_cycle,
+            r1_mkv_base,
+            r2_mkv_base,
+            r1_mkv_cycle,
+            r2_mkv_cycle,
+        } = bins;
 
         // Log summary.
         let r1_mean_start = mean_qual(&r1_cycle[0]);
@@ -244,13 +284,13 @@ impl QualityProfile {
         );
         log::info!(
             "Quality profile: {} pairs, {} cycles. R1 mean Q: start={:.1} mid={:.1} end={:.1}, R2: start={:.1} end={:.1}. {}",
-            pairs.len(),
+            n_pairs,
             read_length,
             r1_mean_start, r1_mean_mid, r1_mean_end,
             r2_mean_start, r2_mean_end,
             census,
         );
-        if let Some(warning) = thin_profile_warning(pairs.len(), &census) {
+        if let Some(warning) = thin_profile_warning(n_pairs, &census) {
             log::warn!("{}", warning);
         }
 
@@ -926,6 +966,52 @@ mod tests {
             insert_size: (rl * 2) as i64,
             chrom: "chr1".to_string(),
         }
+    }
+
+    #[test]
+    fn test_quality_profile_is_the_same_learned_in_chunks_on_many_threads() {
+        // The profile may be learned chunk by chunk on several threads; its
+        // bins must be exactly the ones a single pass over every pair fills.
+        let rl = 12;
+        let pairs: Vec<ReadPair> = (0..500u64)
+            .map(|i| {
+                let q1: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 7 + c * 13) % 41) as u8).collect();
+                let q2: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 11 + c * 5) % 41) as u8).collect();
+                let mut p = mock_read_pair(&format!("r{}", i), q1, q2, i);
+                p.seq1 = (0..rl).map(|c| b"ACGTN"[(i as usize + c) % 5]).collect();
+                p.seq2 = (0..rl).map(|c| b"TGCA"[(i as usize * 3 + c) % 4]).collect();
+                p
+            })
+            .collect();
+        // The reference: every pair into one set of bins, in order, with no
+        // chunk or join in the way.
+        let mut one_pass = ProfileBins::new(rl);
+        for pair in &pairs {
+            one_pass.add(pair, rl);
+        }
+        let whole = QualityProfile::from_bins(one_pass, pairs.len(), rl);
+        let split = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
+        assert!(whole == split, "a profile learned in chunks of 7 differs from one learned in one pass");
+        // Sampling takes a position in a bin, so the exact reads depend on
+        // every bin being sorted, not just on what it holds.
+        let bins = ProfileBins {
+            r1_base: split.r1_base_quals,
+            r2_base: split.r2_base_quals,
+            r1_cycle: split.r1_cycle_quals,
+            r2_cycle: split.r2_cycle_quals,
+            r1_mkv_base: split.r1_markov_base,
+            r2_mkv_base: split.r2_markov_base,
+            r1_mkv_cycle: split.r1_markov_cycle,
+            r2_mkv_cycle: split.r2_markov_cycle,
+        };
+        let mut bins = bins;
+        let all = bins.each_bin();
+        assert!(all.iter().any(|bin| bin.len() > 1), "the fixture fills no bin");
+        assert!(all.iter().all(|bin| bin.windows(2).all(|w| w[0] <= w[1])), "a bin is not sorted");
     }
 
     #[test]
