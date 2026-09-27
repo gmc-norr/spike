@@ -553,6 +553,22 @@ fn main() -> Result<()> {
     // RF8: one line per event whose reads cannot back its truth record.
     let mut refusals: Vec<String> = Vec::new();
 
+    let edit_origin = args.edit_model == "origin";
+    if edit_origin {
+        // R8: once per run, on the file. A spot whose MAPQ 0 reads lack XA is
+        // normal (more than 5 hits); a file with no XA at all was stripped.
+        let first = origin::require_xa(&args.bam, &args.reference)?;
+        log::info!(
+            "--edit-model origin (experimental): reads are removed by their chance of having \
+             come from each event's edited copy, at the event and at its look-alikes. The BAM \
+             keeps XA tags (the first is on record {}).",
+            first,
+        );
+    }
+    // Under origin: each event's label and site, for the removal log after
+    // the one draw over every event.
+    let mut origin_sites: Vec<(String, origin::OriginSite)> = Vec::new();
+
     // Process each event using the unified haplotype + tiling approach.
     let n_events = events.len();
     for (i, event) in events.iter_mut().enumerate() {
@@ -568,6 +584,44 @@ fn main() -> Result<()> {
             &mut unusable_qual_names,
         )?;
 
+        // --edit-model origin: every primary read at the event and at its
+        // look-alikes. Additive events remove nothing, so they get no site.
+        let site = if edit_origin && !simulate::is_additive(event, &config.dup_model) {
+            let chrom = event
+                .primary_region()
+                .map(|(chrom, _, _)| chrom.to_string())
+                .expect("an event that removes reads has one region");
+            let contig_len = shared_ref
+                .chromosome_length(&chrom)
+                .ok_or_else(|| anyhow::anyhow!("{} is not in the loaded reference", chrom))?;
+            let footprint = origin_footprint(event, contig_len)
+                .expect("an event that removes reads has one region");
+            let site = origin::gather(
+                &config.bam_path,
+                &config.ref_path,
+                &footprint,
+                config.read_length,
+                &pool,
+            )?;
+            log::info!(
+                "  origin: {} fragment(s) could have come from {}; look-alike region(s): {}",
+                site.fragments().len(),
+                footprint,
+                if site.lookalikes.is_empty() {
+                    "none".to_string()
+                } else {
+                    site.lookalikes
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+            );
+            Some(site)
+        } else {
+            None
+        };
+
         // CR4: the reads over the event the pool does not hold survive it
         // untouched. Unusable-quality pairs are not among them: merge.sh
         // removes those by name.
@@ -576,6 +630,7 @@ fn main() -> Result<()> {
             .iter()
             .map(|p| p.name.clone())
             .chain(unusable_qual_names.iter().cloned())
+            .chain(site.iter().flat_map(|s| s.removable_names()))
             .collect();
         let event_census = census::count_resistant(
             &config.bam_path,
@@ -618,16 +673,29 @@ fn main() -> Result<()> {
             build_haplotype(event, &shared_ref, HAP_FLANK, &config.dup_model, &mut rng)?;
 
         // Simulate: suppress reads + tile synthetic reads across haplotype.
-        let output = simulate::simulate_event(
-            i + 1,
-            event,
-            &pool,
-            &mut haplotype,
-            &config,
-            &synth_gen,
-            vaf,
-            &mut rng,
-        )?;
+        let output = match site.as_ref() {
+            Some(site) => simulate::simulate_event_origin(
+                i + 1,
+                event,
+                &pool,
+                &mut haplotype,
+                &config,
+                &synth_gen,
+                vaf,
+                Some(site),
+                &mut rng,
+            )?,
+            None => simulate::simulate_event(
+                i + 1,
+                event,
+                &pool,
+                &mut haplotype,
+                &config,
+                &synth_gen,
+                vaf,
+                &mut rng,
+            )?,
+        };
 
         log::info!(
             "Event {}: {} kept + {} chimeric, {} suppressed",
@@ -658,15 +726,54 @@ fn main() -> Result<()> {
         resistant.push(Some(event_census.fraction()));
         depth_folds.push(Some(output.depth_fold.fold));
         event_outputs.push(output);
+
+        if let Some(site) = site {
+            origin_sites.push((event_label(event), site));
+        }
     }
 
     if let Some(message) = census::refusal_message(&refusals) {
         anyhow::bail!("{}", message);
     }
 
+    // --edit-model origin: one draw per fragment family over every event's
+    // chances (R5). Removed pool pairs move to their event's suppressed
+    // names; every removed name goes to replaced_reads.txt.
+    let mut origin_removed: BTreeSet<String> = BTreeSet::new();
+    if edit_origin {
+        let chances: Vec<origin::Chance> = event_outputs
+            .iter()
+            .flat_map(|o| o.origin_chances.iter().cloned())
+            .collect();
+        origin_removed = origin::decide(&chances, &mut rng);
+        simulate::apply_removals(&mut event_outputs, &origin_removed);
+        for (stat, output) in event_stats.iter_mut().zip(&event_outputs) {
+            stat.suppressed = output.suppressed_count;
+        }
+        for (label, site) in &origin_sites {
+            let (mut at_spot, mut elsewhere) = (0usize, 0usize);
+            for f in site.fragments() {
+                if origin_removed.contains(f.name) {
+                    if f.at_spot(&site.footprint) {
+                        at_spot += 1;
+                    } else {
+                        elsewhere += 1;
+                    }
+                }
+            }
+            log::info!(
+                "{}: origin removed {} fragment(s) at the spot and {} at its look-alikes",
+                label,
+                at_spot,
+                elsewhere,
+            );
+        }
+    }
+
     // Names of the originals spike took out of the BAM; merge.sh removes
     // exactly these.
     let mut replaced_names = simulate::consumed_original_names(&event_outputs);
+    replaced_names.extend(origin_removed.iter().cloned());
     // M14: a pair dropped for unusable quality cannot be replaced -- spike has
     // no quality string to write for it -- but it must still be removed.
     // Left in place it would sit inside every simulated event as
@@ -1450,6 +1557,20 @@ fn extract_windows(
         pairs.extend(extracted.pairs);
     }
     Ok(())
+}
+
+/// The reference range an event's haplotype covers: its region grown by
+/// `HAP_FLANK` on each side, stopped at the contig's ends, as
+/// `VariantHaplotype::ref_range` reports it once the haplotype is built.
+/// `simulate` checks the two agree. `None` for a fusion, which has no single
+/// region.
+fn origin_footprint(event: &SimEvent, contig_len: u64) -> Option<origin::Span> {
+    let (chrom, start, end) = event.primary_region()?;
+    Some(origin::Span::new(
+        chrom,
+        start.saturating_sub(HAP_FLANK),
+        (end + HAP_FLANK).min(contig_len),
+    ))
 }
 
 /// Build a VariantHaplotype for a given event, which it may mutate: an
@@ -4292,5 +4413,28 @@ cat "$root/validation_summary.tsv""#,
     fn test_edit_model_defaults_to_clean() {
         let args = Args::try_parse_from(["spike", "--bam", "x.bam", "--reference", "x.fa"]).unwrap();
         assert_eq!(args.edit_model, "clean");
+    }
+
+    #[test]
+    fn test_origin_footprint_is_the_haplotypes_reference_range() {
+        let del = |start, end| SimEvent::Deletion {
+            chrom: "chr1".into(),
+            del_start: start,
+            del_end: end,
+            gene: "G".into(),
+            exons: vec![],
+            allele_fraction: None,
+        };
+        let span = |s, e| Some(origin::Span::new("chr1", s, e));
+        assert_eq!(
+            origin_footprint(&del(5000, 6000), 100_000),
+            span(3000, 8000)
+        );
+        // The flanks stop at the contig's ends, as `VariantHaplotype::from_deletion` does.
+        assert_eq!(
+            origin_footprint(&del(99_000, 99_500), 100_000),
+            span(97_000, 100_000)
+        );
+        assert_eq!(origin_footprint(&del(500, 600), 100_000), span(0, 2600));
     }
 }
