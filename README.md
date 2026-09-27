@@ -1344,7 +1344,9 @@ Options:
           [default: 42]
 
   -t, --threads <THREADS>
-          Number of threads for BAM reading
+          Threads for the align.sh and merge.sh scripts spike writes.
+          
+          The aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort -@, merge -@) get this many. spike itself runs on one thread.
           
           [default: 4]
 
