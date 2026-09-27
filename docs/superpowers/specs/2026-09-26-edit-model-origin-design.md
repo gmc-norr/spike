@@ -2,7 +2,14 @@
 
 Date: 2026-09-26. Status: design agreed with the user in four parts; revised 2026-09-27 for
 five gaps a review found (R1-R5 below), and for three more a review of the plan found
-(R6-R8); not built.
+(R6-R8); **built, and the physics test PASSED** (2026-09-27). On a made-up 80 kb genome with
+an exact twin, `origin` lands inside the truth band at both the event (L 0.739, band
+[0.717, 0.820]) and its look-alike (P 0.763, band [0.762, 0.865]); `--min-mapq 0` lands
+outside both (L 0.271, P 1.296) and `clean` refuses for want of donor coverage. Verdict
+SUPPORTED — the rule was locked in the plan (`a1b2585`) and the harness committed
+(`15c4277`) before the run; the full record is in `REVIEW.md`, section
+"`--edit-model origin`: physics test (2026-09-27)". `origin` stays experimental and `clean`
+stays the default: only the real test on the user's GIAB BAMs can change that.
 
 ## Goal
 

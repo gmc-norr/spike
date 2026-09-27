@@ -6165,3 +6165,230 @@ Code `54c238f`. The new binary was built in its own target dir (md5
 - The README's check table has a `del_planted` paragraph with the measured VAF 0.1 rate.
 - `validate_pipeline.sh`'s comment on advisory rows gains `ins_reads` (missed in RF13) and
   a DEL's `split_reads`.
+
+## `--edit-model origin`: physics test (2026-09-27)
+
+**Verdict: SUPPORTED.** One run. The rule was locked before it.
+
+### The locked rule
+
+The rule — genome, seeds, coverage, windows, margin, and the order the verdict is checked in —
+is `docs/superpowers/plans/2026-09-27-edit-model-origin.md`, **Task 12**, committed in
+`a1b2585` (`plan: --edit-model origin -- revision 2, amended before any run (review P1-P5)`),
+before anything in this task was run. The harness `scripts/origin_physics.py` is that plan
+block, byte for byte:
+
+```
+cd /home/parlar_ai/edit-model-run/wt && python3 - <<'EOF'
+import re
+t = open('docs/superpowers/plans/2026-09-27-edit-model-origin.md').read()
+i = t.index('### Task 12')
+m = re.search(r'`{3}python\n(.*?)\n`{3}', t[i:], re.S)
+open('$S/sdd/plan_harness.py', 'w').write(m.group(1) + "\n")
+EOF
+diff $S/sdd/plan_harness.py scripts/origin_physics.py && echo "HARNESS IDENTICAL TO PLAN Task 12 (a1b2585)"
+```
+```
+HARNESS IDENTICAL TO PLAN Task 12 (a1b2585)
+```
+(`diff` printed nothing and exited 0, so the committed harness is the plan's locked block,
+character for character. The same `diff` against the Task 12 brief's copy of the block also
+printed nothing.)
+
+It was committed **before** it was run, as `15c4277`
+(`code: origin -- physics test harness (made-up twin genome; rule locked in the plan)`).
+The run is `15c4277`'s child in time, not in content: nothing in the harness or the rule
+changed after the first number appeared.
+
+- **Genome.** `chrT`, 80 kb, from `random.Random(20260927)`: unique U1 `[0,20000)`,
+  S `[20000,30000)`, unique U2 `[30000,50000)`, an **exact copy of S** at `[50000,60000)`,
+  unique U3 `[60000,80000)`.
+- **Event.** `del:chrT:24500-25500`, het (default `--allele-fraction` 0.5). Its 5 kb origin
+  footprint lies wholly inside S, so every read over it has a perfect second home.
+- **Reads.** wgsim `-1 150 -2 150 -d 400 -s 50 -e 0.001 -r 0 -R 0 -X 0`, 30x per copy,
+  qualities rewritten to Q30, aligned with `bwa-mem2 mem -R '@RG\tID:toy\tSM:TOY'`.
+  Truth seeds 1 and 2 (copy A missing `[24500,25500)`, copy B intact); donor seed 3 (both
+  copies intact).
+- **spike.** `--seed 7 --allow-resistant`, three ways: `clean`, `--min-mapq 0`,
+  `--edit-model origin`; each through its own `align.sh` and `merge.sh` at 8 threads.
+- **Measured.** `samtools depth -a` (default flags, any MAPQ) mean over L = `chrT:24600-25400`
+  and P = `chrT:54600-55400`, each divided by the length-weighted mean over `chrT:5000-15000`,
+  `35000-45000` and `65000-75000`.
+- **Band.** For X in {L, P}: `[min(truth1_X, truth2_X) - 0.05, max(truth1_X, truth2_X) + 0.05]`.
+
+### The run
+
+```
+cd /home/parlar_ai/edit-model-run/wt && CARGO_TARGET_DIR=$S/target-t12 cargo build --release -j 16 && md5sum $S/target-t12/release/spike
+```
+```
+    Finished `release` profile [optimized] target(s) in 40.53s
+bdcab0995ab2c753de1803b6cc03cdc2  /home/parlar_ai/edit-model-run/scratch/target-t12/release/spike
+```
+(The same md5 as Task 9's post-fix `target-t9` binary. Only docs and this Python file have
+been committed since `f17ae62`, so the Rust is unchanged — a free check that the tested
+binary is the reviewed one.)
+
+```
+cd /home/parlar_ai/edit-model-run/wt && python3 scripts/origin_physics.py $S/origin-physics $S/target-t12/release/spike 8 2>&1 | tee $S/origin-physics.txt
+```
+Output verbatim (the tool banners wgsim, bwa-mem2 and samtools printed are kept):
+```
+[wgsim] seed = 1
+[wgsim_core] calculating the total length of the reference sequence...
+[wgsim_core] 2 sequences, total length: 159000
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+[wgsim] seed = 2
+[wgsim_core] calculating the total length of the reference sequence...
+[wgsim_core] 2 sequences, total length: 159000
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+[wgsim] seed = 3
+[wgsim_core] calculating the total length of the reference sequence...
+[wgsim_core] 2 sequences, total length: 160000
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+harness: 2066 primary records over the footprint, 2066 MAPQ 0, 2066 of those with XA
+truth1	exit -	L 0.767	P 0.815
+truth2	exit -	L 0.770	P 0.812
+clean	exit 1	refused	inside False
+mapq0	exit 0	L 0.271	P 1.296	inside False
+origin	exit 0	L 0.739	P 0.763	inside True
+band L [0.717, 0.820]  P [0.762, 0.865]
+VERDICT: SUPPORTED
+```
+
+**Harness check (not a verdict).**
+`harness: 2066 primary records over the footprint, 2066 MAPQ 0, 2066 of those with XA`.
+The genome did what it was built to do: every primary record over `chrT:22500-27500` is at
+MAPQ 0, and every one of them carries `XA`. So the donor is a spot where `clean` has nothing
+to edit and `origin` has the tags it needs. The check passed on the first run; no re-run.
+
+**The table.** Every cell is from the single harness run above.
+
+| Run | Exit | L (`chrT:24600-25400`) | P (`chrT:54600-55400`) | Inside both bands |
+| --- | --- | --- | --- | --- |
+| truth1 (seed 1) | - | 0.767 | 0.815 | (defines the band) |
+| truth2 (seed 2) | - | 0.770 | 0.812 | (defines the band) |
+| `clean` | 1 | refused | refused | no |
+| `--min-mapq 0` | 0 | 0.271 | 1.296 | **no** |
+| `--edit-model origin` | 0 | **0.739** | **0.763** | **yes** |
+
+Bands: **L `[0.717, 0.820]`**, **P `[0.762, 0.865]`**.
+
+**How the verdict was reached**, in the locked order:
+- `origin` exit 0 and `--min-mapq 0` exit 0, so no NO VERDICT on either.
+- `clean` exit 1 **with** its expected refusal, so no NO VERDICT there either:
+  ```
+  grep -c "has no donor coverage" $S/origin-physics/clean.log
+  1
+  ```
+  ```
+  Error: event chrT:24500-25500 has no donor coverage at any of its breakpoints
+  (chrT:24499, chrT:25500): the pool holds 2277 read pair(s) but none of them cover that.
+  ```
+  In a perfect twin, the default pool is empty at the event: `clean` cannot plant the
+  deletion at all, and RF8's refusal is what stops it inventing one.
+- `--min-mapq 0` is outside both bands, and `clean` did not finish, so not INCONCLUSIVE.
+  The controls separate: `--min-mapq 0` over-removes at the event (0.271 against a truth of
+  ~0.77) and leaves the twin untouched (1.296 against ~0.81). The test can tell the models
+  apart.
+- `origin` is inside both bands, so **SUPPORTED**.
+
+**What `origin` did**, from its own log (`grep -h "origin" $S/origin-physics/origin.log`):
+```
+--edit-model origin (experimental): reads are removed by their chance of having come from
+each event's edited copy, at the event and at its look-alikes. The BAM keeps XA tags (the
+first is on record 7).
+  origin: 2089 fragment(s) could have come from chrT:22500-27500; look-alike region(s): chrT:52205-57798
+  origin depth at chrT:24499: 83.6x (the donor pool's there: 0.0x)
+DEL  chrT:24501-25500 (1000bp): origin removed 225 fragment(s) at the spot and 259 at its look-alikes
+```
+The donor pool's depth at the breakpoint is `0.0x` — the number `clean` would have tiled
+from — while the origin depth is `83.6x`. That is the whole mechanism in one line, and it is
+why `origin` reaches the truth band where `clean` refuses.
+
+### Where the measurements differ from the spec's prediction
+
+The spec's table was labelled `PREDICTED (not run)`. Measured against it:
+
+| | Predicted | Measured | |
+| --- | --- | --- | --- |
+| truth L | ~0.75 | 0.767, 0.770 | close |
+| truth P | ~0.75 | 0.815, 0.812 | **higher by ~0.06** |
+| `--min-mapq 0` L | ~0.5 | 0.271 | **lower** — it removes more than half |
+| `--min-mapq 0` P | ~1 | 1.296 | **higher** — the twin gains depth |
+| `origin` L | ~0.75 | 0.739 | close |
+| `origin` P | ~0.75 | 0.763 | close |
+| `clean` | refused | refused, exit 1, `has no donor coverage` | as predicted |
+
+The predictions were right about the shape — truth and `origin` near 0.75 at both windows,
+`--min-mapq 0` low at the event and high at the twin, `clean` refusing — and wrong about
+three magnitudes. The truth's P sitting above L (0.81 vs 0.77) says bwa-mem2 does not split
+the ambiguous S reads exactly evenly between the two copies; the deletion's own reads shift
+the split. `--min-mapq 0`'s 0.271 at L is below the 0.5 it was predicted at because it
+removes each MAPQ 0 read as certainly the event's, and 1.296 at P because it puts nothing
+back there. None of these changes the rule or the verdict; they are recorded because the
+band is drawn from the measured truth, not from the prediction.
+
+**One number worth naming.** `origin`'s P is 0.763 against a lower band edge of 0.762 — inside
+by 0.001. The verdict stands as the locked rule computes it, and the rule was not touched. But
+this is one seed pair at 30x on an 80 kb toy, and a margin that thin is not a claim about how
+much room the model has. The real test on the user's GIAB BAMs is what decides whether
+`origin` becomes the default; this gate only says the model is not refuted by physics it was
+built to explain.
+
+### Carried from earlier tasks in this run
+
+**Task 9 — `--edit-model clean` is byte-identical to master** (Global Constraint 1). Both sets
+are on the same real-data slice, `$S/origin-c1/slice.bam` (chr20:14500000-14600000 of the 35x
+HG002 BAM, 29,427 records, 328 with `XA`), with
+`--event del:chr20:14548422-14548735 --seed 1 --allow-resistant`. Each row is four md5
+prefixes: `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt`, and `truth.vcf` with its `##` header
+lines stripped. Full record: `$S/sdd/task-9-report.md`.
+
+*Set 1, at Task 9's first pass* — `base_run` is master `94f3f20`'s binary; `new_default` and
+`new_clean` are the branch binary with no flag and with `--edit-model clean`:
+
+| Run | R1 | R2 | replaced_reads | truth.vcf |
+| --- | --- | --- | --- | --- |
+| `base_run` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+| `new_default` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+| `new_clean` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+
+*Set 2, re-proved after Task 9's later fix* (`f17ae62`, the kept-stat refresh and the right-flank
+guard) — `base_run` is the same master output, `fix_default` and `fix_clean` the rebuilt branch
+binary:
+
+| Run | R1 | R2 | replaced_reads | truth.vcf |
+| --- | --- | --- | --- | --- |
+| `base_run` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+| `fix_default` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+| `fix_clean` | b9858ffa | 8d2880d5 | baf82675 | 6a4181d4 |
+
+Twelve md5s, four distinct values, unchanged across the fix: `clean` and the default are
+master, byte for byte. (A `diff -r` of the directories showed the only textual difference is
+`README.md` line 9, which echoes the invocation — the binary path, the `-o` directory, and the
+literal `--edit-model clean` the user typed.)
+
+**Task 11 — mutation check on `origin`.** 21 mutations were planned in the plan's table and
+applied one at a time to the `origin` code, each judged by
+`CARGO_TARGET_DIR=$S/target-mut cargo test -j 16 -- --test-threads=16` against the clean-tree
+baseline `599 passed; 0 failed; 1 ignored`:
+
+**CAUGHT 21 of 21. SURVIVED 0.** No mutation produced a compile error on first application, so
+none had to be rewritten. In all 21 the plan's predicted test was among the red ones; in nine
+(M1, M2, M3, M4, M5, M7, M8, M15, M16) more tests reddened than predicted, never fewer. Two
+extra mutations beyond the table (E1, E2) were caught as well. Full record, with the before/after
+line of every mutation and its red test names: `$S/origin-mut.txt`; per-mutation cargo logs in
+`$S/mutlogs/M<N>.log`.
+
+### What this gate does and does not settle
+
+- **Settled.** On a genome with a perfect twin, `origin` reproduces the depth a real het
+  deletion leaves at both the event and its look-alike, where `--min-mapq 0` does not and
+  `clean` refuses to try. The model's arithmetic is also covered: every one of 21 mutations to
+  it is caught by a test.
+- **Not settled.** Whether this holds on real data. `origin` stays experimental and `clean`
+  stays the default. The real test on the user's GIAB BAMs gets its own locked plan once the
+  BAMs are in hand: first count their `XA` tags and read their `@PG` lines, then pick sites,
+  then lock the rule. `spike validate`'s coverage expectations at look-alike spots are a known
+  side effect and are untouched here.
