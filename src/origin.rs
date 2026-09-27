@@ -1076,6 +1076,22 @@ mod tests {
     /// a: unique at the spot. b: MAPQ 0 at the spot, hits at P. c: MAPQ 0 at
     /// P, hits at the spot. d: unique at P. e: read 1 at the spot, read 2
     /// past the footprint's end.
+    ///
+    /// The flag rule needs more than one flag pattern to be exercised, so the
+    /// spot also holds `dup` (0x400 on both mates), `qcfail` (0x200 on both),
+    /// `orphan` (read 1 whose mate is unmapped, 0x8), `improper` (a pair
+    /// without 0x2), a secondary record of `a` (0x100) and a supplementary
+    /// record `chimera` (0x800) whose primary lies outside the scan. Only the
+    /// last two are dropped; the rest are candidates, `duplicate` and
+    /// `qc_fail` carried through.
+    ///
+    /// `t` is a near look-alike: both its mates sit at the footprint's right
+    /// edge with XA hits just past it, so the region they make -- grown by the
+    /// read length -- reaches back inside the footprint, and `t`'s read 2 is
+    /// scanned twice (the `seen` dedup).
+    ///
+    /// Records are in position order, and the first XA is still on the third
+    /// (`first_xa_record`'s tests count it).
     fn twin_bam(dir: &std::path::Path) -> String {
         let (r1, r2) = (0x63u16, 0x93u16);
         let records = [
@@ -1083,7 +1099,18 @@ mod tests {
             bam_record("a", r2, 21_201, 60, None, 21_001),
             bam_record("b", r1, 22_001, 0, Some("chrT,+42001,100M,0;"), 22_201),
             bam_record("b", r2, 22_201, 0, Some("chrT,-42201,100M,0;"), 22_001),
+            bam_record("dup", r1 | 0x400, 23_001, 60, None, 23_201),
+            bam_record("dup", r2 | 0x400, 23_201, 60, None, 23_001),
+            bam_record("qcfail", r1 | 0x200, 23_301, 60, None, 23_501),
+            bam_record("qcfail", r2 | 0x200, 23_501, 60, None, 23_301),
+            bam_record("orphan", 0x49, 23_601, 60, None, 23_601),
+            bam_record("improper", 0x41, 23_701, 60, None, 24_101),
+            bam_record("improper", 0x91, 24_101, 60, None, 23_701),
+            bam_record("t", r1, 24_401, 0, Some("chrT,+25051,100M,0;"), 24_951),
+            bam_record("a", r1 | 0x100, 24_501, 60, None, 21_201),
+            bam_record("chimera", r1 | 0x800, 24_601, 60, None, 24_801),
             bam_record("e", r1, 24_801, 60, None, 25_101),
+            bam_record("t", r2, 24_951, 0, Some("chrT,-25251,100M,0;"), 24_401),
             bam_record("e", r2, 25_101, 60, None, 24_801),
             bam_record("c", r1, 42_001, 0, Some("chrT,+22001,100M,0;"), 42_201),
             bam_record("c", r2, 42_201, 0, Some("chrT,-22201,100M,0;"), 42_001),
@@ -1099,14 +1126,56 @@ mod tests {
         let bam = twin_bam(&dir);
         let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
 
-        assert_eq!(site.lookalikes, vec![Span::new("chrT", 41_900, 42_400)]);
+        assert_eq!(
+            site.lookalikes,
+            vec![
+                Span::new("chrT", 24_950, 25_450),
+                Span::new("chrT", 41_900, 42_400),
+            ]
+        );
         let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
-        assert_eq!(names, ["a", "b", "c", "e"]);
-        assert_eq!(site.removable_names(), ["a", "b", "c"]);
+        assert_eq!(
+            names,
+            ["a", "b", "c", "dup", "e", "improper", "orphan", "qcfail", "t"]
+        );
+        assert_eq!(
+            site.removable_names(),
+            ["a", "b", "c", "dup", "improper", "orphan", "qcfail"]
+        );
         let c = site.fragments().into_iter().find(|f| f.name == "c").unwrap();
         assert!(!c.at_spot(&site.footprint));
         assert!(close(c.chance(&site.footprint), 0.5));
         assert!(close(site.f, 400.0 / 300.0));
+
+        // The candidate rule is on the flags, and `gather` is the only place
+        // that reads them off a file. A secondary and a supplementary record
+        // are not judged on their own -- they share their primary's name and
+        // go with it -- so `a` arrives with two records, not three, and
+        // `chimera`, whose primary lies outside the scan, with none.
+        assert_eq!(site.records.iter().filter(|r| r.name == "a").count(), 2);
+        assert!(!site.records.iter().any(|r| r.name == "chimera"));
+        // Every other primary is a candidate whatever its flags say, and
+        // `duplicate` and `qc_fail` arrive as themselves (R3 reads them).
+        let record_of = |name: &str| -> &OriginRecord {
+            site.records
+                .iter()
+                .find(|r| r.name == name && r.first)
+                .unwrap_or_else(|| panic!("{} is not a candidate", name))
+        };
+        assert!(record_of("dup").duplicate && !record_of("dup").qc_fail);
+        assert!(record_of("qcfail").qc_fail && !record_of("qcfail").duplicate);
+        assert!(record_of("orphan").mate_unmapped);
+        assert!(!record_of("improper").duplicate && !record_of("improper").qc_fail);
+
+        // A look-alike region is grown by the read length, so the near one
+        // reaches back inside the footprint and `t`'s read 2 is scanned twice.
+        // The `seen` dedup must take it once: twice would satisfy
+        // `mates.len() == 2` from one read and make it look like a pair.
+        assert!(site.lookalikes[0].overlaps(&site.footprint));
+        assert_eq!(
+            site.records.iter().filter(|r| r.name == "t" && !r.first).count(),
+            1
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1166,6 +1235,15 @@ mod tests {
         let dir = scratch("cram");
         let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
         let site = gather(&cram, &fasta, &Span::new("chrA", 0, 1000), 100, &bases_pool()).unwrap();
+        // The guard is the only thing that decides this: chrB's records come
+        // out of the query and must be dropped during the scan. `fragments()`
+        // drops them on chromosome anyway, so its names cannot show the guard.
+        assert_eq!(site.records.len(), 6);
+        assert!(site
+            .records
+            .iter()
+            .flat_map(|r| r.placements.iter())
+            .all(|p| p.span.chrom == "chrA"));
         let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
         assert_eq!(names, ["chrA_pair0", "chrA_pair1", "chrA_pair2"]);
         let _ = std::fs::remove_dir_all(&dir);
