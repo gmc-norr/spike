@@ -106,6 +106,21 @@ def ratios(bam):
     return mean_depth(bam, *L) / base, mean_depth(bam, *P) / base
 
 
+def check_counts(primary, mapq0, with_xa):
+    """The footprint lies 2.5 kb inside an exact twin, so the aligner cannot
+    place any read there: every primary read must be MAPQ 0 and list the twin
+    in XA. Anything less and the donor lacks the physics this test is about.
+    The first version raised only when MAPQ 0 reads lacked XA, so a donor in
+    which the aligner resolved the twin (0 MAPQ 0) passed silently (PD-31)."""
+    if primary == 0:
+        raise SystemExit("harness broken: no primary read over the footprint")
+    if mapq0 != primary:
+        raise SystemExit(f"harness broken: {primary - mapq0} of {primary} primary reads over "
+                         "the footprint have MAPQ above 0, so the aligner told the twins apart")
+    if with_xa != mapq0:
+        raise SystemExit(f"harness broken: {mapq0 - with_xa} of the {mapq0} MAPQ 0 reads carry no XA")
+
+
 def harness_check(donor):
     out = subprocess.run(["samtools", "view", "-F", "0x904", donor, "chrT:22501-27500"],
                          capture_output=True, text=True, check=True).stdout.splitlines()
@@ -113,8 +128,7 @@ def harness_check(donor):
     with_xa = [r for r in mapq0 if "\tXA:Z:" in r]
     print(f"harness: {len(out)} primary records over the footprint, {len(mapq0)} MAPQ 0, "
           f"{len(with_xa)} of those with XA")
-    if mapq0 and not with_xa:
-        raise SystemExit("harness broken: the donor's MAPQ 0 reads carry no XA")
+    check_counts(len(out), len(mapq0), len(with_xa))
 
 
 def main(out, spike_bin, threads="8"):
