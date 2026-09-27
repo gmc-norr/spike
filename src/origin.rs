@@ -780,14 +780,23 @@ mod tests {
 
     #[test]
     fn test_removal_chance_is_p_origin_times_the_copy_rate() {
-        // At the spot the phase call applies; at a look-alike the rate is vaf.
-        let site = twin_site();
-        let read_copy: HashMap<String, bool> = [("l0".to_string(), true)].into();
+        // At the spot the phase call applies; at a look-alike the rate is
+        // vaf -- even when read_copy carries an entry for that fragment's own
+        // name, since at a look-alike the code must pass None rather than
+        // consult it (R7's at_spot gate).
+        let mut site = twin_site();
+        // R4/R6: a stray whose unseen mate blocks removal (mate_unmapped:
+        // false) must be filtered out of removal_chances entirely.
+        let copy = site.records[0].clone();
+        site.records.push(OriginRecord { name: "stray".into(), mate_unmapped: false, ..copy });
+        let read_copy: HashMap<String, bool> =
+            [("l0".to_string(), true), ("p0".to_string(), true)].into();
         let chances = site.removal_chances(&read_copy, 0.5);
         let of = |n: &str| chances.iter().find(|c| c.name == n).unwrap().chance;
         assert!(close(of("l0"), 0.5 * 1.0));
         assert!(close(of("l1"), 0.5 * 0.5));
         assert!(close(of("p0"), 0.5 * 0.5));
+        assert!(!chances.iter().any(|c| c.name == "stray"), "{:?}", chances);
     }
 
     #[test]
@@ -843,9 +852,21 @@ mod tests {
         // R7: one draw per family, against its highest member's total. Member
         // by member, a draw between 0.5 and 0.99 would remove only "orig".
         let chances = [chance("orig", 7, 0.99), chance("dup", 7, 0.5)];
+        let mut removed_count = 0u32;
         for seed in 0..200 {
             let removed = decide(&chances, &mut StdRng::seed_from_u64(seed));
             assert_eq!(removed.contains("orig"), removed.contains("dup"), "seed {}", seed);
+            if removed.contains("orig") {
+                removed_count += 1;
+            }
         }
+        // Measured over these same 200 seeds, in a scratch copy of this crate
+        // (/home/parlar_ai/edit-model-run/scratch/t6mut), by mutating the
+        // aggregation at src/origin.rs:492-496:
+        //   max (real code)                                   -> removed_count = 199
+        //   first-member (`or_insert(total.min(1.0))`, no `.max`) -> removed_count = 103
+        //   mean (average the members' totals instead of max) -> removed_count = 155
+        // 180 sits strictly between the real count and the highest wrong one.
+        assert!(removed_count > 180, "removed_count {}", removed_count);
     }
 }
