@@ -496,10 +496,13 @@ impl OriginSite {
     /// duplicates (`src/loh.rs:628`), so a family takes the call of whichever
     /// member has one, and members that disagree get none. A fragment the
     /// aligner put only at a look-alike has no call, so its rate is `vaf`.
+    ///
+    /// The family calls are one pass in fragment order; each fragment's
+    /// chance is then worked out on the thread pool, kept in that order.
     pub fn removal_chances(&self, read_copy: &HashMap<String, bool>, vaf: f64) -> Vec<Chance> {
         let fragments: Vec<Fragment<'_>> = self
             .fragments()
-            .into_iter()
+            .into_par_iter()
             .filter(|f| f.removable(&self.footprint))
             .collect();
         let mut family_copy: BTreeMap<Vec<FivePrime>, Option<bool>> = BTreeMap::new();
@@ -516,7 +519,7 @@ impl OriginSite {
             }
         }
         fragments
-            .into_iter()
+            .into_par_iter()
             .filter_map(|f| {
                 let family = f.family();
                 let copy = if f.at_spot(&self.footprint) {
@@ -1577,6 +1580,62 @@ mod tests {
             .map(|f| (f.name, f.mates.iter().map(|&m| m as *const _).collect()))
             .collect();
         assert!(got == expected, "fragments() differs from one map over the records");
+    }
+
+    /// `removal_chances` as it was before it ran on the thread pool: the
+    /// reference the parallel one must match.
+    fn removal_chances_one_thread(site: &OriginSite, read_copy: &HashMap<String, bool>, vaf: f64) -> Vec<Chance> {
+        let fragments: Vec<Fragment<'_>> =
+            site.fragments().into_iter().filter(|f| f.removable(&site.footprint)).collect();
+        let mut family_copy: BTreeMap<Vec<FivePrime>, Option<bool>> = BTreeMap::new();
+        for f in &fragments {
+            if let Some(&copy) = read_copy.get(f.name) {
+                family_copy
+                    .entry(f.family())
+                    .and_modify(|call| {
+                        if *call != Some(copy) {
+                            *call = None;
+                        }
+                    })
+                    .or_insert(Some(copy));
+            }
+        }
+        fragments
+            .into_iter()
+            .filter_map(|f| {
+                let family = f.family();
+                let copy = if f.at_spot(&site.footprint) { family_copy.get(&family).copied().flatten() } else { None };
+                let chance = f.chance(&site.footprint) * copy_rate(copy, vaf);
+                (chance > 0.0).then(|| Chance { name: f.name.to_string(), family, chance })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_removal_chances_on_many_threads_are_the_one_thread_chances() {
+        // Each fragment's chance may be worked out on the thread pool; the
+        // list must be the one a single pass gives, in the same order. Mates
+        // start inside the footprint or past it, fragments i and i + 800
+        // share their 5' ends (a duplicate family), and a third of the names
+        // carry each phase call.
+        let mut records = Vec::new();
+        for i in 0..5_000u64 {
+            let name = format!("q{:05}", i);
+            let mapq = [0u8, 3, 20, 60][(i % 4) as usize];
+            records.push(record(&name, true, (i * 7) % 800, mapq, &[]));
+            records.push(record(&name, false, (i * 13) % 1_000, mapq, &[]));
+        }
+        let site = OriginSite { footprint: fp(), lookalikes: vec![], records, f: 1.0 };
+        let read_copy: HashMap<String, bool> =
+            (0..5_000u64).filter(|i| i % 3 < 2).map(|i| (format!("q{:05}", i), i % 3 == 0)).collect();
+        let one_thread = removal_chances_one_thread(&site, &read_copy, 0.3);
+        assert!(one_thread.len() > 1_000 && one_thread.len() < 5_000, "{} chances", one_thread.len());
+        let many = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| site.removal_chances(&read_copy, 0.3));
+        assert!(many == one_thread, "removal_chances on 4 threads differs from one pass");
     }
 
     #[test]
