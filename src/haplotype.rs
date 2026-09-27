@@ -557,6 +557,7 @@ impl VariantHaplotype {
     ///
     /// Returns true if the range falls entirely within a single segment, false
     /// if it spans two or more segments.
+    #[cfg(test)]
     pub fn is_within_single_segment(&self, start: u64, len: u64) -> bool {
         let end = start + len; // exclusive
         for seg in &self.segments {
@@ -646,6 +647,7 @@ impl VariantHaplotype {
     /// directly -- `sample_ref_overlapping_start` in simulate.rs draws only from starts
     /// that satisfy this predicate -- but the tests use it as their oracle to check that
     /// sampler's output.
+    #[cfg(test)]
     pub fn overlaps_ref_segment(&self, start: u64, len: u64) -> bool {
         let end = start + len;
         for seg in &self.segments {
