@@ -80,30 +80,92 @@ pub fn census_spans(event: &SimEvent) -> Vec<(String, u64, u64)> {
 
 /// Count the primary, mapped, non-duplicate, non-QC-fail records over
 /// `spans`, at any MAPQ; a record whose read name is not in `editable` is
-/// resistant.
+/// resistant. A BAM span is read in [`crate::extract::read_chunks`] chunks on
+/// the thread pool.
 pub fn count_resistant(
     alignment_path: &str,
     ref_path: &str,
     spans: &[(String, u64, u64)],
     editable: &HashSet<String>,
 ) -> Result<Census> {
+    count_resistant_with(alignment_path, ref_path, spans, editable, &crate::extract::read_chunks)
+}
+
+/// [`count_resistant`] with every BAM span read in `n_chunks` chunks.
+#[cfg(test)]
+fn count_resistant_in(
+    alignment_path: &str,
+    ref_path: &str,
+    spans: &[(String, u64, u64)],
+    editable: &HashSet<String>,
+    n_chunks: usize,
+) -> Result<Census> {
+    count_resistant_with(alignment_path, ref_path, spans, editable, &|_, _| n_chunks)
+}
+
+/// [`count_resistant`], with `chunks(start, end)` the number of chunks a BAM
+/// span is read in (see [`crate::extract::fold_bam_region`]). Counts add, so
+/// the chunks' sum is one query's count.
+fn count_resistant_with(
+    alignment_path: &str,
+    ref_path: &str,
+    spans: &[(String, u64, u64)],
+    editable: &HashSet<String>,
+    chunks: &(dyn Fn(u64, u64) -> usize + Sync),
+) -> Result<Census> {
     let mut census = Census::default();
     for (chrom, start, end) in spans {
-        // MAPQ 0: the census counts the reads the pool's MAPQ filter left out.
-        crate::validate::for_each_alignment(
+        if crate::extract::is_cram(alignment_path) {
+            // MAPQ 0: the census counts the reads the pool's MAPQ filter left out.
+            crate::validate::for_each_alignment(
+                alignment_path,
+                ref_path,
+                chrom,
+                *start,
+                *end,
+                0,
+                &mut |name, _, _, _| {
+                    census.counted += 1;
+                    if !editable.contains(String::from_utf8_lossy(name).as_ref()) {
+                        census.resistant += 1;
+                    }
+                },
+            )?;
+            continue;
+        }
+        let per_chunk = crate::extract::fold_bam_region(
             alignment_path,
-            ref_path,
             chrom,
             *start,
             *end,
-            0,
-            &mut |name, _, _, _| {
-                census.counted += 1;
-                if !editable.contains(String::from_utf8_lossy(name).as_ref()) {
-                    census.resistant += 1;
+            chunks(*start, *end),
+            "failed to open BAM for a read scan",
+            Census::default,
+            |chunk: &mut Census, record| {
+                // The records `for_each_alignment` hands on, at MAPQ 0.
+                if !crate::validate::usable_alignment(record.flags(), record.mapping_quality().map(u8::from), 0) {
+                    return Ok(());
                 }
+                let Some(name) = record.name() else {
+                    return Ok(());
+                };
+                if !matches!(record.alignment_start(), Some(Ok(_))) {
+                    return Ok(());
+                }
+                // It also parses each such record's CIGAR, and a bad one stops the scan.
+                record.cigar().iter().collect::<std::io::Result<Vec<_>>>()?;
+                let name: &[u8] = name.as_ref();
+                chunk.counted += 1;
+                if !editable.contains(String::from_utf8_lossy(name).as_ref()) {
+                    chunk.resistant += 1;
+                }
+                Ok(())
             },
         )?;
+        for chunk in per_chunk {
+            census.counted += chunk.counted;
+            census.resistant += chunk.resistant;
+        }
     }
     Ok(census)
 }
@@ -535,6 +597,49 @@ mod tests {
         let census = count_resistant(&bam, "", &spans, &editable).unwrap();
 
         assert_eq!(census, Census { counted: 4, resistant: 2 });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_census_read_in_chunks_counts_what_the_fixture_holds() {
+        // The census may read a long span chunk by chunk on the thread pool.
+        // Its counts must be what the fixture's own pair list says -- every
+        // primary, mapped, non-duplicate, non-QC-fail read over the span, at
+        // any MAPQ, resistant when its name is not editable -- in one query
+        // and in five chunks on four threads.
+        let dir = std::env::temp_dir().join(format!("spike_census_chunks_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names: Vec<String> = (0..80).map(|i| format!("p{}", i)).collect();
+        let pairs: Vec<(&str, usize, u8, u16)> = (0..80)
+            .map(|i| {
+                let extra = if i % 11 == 0 { 0x400 } else if i % 13 == 0 { 0x200 } else { 0 };
+                (names[i].as_str(), 1 + 30 * i, (i % 7 * 10) as u8, extra)
+            })
+            .collect();
+        let bam = write_pairs_bam(&dir, &pairs);
+        let spans = [("chrA".to_string(), 100u64, 2_900u64)];
+        let editable: HashSet<String> = names.iter().step_by(2).cloned().collect();
+        let mut expected = Census::default();
+        for &(name, start, _, extra) in &pairs {
+            if extra & 0x600 != 0 {
+                continue;
+            }
+            // 1-based reads of 100 bases at `start` and `start + 200`.
+            for pos in [start as u64, start as u64 + 200] {
+                if pos - 1 < 2_900 && pos + 99 > 100 {
+                    expected.counted += 1;
+                    expected.resistant += usize::from(!editable.contains(name));
+                }
+            }
+        }
+        assert!(expected.resistant > 0 && expected.resistant < expected.counted);
+        assert_eq!(count_resistant_in(&bam, "", &spans, &editable, 1).unwrap(), expected);
+        let chunked = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| count_resistant_in(&bam, "", &spans, &editable, 5).unwrap());
+        assert_eq!(chunked, expected);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

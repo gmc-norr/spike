@@ -737,7 +737,7 @@ impl Source {
             span.start,
             span.end,
             n_chunks,
-            "failed to open BAM for the origin scan:",
+            &format!("failed to open BAM for the origin scan: {}", bam_path),
             Vec::new,
             |out: &mut Vec<OriginRecord>, record| {
                 let buf = noodles::sam::alignment::RecordBuf::try_from_alignment_record(header, record)?;

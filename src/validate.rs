@@ -3356,7 +3356,7 @@ fn scan_region(
 
 /// The record filter every scan here shares: a primary, mapped, non-duplicate
 /// alignment that clears `min_mapq`.
-fn usable_alignment(
+pub(crate) fn usable_alignment(
     flags: noodles::sam::alignment::record::Flags,
     mapping_quality: Option<u8>,
     min_mapq: u8,

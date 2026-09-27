@@ -223,7 +223,7 @@ fn pass1_bam(
         start,
         end,
         n_chunks,
-        "failed to open BAM:",
+        &format!("failed to open BAM: {}", bam_path),
         Pass1Chunk::default,
         |chunk: &mut Pass1Chunk, record| {
             let flags = record.flags();
@@ -943,7 +943,8 @@ fn region_chunks(start: u64, end: u64, n: usize) -> Vec<(u64, u64)> {
 
 /// Read the BAM records over 0-based `[start, end)` of `chrom` in `n_chunks`
 /// chunks on the thread pool, into one accumulator per chunk, returned in
-/// chunk order.
+/// chunk order. `open_context` is the error for a file that will not open,
+/// as the caller's own one-query read worded it.
 ///
 /// Each chunk is its own indexed query. A record overlapping two chunks is
 /// handed to one: the chunk holding its alignment start, or the first chunk
@@ -972,7 +973,7 @@ where
         .map(|(i, (chunk_start, chunk_end))| {
             let mut reader = noodles::bam::io::indexed_reader::Builder::default()
                 .build_from_path(bam_path)
-                .with_context(|| format!("{} {}", open_context, bam_path))?;
+                .with_context(|| open_context.to_string())?;
             let header = reader.read_header()?;
             let region = noodles::core::Region::new(
                 chrom,
@@ -1273,7 +1274,7 @@ mod tests {
         }
         let bam = test_fixtures::write_one_contig_bam(&dir.join("chunks.bam"), "chrT", 10_000, &records);
         let read = |chunks: usize| -> Vec<String> {
-            fold_bam_region(&bam, "chrT", 1_000, 4_000, chunks, "failed to open BAM:", Vec::new, |seen, r| {
+            fold_bam_region(&bam, "chrT", 1_000, 4_000, chunks, "failed to open BAM", Vec::new, |seen, r| {
                 seen.push(String::from_utf8_lossy(r.name().unwrap().as_ref()).into_owned());
                 Ok(())
             })

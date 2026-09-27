@@ -627,7 +627,7 @@ fn count_alleles_bam_in(
         region_start,
         region_end,
         n_chunks,
-        "failed to open BAM for pileup:",
+        &format!("failed to open BAM for pileup: {}", bam_path),
         HashMap::new,
         |allele_counts: &mut HashMap<u64, [u32; 4]>, record| {
             let flags = record.flags();
@@ -1048,7 +1048,7 @@ fn collect_snp_alleles_bam_in(
         region_start,
         region_end,
         n_chunks,
-        "failed to open BAM for SNP allele collection:",
+        &format!("failed to open BAM for SNP allele collection: {}", bam_path),
         HashMap::new,
         |read_alleles: &mut HashMap<String, Vec<(u64, u8)>>, record| {
             let flags = record.flags();
