@@ -359,23 +359,47 @@ impl OriginSite {
             .collect()
     }
 
+    /// This site's origin depth, ready to be asked at many positions.
+    ///
+    /// Only fragments spike can remove count (R6): one kept by R4 stays in
+    /// the BAM, so counting it would add new reads on top of it. Duplicate
+    /// and QC-fail reads add nothing either, since spike's new reads are
+    /// never flagged (R3). The removable set is built here, once: the depth
+    /// fold asks once per 1 kb bin, and rebuilding it per bin made a 1 Mb
+    /// event four times slower than under `clean` (PD-26).
+    pub fn depth(&self) -> OriginDepth<'_> {
+        let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
+        OriginDepth {
+            placements: self
+                .records
+                .iter()
+                .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
+                .flat_map(|r| r.placements.iter())
+                .collect(),
+            f: self.f,
+        }
+    }
+}
+
+/// The placements an [`OriginSite`]'s depth is summed from, in record order,
+/// and its `f`. Made by [`OriginSite::depth`].
+pub struct OriginDepth<'a> {
+    placements: Vec<&'a Placement>,
+    f: f64,
+}
+
+impl OriginDepth<'_> {
     /// Read depth that came from around `pos` on `chrom`. At the points
     /// [`crate::simulate::coverage_sample_points`] gives -- the ones the pool's
     /// depth is sampled at -- sum the chances of every placement covering the
     /// point, then average.
-    /// Only fragments spike can remove count (R6): one kept by R4 stays in
-    /// the BAM, so counting it would add new reads on top of it. Duplicate
-    /// and QC-fail reads add nothing either, since spike's new reads are
-    /// never flagged (R3).
     pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
         let points = crate::simulate::coverage_sample_points(pos, window);
         let (first, last) = (points[0], points[points.len() - 1]);
-        let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
         let placed: Vec<&Placement> = self
-            .records
+            .placements
             .iter()
-            .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
-            .flat_map(|r| r.placements.iter())
+            .copied()
             .filter(|p| p.span.chrom == chrom && p.span.start <= last && first < p.span.end)
             .collect();
         // Folded from +0.0: an empty f64 sum is -0.0 (PD-32).
@@ -920,14 +944,14 @@ mod tests {
     fn test_origin_depth_at_a_twin_is_the_true_read_depth() {
         // 20 reads at L count 1/2 each and so do their 20 twins at P.
         let site = twin_site();
-        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
-        assert!(close(site.fragment_coverage_at("chr1", 2075, 100), 30.0));
+        assert!(close(site.depth().read_coverage_at("chr1", 2075, 100), 20.0));
+        assert!(close(site.depth().fragment_coverage_at("chr1", 2075, 100), 30.0));
         // A window of 1 or 0 makes start == end == pos, so the pre-filter must
         // bound by the last point the loop samples (`start`), not by `end`:
         // at pos 2000, the L placement starts exactly there. The same 40
         // halves the 100-base window counts, over a single sampled point.
-        assert!(close(site.read_coverage_at("chr1", 2000, 1), 20.0));
-        assert!(close(site.read_coverage_at("chr1", 2000, 0), 20.0));
+        assert!(close(site.depth().read_coverage_at("chr1", 2000, 1), 20.0));
+        assert!(close(site.depth().read_coverage_at("chr1", 2000, 0), 20.0));
     }
 
     #[test]
@@ -937,7 +961,7 @@ mod tests {
         let copy = site.records[0].clone();
         site.records.push(OriginRecord { name: "dup".into(), duplicate: true, ..copy.clone() });
         site.records.push(OriginRecord { name: "qc".into(), qc_fail: true, ..copy });
-        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+        assert!(close(site.depth().read_coverage_at("chr1", 2075, 100), 20.0));
     }
 
     #[test]
@@ -948,7 +972,7 @@ mod tests {
         let copy = site.records[0].clone();
         site.records.push(OriginRecord { name: "stray".into(), mate_unmapped: false, ..copy });
         assert!(!site.removable_names().contains(&"stray".to_string()));
-        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+        assert!(close(site.depth().read_coverage_at("chr1", 2075, 100), 20.0));
     }
 
     #[test]
@@ -956,7 +980,7 @@ mod tests {
         // An empty f64 sum is -0.0, which a warning printed as "-0.0x"
         // (PD-32). The pool estimator gives +0.0 there.
         let site = twin_site();
-        let depth = site.read_coverage_at("chr1", 40_000, 2000);
+        let depth = site.depth().read_coverage_at("chr1", 40_000, 2000);
         assert_eq!(depth, 0.0);
         assert!(depth.is_sign_positive(), "{:?}", depth);
     }

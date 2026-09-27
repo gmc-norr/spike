@@ -288,9 +288,12 @@ fn simulate_event_inner(
     // each bin is measured with origin depth, the estimator `cov` came from
     // (the T3 rule).
     let depth_fold = match origin {
-        Some(site) => depth_fold_by(haplotype, cov, &|chrom, pos, window| {
-            site.fragment_coverage_at(chrom, pos, window)
-        }),
+        Some(site) => {
+            let depth = site.depth();
+            depth_fold_by(haplotype, cov, &|chrom, pos, window| {
+                depth.fragment_coverage_at(chrom, pos, window)
+            })
+        }
         None => depth_fold(haplotype, pool, cov),
     };
 
@@ -673,9 +676,10 @@ fn origin_coverage_for_tiling(
     if sides.is_empty() {
         sides.push((fallback_bp.0.to_string(), fallback_bp.1));
     }
+    let depth = site.depth();
     let covs: Vec<f64> = sides
         .iter()
-        .map(|(chrom, pos)| site.fragment_coverage_at(chrom, *pos, 2000))
+        .map(|(chrom, pos)| depth.fragment_coverage_at(chrom, *pos, 2000))
         .collect();
     let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
     let uncovered: Vec<String> = sides
@@ -3554,7 +3558,8 @@ mod tests {
         )
         .unwrap();
         let cov = out.depth_fold.scaled_by;
-        let by_origin = depth_fold_by(&hap, cov, &|c, p, w| site.fragment_coverage_at(c, p, w));
+        let depth = site.depth();
+        let by_origin = depth_fold_by(&hap, cov, &|c, p, w| depth.fragment_coverage_at(c, p, w));
         assert_eq!(out.depth_fold, by_origin);
         assert_ne!(out.depth_fold, depth_fold(&hap, &pool, cov));
     }
@@ -3577,7 +3582,7 @@ mod tests {
                 }];
                 assert_eq!(
                     estimate_coverage_at(&pool, "chr1", pos, window),
-                    site.read_coverage_at("chr1", pos, window),
+                    site.depth().read_coverage_at("chr1", pos, window),
                     "pos {} window {} read at {}",
                     pos,
                     window,
