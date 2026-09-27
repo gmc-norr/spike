@@ -1071,15 +1071,11 @@ fn tile_haplotype_reads(
 fn depth_fold_by(
     haplotype: &VariantHaplotype,
     cov: f64,
-    coverage_at: &dyn Fn(&str, u64, u64) -> f64,
+    coverage_at: &(dyn Fn(&str, u64, u64) -> f64 + Sync),
 ) -> DepthFold {
+    use rayon::prelude::*;
     const BIN: u64 = 1000;
-    let mut worst = DepthFold {
-        fold: 1.0,
-        scaled_by: cov,
-        worst_bin: String::new(),
-        worst_depth: cov,
-    };
+    let mut bins: Vec<(&str, u64, u64)> = Vec::new();
     for origin in haplotype.segments.iter().filter_map(|seg| seg.origin.as_ref()) {
         let len = origin.ref_end.saturating_sub(origin.ref_start);
         if len == 0 {
@@ -1089,13 +1085,27 @@ fn depth_fold_by(
         for b in 0..n_bins {
             let start = origin.ref_start + len * b / n_bins;
             let end = origin.ref_start + len * (b + 1) / n_bins;
-            let depth = coverage_at(&origin.chrom, (start + end) / 2, end - start);
-            let fold = ((depth + 1.0) / (cov + 1.0)).max((cov + 1.0) / (depth + 1.0));
-            if fold > worst.fold {
-                worst.fold = fold;
-                worst.worst_bin = format!("{}:{}-{}", origin.chrom, start, end);
-                worst.worst_depth = depth;
-            }
+            bins.push((origin.chrom.as_str(), start, end));
+        }
+    }
+    // Each bin's depth on the thread pool; the worst is then picked in bin
+    // order, so a tie goes to the same bin as in one pass.
+    let depths: Vec<f64> = bins
+        .par_iter()
+        .map(|&(chrom, start, end)| coverage_at(chrom, (start + end) / 2, end - start))
+        .collect();
+    let mut worst = DepthFold {
+        fold: 1.0,
+        scaled_by: cov,
+        worst_bin: String::new(),
+        worst_depth: cov,
+    };
+    for (&(chrom, start, end), &depth) in bins.iter().zip(&depths) {
+        let fold = ((depth + 1.0) / (cov + 1.0)).max((cov + 1.0) / (depth + 1.0));
+        if fold > worst.fold {
+            worst.fold = fold;
+            worst.worst_bin = format!("{}:{}-{}", chrom, start, end);
+            worst.worst_depth = depth;
         }
     }
     worst
@@ -3523,6 +3533,58 @@ mod tests {
         let hap = tandem_dup_haplotype(11_000, 15_000, 1_000);
         let fold = depth_fold_by(&hap, 40.0, &|_, _, _| 10.0);
         assert!((fold.fold - 41.0 / 11.0).abs() < 1e-9, "{:?}", fold);
+    }
+
+    /// `depth_fold_by` as it was before it measured bins on the thread pool:
+    /// the reference the parallel one must match.
+    fn depth_fold_by_one_thread(
+        haplotype: &VariantHaplotype,
+        cov: f64,
+        coverage_at: &dyn Fn(&str, u64, u64) -> f64,
+    ) -> DepthFold {
+        const BIN: u64 = 1000;
+        let mut worst = DepthFold { fold: 1.0, scaled_by: cov, worst_bin: String::new(), worst_depth: cov };
+        for origin in haplotype.segments.iter().filter_map(|seg| seg.origin.as_ref()) {
+            let len = origin.ref_end.saturating_sub(origin.ref_start);
+            if len == 0 {
+                continue;
+            }
+            let n_bins = ((len as f64 / BIN as f64).round() as u64).max(1);
+            for b in 0..n_bins {
+                let start = origin.ref_start + len * b / n_bins;
+                let end = origin.ref_start + len * (b + 1) / n_bins;
+                let depth = coverage_at(&origin.chrom, (start + end) / 2, end - start);
+                let fold = ((depth + 1.0) / (cov + 1.0)).max((cov + 1.0) / (depth + 1.0));
+                if fold > worst.fold {
+                    worst.fold = fold;
+                    worst.worst_bin = format!("{}:{}-{}", origin.chrom, start, end);
+                    worst.worst_depth = depth;
+                }
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn test_depth_fold_measured_on_many_threads_is_the_one_thread_fold() {
+        // The bins may be measured on the thread pool; the fold, its bin and
+        // its depth must be the ones a single pass picks -- including the
+        // first bin to reach a tie: the depth is 0 in every fifth kilobase,
+        // so the worst depth is reached in bins at different places.
+        let hap = tandem_dup_haplotype(11_000, 60_000, 2_000);
+        let depth_at = |_: &str, pos: u64, _: u64| ((pos / 1000) % 5 * 10) as f64;
+        let one_thread = depth_fold_by_one_thread(&hap, 40.0, &depth_at);
+        assert_eq!((one_thread.fold, one_thread.worst_depth), (41.0, 0.0));
+        // The first bin at depth 0 is the left flank's second, 10.5 kb.
+        assert_eq!(one_thread.worst_bin, "chr1:10000-11000");
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        assert_eq!(pool.install(|| depth_fold_by(&hap, 40.0, &depth_at)), one_thread);
+        // And a depth that changes with every base, so a bin measured at the
+        // wrong point or paired with another bin's depth shows.
+        let scrambled = |_: &str, pos: u64, _: u64| ((pos * 7919) % 1009) as f64 / 10.0;
+        let one_thread = depth_fold_by_one_thread(&hap, 40.0, &scrambled);
+        assert!(one_thread.fold > 2.0, "{:?}", one_thread);
+        assert_eq!(pool.install(|| depth_fold_by(&hap, 40.0, &scrambled)), one_thread);
     }
 
     #[test]
