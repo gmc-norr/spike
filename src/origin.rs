@@ -549,8 +549,18 @@ fn origin_record(
     })
 }
 
-/// Every primary record overlapping `span`, from a BAM or a CRAM.
-fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>> {
+/// Every primary record overlapping `span`, from a BAM or a CRAM, or `None`
+/// when the file's header has no contig named `span.chrom`.
+///
+/// A look-alike region can land on a contig the header does not have: a BAM
+/// aligned to GRCh38 with its alt contigs and then re-headered down to the
+/// no_alt set -- what `scripts/validate_pipeline.sh` forces every background
+/// BAM to be, since Delly refuses anything else -- keeps its reads' `XA` hits
+/// on the contigs the header lost. Querying such a region raises noodles'
+/// "region reference sequence does not exist in reference sequences", which
+/// used to abort the whole run. The header decides, so no other query error is
+/// swallowed, and [`gather`] counts the skips and logs them once.
+fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Option<Vec<OriginRecord>>> {
     let region = noodles::core::Region::new(
         span.chrom.as_str(),
         crate::extract::safe_noodles_position(span.start + 1)
@@ -565,6 +575,10 @@ fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>
         let queried = header
             .reference_sequences()
             .get_index_of(span.chrom.as_bytes());
+        // Not in the header: skip the region rather than let query() raise.
+        if queried.is_none() {
+            return Ok(None);
+        }
         for result in reader.query(&header, &region)? {
             let buf = result?.try_into_alignment_record(&header)?;
             // A container holding several contigs is decoded whole (L2, N4).
@@ -578,6 +592,14 @@ fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>
             .build_from_path(bam_path)
             .with_context(|| format!("failed to open BAM for the origin scan: {}", bam_path))?;
         let header = reader.read_header()?;
+        // Not in the header: skip the region rather than let query() raise.
+        if header
+            .reference_sequences()
+            .get_index_of(span.chrom.as_bytes())
+            .is_none()
+        {
+            return Ok(None);
+        }
         for result in reader.query(&header, &region)? {
             let record = result?;
             let buf =
@@ -585,7 +607,7 @@ fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>
             out.extend(origin_record(&header, &buf));
         }
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 /// How many records, from the start of the file, [`require_xa`] reads
@@ -654,17 +676,45 @@ pub fn gather(
     read_length: usize,
     pool: &ReadPool,
 ) -> Result<OriginSite> {
-    let spot = scan(bam_path, ref_path, footprint)?;
+    let spot = scan(bam_path, ref_path, footprint)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "the BAM's header has no contig named {}, so the event's own footprint {} \
+             cannot be read",
+            footprint.chrom,
+            footprint,
+        )
+    })?;
     let lookalikes = lookalike_regions(&spot, footprint, read_length as u64);
     let mut seen: BTreeSet<(String, bool)> =
         spot.iter().map(|r| (r.name.clone(), r.first)).collect();
     let mut records = spot;
+    let mut skipped: Vec<&str> = Vec::new();
     for region in &lookalikes {
-        for r in scan(bam_path, ref_path, region)? {
+        let Some(found) = scan(bam_path, ref_path, region)? else {
+            skipped.push(region.chrom.as_str());
+            continue;
+        };
+        for r in found {
             if seen.insert((r.name.clone(), r.first)) {
                 records.push(r);
             }
         }
+    }
+    if !skipped.is_empty() {
+        // One line per gather, never one per region.
+        let contigs: BTreeSet<&str> = skipped.iter().copied().collect();
+        log::warn!(
+            "origin: skipped {} of {} look-alike region(s) of {} because their contig is not in \
+             the BAM's header ({} contig(s), e.g. {}): a BAM aligned with alt contigs and then \
+             re-headered to the no_alt set keeps its reads' XA hits on the contigs the header \
+             lost. No record in the file is placed on such a contig, so the region holds \
+             nothing to read.",
+            skipped.len(),
+            lookalikes.len(),
+            footprint,
+            contigs.len(),
+            skipped[0],
+        );
     }
     Ok(OriginSite {
         footprint: footprint.clone(),
@@ -1203,6 +1253,41 @@ mod tests {
         let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
         let z = site.fragments().into_iter().find(|f| f.name == "z").unwrap();
         assert!(close(z.chance(&site.footprint), 1.0 / 6.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// chrT, 60 kb; two MAPQ 0 pairs at the spot whose `XA` hits all name
+    /// `chr15_KI270852v1_alt`, a contig the header does not have.
+    fn lost_contig_bam(dir: &std::path::Path) -> String {
+        let (r1, r2) = (0x63u16, 0x93u16);
+        let records = [
+            bam_record("m", r1, 21_001, 0, Some("chr15_KI270852v1_alt,+7001,100M,0;"), 21_201),
+            bam_record("m", r2, 21_201, 0, Some("chr15_KI270852v1_alt,-7201,100M,0;"), 21_001),
+            bam_record("n", r1, 22_001, 0, Some("chr15_KI270852v1_alt,+7051,100M,0;"), 22_201),
+            bam_record("n", r2, 22_201, 0, Some("chr15_KI270852v1_alt,-7251,100M,0;"), 22_001),
+        ];
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("lost.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_gather_skips_a_lookalike_whose_contig_is_not_in_the_header() {
+        // A BAM aligned to GRCh38 with alt contigs and re-headered to the
+        // no_alt set -- what validate_pipeline.sh forces every background BAM
+        // to be -- keeps its XA hits on the contigs the header lost. Querying
+        // such a region aborted the whole run; it is now skipped and counted
+        // like a region whose contig is present but holds no record.
+        let dir = scratch("lost_contig");
+        let bam = lost_contig_bam(&dir);
+        let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
+        assert_eq!(
+            site.lookalikes,
+            vec![Span::new("chr15_KI270852v1_alt", 6_900, 7_450)]
+        );
+        // The skipped region yielded no record, and the gather went on: the
+        // footprint's own four records are all there.
+        assert_eq!(site.records.len(), 4);
+        let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
+        assert_eq!(names, ["m", "n"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
