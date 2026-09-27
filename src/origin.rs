@@ -18,6 +18,7 @@ use anyhow::{bail, Context, Result};
 use noodles::sam::alignment::record::cigar::Op;
 use rand::rngs::StdRng;
 use rand::Rng;
+use rayon::prelude::*;
 
 use crate::synth::copy_rate;
 use crate::types::ReadPool;
@@ -196,7 +197,7 @@ pub fn five_prime(chrom: &str, start: u64, ops: &[Op], reverse: bool) -> FivePri
 }
 
 /// One primary record, as far as `origin` needs it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OriginRecord {
     pub name: String,
     /// Read 1 of its pair; the two records of one name differ here.
@@ -755,6 +756,37 @@ pub fn require_xa(bam_path: &str, ref_path: &str) -> Result<usize> {
     }
 }
 
+/// [`Source::scan`] of every region, in region order, on the thread pool.
+/// A 3 Mb event on the 35x HG002 BAM has 1,938 look-alike regions, and one
+/// reader took 14 s over them.
+fn scan_regions(bam_path: &str, ref_path: &str, regions: &[Span]) -> Result<Vec<Option<Vec<OriginRecord>>>> {
+    scan_regions_in(bam_path, ref_path, regions, rayon::current_num_threads() * 4)
+}
+
+/// [`scan_regions`] with the regions cut into at most `batches` runs, in list
+/// order, each read by its own [`Source`]. Joined in batch order, the result
+/// is what one reader gives; an error is the first one in region order.
+fn scan_regions_in(
+    bam_path: &str,
+    ref_path: &str,
+    regions: &[Span],
+    batches: usize,
+) -> Result<Vec<Option<Vec<OriginRecord>>>> {
+    let size = regions.len().div_ceil(batches.max(1)).max(1);
+    let per_batch: Vec<Result<Vec<Option<Vec<OriginRecord>>>>> = regions
+        .par_chunks(size)
+        .map(|batch| {
+            let mut source = Source::open(bam_path, ref_path)?;
+            batch.iter().map(|region| source.scan(region)).collect()
+        })
+        .collect();
+    let mut out = Vec::with_capacity(regions.len());
+    for batch in per_batch {
+        out.extend(batch?);
+    }
+    Ok(out)
+}
+
 /// Read everything `origin` needs for one event: the footprint, its
 /// look-alike regions and `f` (see [`OriginSite`]). Whether the file keeps
 /// `XA` at all is [`require_xa`]'s check, made once per run.
@@ -780,8 +812,8 @@ pub fn gather(
     let mut records = spot;
     let mut skipped: Vec<&str> = Vec::new();
     let mut empty: Vec<&Span> = Vec::new();
-    for region in &lookalikes {
-        let Some(found) = source.scan(region)? else {
+    for (region, found) in lookalikes.iter().zip(scan_regions(bam_path, ref_path, &lookalikes)?) {
+        let Some(found) = found else {
             skipped.push(region.chrom.as_str());
             continue;
         };
@@ -1465,6 +1497,37 @@ mod tests {
             crate::loh::tests::capture::warnings_matching("look-alike region(s) of chrT:20000-25000 hold no read")
                 .is_empty()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_regions_read_in_batches_give_what_one_reader_gives() {
+        // The look-alike regions may be read in batches on several threads,
+        // each batch by its own reader; region by region, the result must be
+        // what one reader going through them in order gives -- the records
+        // in file order, `None` for a contig the header lacks, and an empty
+        // list for a region holding no read.
+        let dir = scratch("batches");
+        let bam = twin_bam(&dir);
+        let regions = [
+            Span::new("chrT", 21_000, 21_300),
+            Span::new("chrT", 30_000, 30_500),
+            Span::new("chrT", 22_000, 23_600),
+            Span::new("chr15_KI270852v1_alt", 6_900, 7_450),
+            Span::new("chrT", 42_000, 42_600),
+            Span::new("chrT", 24_400, 25_200),
+        ];
+        let one_reader = scan_regions_in(&bam, "", &regions, 1).unwrap();
+        assert_eq!(one_reader.len(), regions.len());
+        assert!(one_reader[1].as_ref().is_some_and(|r| r.is_empty()));
+        assert!(one_reader[3].is_none());
+        assert!(one_reader.iter().flatten().filter(|r| !r.is_empty()).count() >= 3);
+        let batched = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| scan_regions_in(&bam, "", &regions, regions.len()).unwrap());
+        assert_eq!(batched, one_reader);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
