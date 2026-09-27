@@ -79,58 +79,14 @@ fn extract_read_pairs_bam(
     );
 
     // Pass 1: collect both read1 and read2 records in the target region.
-    let mut read1_map: HashMap<String, PartialRead> = HashMap::new();
-    let mut read2_map: HashMap<String, PartialRead> = HashMap::new();
-    let mut pass1_read1_count = 0usize;
-    let mut pass1_read2_count = 0usize;
-    let mut max_abs_tlen = 0u64;
-    let mut tally = UnusableQualTally::default();
-
-    {
-        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
-            .build_from_path(bam_path)
-            .with_context(|| format!("failed to open BAM: {}", bam_path))?;
-        let header = reader.read_header()?;
-
-        let start_pos = safe_noodles_position(start + 1);
-        let end_pos = safe_noodles_position(end);
-        let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
-        let query = reader.query(&header, &region)?;
-
-        for rec_result in query {
-            let record = rec_result?;
-            let flags = record.flags();
-
-            if !passes_filters_bam(&flags, min_mapq, &record) {
-                continue;
-            }
-            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
-                continue;
-            }
-            if !flags.is_first_segment() && !flags.is_last_segment() {
-                continue;
-            }
-
-            let name = match record.name() {
-                Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
-                None => continue,
-            };
-            let partial = match parse_partial_from_bam_record(&record, &flags, &name, &mut tally)
-            {
-                Some(p) => p,
-                None => continue,
-            };
-            max_abs_tlen = max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
-
-            if flags.is_first_segment() {
-                read1_map.insert(name, partial);
-                pass1_read1_count += 1;
-            } else {
-                read2_map.insert(name, partial);
-                pass1_read2_count += 1;
-            }
-        }
-    }
+    let Pass1 {
+        read1: mut read1_map,
+        read2: mut read2_map,
+        read1_count: pass1_read1_count,
+        read2_count: pass1_read2_count,
+        max_abs_tlen,
+        mut tally,
+    } = pass1_bam(bam_path, chrom, start, end, min_mapq, read_chunks(start, end))?;
 
     // Pair records already complete in pass 1.
     let mut pairs: Vec<ReadPair> = Vec::new();
@@ -227,6 +183,91 @@ fn extract_read_pairs_bam(
         pairs,
         unusable_qual_names: tally.pair_names(),
     })
+}
+
+/// What pass 1 of a BAM extraction collects, before any pairing.
+#[derive(Default)]
+#[cfg_attr(test, derive(PartialEq))]
+struct Pass1 {
+    read1: HashMap<String, PartialRead>,
+    read2: HashMap<String, PartialRead>,
+    read1_count: usize,
+    read2_count: usize,
+    max_abs_tlen: u64,
+    tally: UnusableQualTally,
+}
+
+/// One chunk's share of [`Pass1`]: its usable records in file order.
+#[derive(Default)]
+struct Pass1Chunk {
+    records: Vec<(bool, String, PartialRead)>,
+    max_abs_tlen: u64,
+    tally: UnusableQualTally,
+}
+
+/// Pass 1 of [`extract_read_pairs_bam`] over `[start, end)`, read in
+/// `n_chunks` chunks on the thread pool (see [`fold_bam_region`]). The chunks'
+/// records are put in the maps in chunk order, which is file order, so a name
+/// seen twice keeps the same record one query would.
+fn pass1_bam(
+    bam_path: &str,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    min_mapq: u8,
+    n_chunks: usize,
+) -> Result<Pass1> {
+    let chunks = fold_bam_region(
+        bam_path,
+        chrom,
+        start,
+        end,
+        n_chunks,
+        "failed to open BAM:",
+        Pass1Chunk::default,
+        |chunk: &mut Pass1Chunk, record| {
+            let flags = record.flags();
+
+            if !passes_filters_bam(&flags, min_mapq, record) {
+                return Ok(());
+            }
+            if !flags.is_properly_segmented() || flags.is_mate_unmapped() {
+                return Ok(());
+            }
+            if !flags.is_first_segment() && !flags.is_last_segment() {
+                return Ok(());
+            }
+
+            let name = match record.name() {
+                Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
+                None => return Ok(()),
+            };
+            let Some(partial) = parse_partial_from_bam_record(record, &flags, &name, &mut chunk.tally)
+            else {
+                return Ok(());
+            };
+            chunk.max_abs_tlen = chunk.max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
+            chunk.records.push((flags.is_first_segment(), name, partial));
+            Ok(())
+        },
+    )?;
+
+    let mut pass1 = Pass1::default();
+    for chunk in chunks {
+        pass1.max_abs_tlen = pass1.max_abs_tlen.max(chunk.max_abs_tlen);
+        pass1.tally.missing.extend(chunk.tally.missing);
+        pass1.tally.out_of_range.extend(chunk.tally.out_of_range);
+        for (first, name, partial) in chunk.records {
+            if first {
+                pass1.read1.insert(name, partial);
+                pass1.read1_count += 1;
+            } else {
+                pass1.read2.insert(name, partial);
+                pass1.read2_count += 1;
+            }
+        }
+    }
+    Ok(pass1)
 }
 
 /// Pick the CRAM index entries whose slice can hold a record overlapping
@@ -525,6 +566,7 @@ pub fn dedup_pairs_by_name(pairs: &mut Vec<ReadPair>) {
 
 // --- Internal helpers ---
 
+#[cfg_attr(test, derive(PartialEq))]
 struct PartialRead {
     seq: Vec<u8>,
     qual: Vec<u8>,
@@ -620,6 +662,7 @@ fn quality_out_of_range(raw_qual: &[u8]) -> Option<u8> {
 /// window and re-parses any record whose mate pass 1 kept, so the same record
 /// is offered to the tally twice and a plain counter double-counts it.
 #[derive(Default)]
+#[cfg_attr(test, derive(PartialEq))]
 struct UnusableQualTally {
     /// Records with no quality stored at all (SAM `*`).
     missing: HashSet<(String, bool)>,
@@ -1248,6 +1291,83 @@ mod tests {
             .unwrap()
             .install(|| read(7));
         assert!(chunked == one_query, "7 chunks on 4 threads differ from one query");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extraction_pass_1_read_in_chunks_collects_what_one_query_collects() {
+        // Pass 1 may read its region chunk by chunk on the thread pool. It
+        // must collect the same reads 1 and 2, the same counts, the same
+        // longest template and the same unusable-quality records. Fragments
+        // start every 11 bases with overlapping mates; every 13th has read 2
+        // with no stored quality, every 17th is at MAPQ 5, and every 29th has
+        // a second read 1 2000 bases on -- a name seen twice, in another
+        // chunk, where the map keeps the one file order puts last.
+        use noodles::sam::alignment::record::cigar::{op::Kind, Op};
+        use noodles::sam::alignment::record::{Flags, MappingQuality};
+        use noodles::sam::alignment::record_buf::{QualityScores, Sequence};
+        use noodles::sam::alignment::RecordBuf;
+        let dir = std::env::temp_dir().join(format!("spike_pass1_chunks_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut records: Vec<(usize, RecordBuf)> = Vec::new();
+        // What pass 1 must count, worked out from the fixture itself rather
+        // than through pass1_bam: (read 1?, name, 1-based start, MAPQ, has a
+        // quality, template length) for every record written.
+        let mut written: Vec<(bool, String, usize, u8, bool, i32)> = Vec::new();
+        for i in 0..500usize {
+            let p = 1_000 + i * 11;
+            // Longest first, so the longest template is in the first chunk.
+            let tlen = 400 - (i / 2) as i32;
+            let mut reads = vec![(true, p, p + 50), (false, p + 50, p)];
+            if i % 29 == 0 {
+                reads.push((true, p + 2_000, p + 50));
+            }
+            for (first, pos, mate) in reads {
+                let quals = if !first && i % 13 == 0 { vec![] } else { vec![20 + (pos % 15) as u8; 100] };
+                let mapq = if i % 17 == 0 { 5 } else { 60 };
+                written.push((first, format!("f{}", i), pos, mapq, !quals.is_empty(), tlen));
+                records.push((
+                    pos,
+                    RecordBuf::builder()
+                        .set_name(format!("f{}", i))
+                        .set_flags(Flags::from(if first { 0x63 } else { 0x93 }))
+                        .set_reference_sequence_id(0)
+                        .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                        .set_mapping_quality(MappingQuality::new(mapq).unwrap())
+                        .set_cigar([Op::new(Kind::Match, 100)].into_iter().collect())
+                        .set_mate_reference_sequence_id(0)
+                        .set_mate_alignment_start(noodles::core::Position::new(mate).unwrap())
+                        .set_template_length(if first { tlen } else { -tlen })
+                        .set_sequence(Sequence::from((0..100).map(|k| b"ACGT"[(pos + k) % 4]).collect::<Vec<u8>>()))
+                        .set_quality_scores(QualityScores::from(quals))
+                        .build(),
+                ));
+            }
+        }
+        records.sort_by_key(|(pos, _)| *pos);
+        let records: Vec<RecordBuf> = records.into_iter().map(|(_, r)| r).collect();
+        let bam = test_fixtures::write_one_contig_bam(&dir.join("pass1.bam"), "chrT", 10_000, &records);
+        let (start, end) = (2_000, 6_000);
+        let one_query = pass1_bam(&bam, "chrT", start, end, 20, 1).unwrap();
+        // A 100 bp read at 1-based `pos` overlaps 0-based [start, end) when
+        // pos - 1 < end and pos + 99 > start.
+        let kept: Vec<&(bool, String, usize, u8, bool, i32)> = written
+            .iter()
+            .filter(|(_, _, pos, mapq, _, _)| (*pos as u64) - 1 < end && (*pos as u64) + 99 > start && *mapq >= 20)
+            .collect();
+        let usable = |read1: bool| kept.iter().filter(|r| r.0 == read1 && r.4).count();
+        assert_eq!(one_query.read1_count, usable(true));
+        assert_eq!(one_query.read2_count, usable(false));
+        assert_eq!(one_query.max_abs_tlen, kept.iter().filter(|r| r.4).map(|r| r.5 as u64).max().unwrap());
+        assert_eq!(one_query.tally.missing.len(), kept.iter().filter(|r| !r.4).count());
+        assert!(!one_query.tally.missing.is_empty(), "no unusable-quality record in the fixture");
+        assert!(one_query.read1_count > one_query.read1.len(), "no name is seen twice");
+        let chunked = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| pass1_bam(&bam, "chrT", start, end, 20, 5).unwrap());
+        assert!(chunked == one_query, "pass 1 in 5 chunks differs from one query");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
