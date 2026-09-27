@@ -11,9 +11,12 @@
 //! `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`; comments
 //! name its fixes R1-R5.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{bail, Result};
 use noodles::sam::alignment::record::cigar::Op;
+
+use crate::types::ReadPool;
 
 /// A reference interval, 0-based half-open.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -313,10 +316,111 @@ pub fn lookalike_regions(spot: &[OriginRecord], footprint: &Span, read_length: u
     regions
 }
 
+/// Everything `origin` read for one event: the footprint the event's new
+/// reads cover, the look-alike regions read besides it, every primary record
+/// read in either, and the pool's fragment-to-read ratio.
+#[derive(Debug, Clone)]
+pub struct OriginSite {
+    pub footprint: Span,
+    pub lookalikes: Vec<Span>,
+    pub records: Vec<OriginRecord>,
+    /// See [`fragment_to_read_ratio`] (R1).
+    pub f: f64,
+}
+
+impl OriginSite {
+    /// The fragments with a placement inside the footprint, in name order.
+    pub fn fragments(&self) -> Vec<Fragment<'_>> {
+        let mut by_name: BTreeMap<&str, Vec<&OriginRecord>> = BTreeMap::new();
+        for r in &self.records {
+            by_name.entry(r.name.as_str()).or_default().push(r);
+        }
+        by_name
+            .into_iter()
+            .map(|(name, mates)| Fragment { name, mates })
+            .filter(|f| {
+                f.mates
+                    .iter()
+                    .any(|m| m.placements.iter().any(|p| self.footprint.holds(&p.span)))
+            })
+            .collect()
+    }
+
+    /// The names of the fragments spike may remove (R4).
+    pub fn removable_names(&self) -> Vec<String> {
+        self.fragments()
+            .into_iter()
+            .filter(|f| f.removable(&self.footprint))
+            .map(|f| f.name.to_string())
+            .collect()
+    }
+
+    /// Read depth that came from around `pos` on `chrom`. At up to 50 points
+    /// over `window` (the points `simulate::estimate_coverage_at` samples),
+    /// sum the chances of every placement covering the point, then average.
+    /// Only fragments spike can remove count (R6): one kept by R4 stays in
+    /// the BAM, so counting it would add new reads on top of it. Duplicate
+    /// and QC-fail reads add nothing either, since spike's new reads are
+    /// never flagged (R3).
+    pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
+        let start = pos.saturating_sub(window / 2);
+        let end = pos.saturating_add(window / 2);
+        let range = end - start;
+        let n = range.min(50).max(1);
+        let step = if n > 1 { range / n } else { 1 };
+        let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
+        let placed: Vec<&Placement> = self
+            .records
+            .iter()
+            .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
+            .flat_map(|r| r.placements.iter())
+            .filter(|p| p.span.chrom == chrom && p.span.start < end && start < p.span.end)
+            .collect();
+        let total: f64 = (0..n)
+            .map(|i| {
+                let at = start + i * step;
+                placed
+                    .iter()
+                    .filter(|p| p.span.start <= at && at < p.span.end)
+                    .map(|p| p.chance)
+                    .sum::<f64>()
+            })
+            .sum();
+        total / n as f64
+    }
+
+    /// [`read_coverage_at`](Self::read_coverage_at) in the fragment units the
+    /// tiling count is in (R1).
+    pub fn fragment_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
+        self.read_coverage_at(chrom, pos, window) * self.f
+    }
+}
+
+/// `f`: the pool's summed fragment spans over its summed read lengths (R1).
+///
+/// It depends on the library's fragment and read lengths, not on the spot,
+/// so it is taken over the whole pool: an event inside a perfect twin has no
+/// pool read in its footprint. Pool pairs keep no CIGAR, so read lengths are
+/// whole reads. A soft-clipped read covers fewer bases than its length, so
+/// where clips are common `f` runs a little low.
+pub fn fragment_to_read_ratio(pool: &ReadPool) -> Result<f64> {
+    let spans: u64 = pool.pairs.iter().map(|p| p.ref_end.saturating_sub(p.ref_start)).sum();
+    let bases: u64 = pool.pairs.iter().map(|p| (p.seq1.len() + p.seq2.len()) as u64).sum();
+    if bases == 0 {
+        bail!(
+            "the donor pool's {} read pair(s) hold no bases, so --edit-model origin cannot \
+             convert read depth into fragment depth",
+            pool.pairs.len()
+        );
+    }
+    Ok(spans as f64 / bases as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use noodles::sam::alignment::record::cigar::op::Kind;
+    use crate::types::{ReadPair, ReadPool};
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -487,5 +591,92 @@ mod tests {
             lookalike_regions(&spot, &fp(), 100),
             vec![Span::new("chr1", 39_900, 40_250), Span::new("chr1", 59_900, 60_250)]
         );
+    }
+
+    /// Twin spots L = chr1:2000-2150 and P = chr1:12000-12150: 20 reads at
+    /// each, all MAPQ 0 with their one XA hit on the other. Each read's mate
+    /// is unmapped, so a fragment is one record, and each has its own 5' end
+    /// so no two share a duplicate family.
+    pub(super) fn twin_site() -> OriginSite {
+        let (l, p) = (Span::new("chr1", 2000, 2150), Span::new("chr1", 12_000, 12_150));
+        let at = |name: String, end5: u64, here: &Span, there: &Span| OriginRecord {
+            placements: placements(here.clone(), 0, std::slice::from_ref(there)),
+            mate_unmapped: true,
+            ..record(&name, true, end5, 0, &[])
+        };
+        let records = (0..20u64)
+            .map(|i| at(format!("l{}", i), i, &l, &p))
+            .chain((0..20u64).map(|i| at(format!("p{}", i), 100 + i, &p, &l)))
+            .collect();
+        OriginSite { footprint: Span::new("chr1", 0, 5000), lookalikes: vec![Span::new("chr1", 11_850, 12_300)], records, f: 1.5 }
+    }
+
+    #[test]
+    fn test_origin_depth_at_a_twin_is_the_true_read_depth() {
+        // 20 reads at L count 1/2 each and so do their 20 twins at P.
+        let site = twin_site();
+        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+        assert!(close(site.fragment_coverage_at("chr1", 2075, 100), 30.0));
+    }
+
+    #[test]
+    fn test_duplicate_and_qc_fail_reads_add_no_depth() {
+        // R3.
+        let mut site = twin_site();
+        let copy = site.records[0].clone();
+        site.records.push(OriginRecord { name: "dup".into(), duplicate: true, ..copy.clone() });
+        site.records.push(OriginRecord { name: "qc".into(), qc_fail: true, ..copy });
+        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+    }
+
+    #[test]
+    fn test_reads_spike_cannot_remove_add_no_depth() {
+        // R6: a read at L whose mapped mate spike never read is kept (R4),
+        // so its depth must not pay for new reads on top of it.
+        let mut site = twin_site();
+        let copy = site.records[0].clone();
+        site.records.push(OriginRecord { name: "stray".into(), mate_unmapped: false, ..copy });
+        assert!(!site.removable_names().contains(&"stray".to_string()));
+        assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
+    }
+
+    #[test]
+    fn test_fragments_are_the_names_with_a_placement_in_the_footprint() {
+        let mut site = twin_site();
+        site.records.push(record("unique_at_p", true, 12_500, 60, &[]));
+        let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
+        assert_eq!(names.len(), 40);
+        assert!(!names.contains(&"unique_at_p"));
+    }
+
+    fn pair(name: &str, start: u64, span: u64, bases: usize) -> ReadPair {
+        ReadPair {
+            name: name.to_string(),
+            seq1: vec![b'A'; bases],
+            qual1: vec![b'I'; bases],
+            seq2: vec![b'A'; bases],
+            qual2: vec![b'I'; bases],
+            ref_start: start,
+            ref_end: start + span,
+            insert_size: span as i64,
+            chrom: "chr1".to_string(),
+        }
+    }
+
+    pub(super) fn pool(pairs: Vec<ReadPair>) -> ReadPool {
+        ReadPool { pairs, frag_dist: crate::stats::FragmentDist::from_stats(400.0, 80.0) }
+    }
+
+    #[test]
+    fn test_f_is_fragment_span_over_read_bases_across_the_whole_pool() {
+        // R1: 400 bp fragments of two 150 bp reads, far from any footprint.
+        let p = pool((0..30).map(|i| pair(&format!("r{}", i), 500_000 + 10 * i, 400, 150)).collect());
+        assert!(close(fragment_to_read_ratio(&p).unwrap(), 400.0 / 300.0));
+    }
+
+    #[test]
+    fn test_f_refuses_a_pool_without_bases() {
+        let p = pool(vec![pair("r", 0, 400, 0)]);
+        assert!(fragment_to_read_ratio(&p).is_err());
     }
 }
