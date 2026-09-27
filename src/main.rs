@@ -685,6 +685,9 @@ fn main() -> Result<()> {
                 Some(site),
                 &mut rng,
             )?,
+            // Keep this call to simulate_event, a pure forwarder that passes
+            // None: main is its only production caller, so collapsing this
+            // match orphans it and adds a clippy warning this branch forbids.
             None => simulate::simulate_event(
                 i + 1,
                 event,
@@ -748,6 +751,9 @@ fn main() -> Result<()> {
         origin_removed = origin::decide(&chances, &mut rng);
         simulate::apply_removals(&mut event_outputs, &origin_removed);
         for (stat, output) in event_stats.iter_mut().zip(&event_outputs) {
+            // apply_removals moved the removed pairs out of kept_originals into
+            // suppressed_names, so both halves of this stat went stale at once.
+            stat.kept = output.kept_originals.len();
             stat.suppressed = output.suppressed_count;
         }
         for (label, site) in &origin_sites {
@@ -1569,7 +1575,7 @@ fn origin_footprint(event: &SimEvent, contig_len: u64) -> Option<origin::Span> {
     Some(origin::Span::new(
         chrom,
         start.saturating_sub(HAP_FLANK),
-        (end + HAP_FLANK).min(contig_len),
+        end.saturating_add(HAP_FLANK).min(contig_len),
     ))
 }
 
