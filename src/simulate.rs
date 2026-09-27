@@ -1109,9 +1109,8 @@ fn depth_fold_by(
 /// the way `cov` is: [`estimate_coverage_at`] on the same pool, the bin as its
 /// window. Measuring only; nothing here changes what is tiled.
 fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthFold {
-    depth_fold_by(haplotype, cov, &|chrom, pos, window| {
-        estimate_coverage_at(pool, chrom, pos, window)
-    })
+    let depth = PoolDepth::new(pool);
+    depth_fold_by(haplotype, cov, &|chrom, pos, window| depth.coverage_at(chrom, pos, window))
 }
 
 /// Estimate fragment depth at a reference position on `chrom`.
@@ -1122,24 +1121,50 @@ fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthF
 /// Only pairs on `chrom` count: a fusion pool holds both partners, and the
 /// other partner's reads can sit at the same coordinates (M9).
 fn estimate_coverage_at(pool: &ReadPool, chrom: &str, pos: u64, window: u64) -> f64 {
-    let points = coverage_sample_points(pos, window);
-    let mut total = 0usize;
+    PoolDepth::new(pool).coverage_at(chrom, pos, window)
+}
 
-    for &sample_pos in &points {
-        // Binary search: skip pairs that start after sample_pos (they can't
-        // overlap it). The pool is sorted by ref_start, so partition_point
-        // gives us the exact cutoff.
-        let upper = pool
+/// The donor pool's depth, ready to be asked at many positions.
+///
+/// At each point only the pairs that start close enough to reach it are
+/// checked: none starts `longest` or more before the point and still covers
+/// it. Checking every pair that starts before the point instead made the
+/// depth fold, which asks once per 1 kb bin, grow with the square of the
+/// event: 243 s of a 3 Mb DUP's 281 s on the 35x chr20 BAM.
+struct PoolDepth<'a> {
+    pool: &'a ReadPool,
+    /// The longest pair's reference span.
+    longest: u64,
+}
+
+impl<'a> PoolDepth<'a> {
+    fn new(pool: &'a ReadPool) -> Self {
+        let longest = pool
             .pairs
-            .partition_point(|p| p.ref_start <= sample_pos);
-        let count = pool.pairs[..upper]
             .iter()
-            .filter(|p| p.ref_end > sample_pos && p.chrom == chrom)
-            .count();
-        total += count;
+            .map(|p| p.ref_end.saturating_sub(p.ref_start))
+            .max()
+            .unwrap_or(0);
+        PoolDepth { pool, longest }
     }
 
-    total as f64 / points.len() as f64
+    /// See [`estimate_coverage_at`].
+    fn coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
+        let points = coverage_sample_points(pos, window);
+        let pairs = &self.pool.pairs;
+        let mut total = 0usize;
+        for &sample_pos in &points {
+            // The pool is sorted by ref_start: pairs from `upper` on start
+            // after the point, and pairs before `lower` end before it.
+            let upper = pairs.partition_point(|p| p.ref_start <= sample_pos);
+            let lower = pairs[..upper].partition_point(|p| p.ref_start + self.longest <= sample_pos);
+            total += pairs[lower..upper]
+                .iter()
+                .filter(|p| p.ref_end > sample_pos && p.chrom == chrom)
+                .count();
+        }
+        total as f64 / points.len() as f64
+    }
 }
 
 /// The points [`estimate_coverage_at`] and `origin`'s read depth sample:
@@ -3596,6 +3621,108 @@ mod tests {
                     pos,
                     window,
                     x
+                );
+            }
+        }
+    }
+
+    /// 2000 pairs sorted by start, as `build_read_pool` leaves a pool: most
+    /// of 300-700 bp, on chr1 and chr2, and every 400th one 5-60 kb long, which
+    /// a search bounded by a typical fragment length would miss.
+    fn uneven_pool() -> ReadPool {
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut pairs: Vec<ReadPair> = (0..2000)
+            .map(|i| {
+                let start = rng.gen_range(0..200_000u64);
+                let span = if i % 400 == 0 { rng.gen_range(5_000..60_000) } else { rng.gen_range(300..700) };
+                let chrom = if i % 3 == 0 { "chr2" } else { "chr1" };
+                make_pair_on(chrom, &format!("q{}", i), start, start + span)
+            })
+            .collect();
+        pairs.sort_by_key(|p| p.ref_start);
+        make_pool(pairs)
+    }
+
+    #[test]
+    fn test_pool_depth_counts_what_checking_every_pair_counts() {
+        // The depth fold asks once per 1 kb bin, so PoolDepth looks only at
+        // the pairs that start close enough to reach a point. It must count
+        // exactly what checking every pair counts, the long pairs included.
+        let pool = uneven_pool();
+        let depth = PoolDepth::new(&pool);
+        for pos in (0..210_000u64).step_by(1999) {
+            for window in [1, 1000, 2000] {
+                let points = coverage_sample_points(pos, window);
+                let every: usize = points
+                    .iter()
+                    .map(|&at| {
+                        pool.pairs.iter().filter(|p| p.chrom == "chr1" && p.ref_start <= at && at < p.ref_end).count()
+                    })
+                    .sum();
+                assert_eq!(
+                    depth.coverage_at("chr1", pos, window),
+                    every as f64 / points.len() as f64,
+                    "pos {} window {}",
+                    pos,
+                    window
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_origin_depth_sums_what_summing_every_placement_sums() {
+        // OriginDepth looks only at the placements that start close enough to
+        // reach the window, then sums them in record order, so each depth is
+        // bit-equal to summing every placement: the same additions, in the
+        // same order. Placements: MAPQ 0 and 30, 0-2 XA hits, every 97th hit
+        // 40 kb long, on chr1 and chr2.
+        let mut rng = StdRng::seed_from_u64(11);
+        let records: Vec<OriginRecord> = (0..1500u64)
+            .map(|i| {
+                let start = rng.gen_range(0..100_000u64);
+                let chrom = if i % 4 == 0 { "chr2" } else { "chr1" };
+                let primary = Span::new(chrom, start, start + rng.gen_range(100..160));
+                let alts: Vec<Span> = (0..i % 3)
+                    .map(|_| {
+                        let s = rng.gen_range(0..100_000u64);
+                        Span::new("chr1", s, s + if i % 97 == 0 { 40_000 } else { 150 })
+                    })
+                    .collect();
+                let mapq = if i % 5 == 0 { 30 } else { 0 };
+                OriginRecord {
+                    placements: origin::placements(primary, mapq, &alts),
+                    mate_unmapped: true,
+                    ..origin_read(&format!("z{}", i), true, start)
+                }
+            })
+            .collect();
+        let site = OriginSite { footprint: Span::new("chr1", 0, 200_000), lookalikes: vec![], records, f: 1.0 };
+        let removable: BTreeSet<String> = site.removable_names().into_iter().collect();
+        let every: Vec<&origin::Placement> = site
+            .records
+            .iter()
+            .filter(|r| removable.contains(&r.name))
+            .flat_map(|r| r.placements.iter())
+            .collect();
+        let depth = site.depth();
+        for pos in (0..110_000u64).step_by(1499) {
+            for window in [1, 1000, 2000] {
+                let points = coverage_sample_points(pos, window);
+                let summed = points.iter().fold(0.0, |total, &at| {
+                    total
+                        + every
+                            .iter()
+                            .filter(|p| p.span.chrom == "chr1" && p.span.start <= at && at < p.span.end)
+                            .map(|p| p.chance)
+                            .sum::<f64>()
+                }) / points.len() as f64;
+                assert_eq!(
+                    depth.read_coverage_at("chr1", pos, window).to_bits(),
+                    summed.to_bits(),
+                    "pos {} window {}",
+                    pos,
+                    window
                 );
             }
         }

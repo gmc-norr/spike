@@ -369,15 +369,22 @@ impl OriginSite {
     /// event four times slower than under `clean` (PD-26).
     pub fn depth(&self) -> OriginDepth<'_> {
         let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
-        OriginDepth {
-            placements: self
-                .records
-                .iter()
-                .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
-                .flat_map(|r| r.placements.iter())
-                .collect(),
-            f: self.f,
+        let placements: Vec<&Placement> = self
+            .records
+            .iter()
+            .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
+            .flat_map(|r| r.placements.iter())
+            .collect();
+        let mut by_chrom: HashMap<&str, ContigStarts> = HashMap::new();
+        for (i, &p) in placements.iter().enumerate() {
+            let contig = by_chrom.entry(p.span.chrom.as_str()).or_default();
+            contig.starts.push((p.span.start, i));
+            contig.longest = contig.longest.max(p.span.end.saturating_sub(p.span.start));
         }
+        for contig in by_chrom.values_mut() {
+            contig.starts.sort_unstable();
+        }
+        OriginDepth { placements, by_chrom, f: self.f }
     }
 }
 
@@ -385,7 +392,19 @@ impl OriginSite {
 /// and its `f`. Made by [`OriginSite::depth`].
 pub struct OriginDepth<'a> {
     placements: Vec<&'a Placement>,
+    /// A query checks only the placements that start close enough to reach
+    /// its window; checking all of them per 1 kb bin made the depth fold grow
+    /// with the square of the event (103 s of a 3 Mb DUP on the 35x chr20 BAM).
+    by_chrom: HashMap<&'a str, ContigStarts>,
     f: f64,
+}
+
+/// One contig's placements in an [`OriginDepth`]: each one's start and its
+/// index in `placements`, sorted by start, and the longest one's span.
+#[derive(Default)]
+struct ContigStarts {
+    starts: Vec<(u64, usize)>,
+    longest: u64,
 }
 
 impl OriginDepth<'_> {
@@ -396,12 +415,24 @@ impl OriginDepth<'_> {
     pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
         let points = crate::simulate::coverage_sample_points(pos, window);
         let (first, last) = (points[0], points[points.len() - 1]);
-        let placed: Vec<&Placement> = self
-            .placements
-            .iter()
-            .copied()
-            .filter(|p| p.span.chrom == chrom && p.span.start <= last && first < p.span.end)
-            .collect();
+        let placed: Vec<&Placement> = match self.by_chrom.get(chrom) {
+            None => Vec::new(),
+            Some(ContigStarts { starts, longest }) => {
+                // Sorted by start: entries from `hi` on start after the last
+                // point, and entries before `lo` end before the first.
+                let hi = starts.partition_point(|&(start, _)| start <= last);
+                let lo = starts[..hi].partition_point(|&(start, _)| start + longest <= first);
+                let mut picked: Vec<usize> = starts[lo..hi]
+                    .iter()
+                    .map(|&(_, i)| i)
+                    .filter(|&i| first < self.placements[i].span.end)
+                    .collect();
+                // Back in record order, so the sums below add in the order
+                // they always did and every depth stays bit-equal.
+                picked.sort_unstable();
+                picked.into_iter().map(|i| self.placements[i]).collect()
+            }
+        };
         // Folded from +0.0: an empty f64 sum is -0.0 (PD-32).
         let total = points.iter().fold(0.0, |total, &at| {
             total
@@ -570,65 +601,102 @@ fn origin_record(
     })
 }
 
-/// Every primary record overlapping `span`, from a BAM or a CRAM, or `None`
-/// when the file's header has no contig named `span.chrom`.
-///
-/// A look-alike region can land on a contig the header does not have: a BAM
-/// aligned to GRCh38 with its alt contigs and then re-headered down to the
-/// no_alt set -- what `scripts/validate_pipeline.sh` forces every background
-/// BAM to be, since Delly refuses anything else -- keeps its reads' `XA` hits
-/// on the contigs the header lost. Querying such a region raises noodles'
-/// "region reference sequence does not exist in reference sequences", which
-/// used to abort the whole run. The header decides, so no other query error is
-/// swallowed, and [`gather`] counts the skips and logs them once.
-fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Option<Vec<OriginRecord>>> {
-    let region = noodles::core::Region::new(
-        span.chrom.as_str(),
-        crate::extract::safe_noodles_position(span.start + 1)
-            ..=crate::extract::safe_noodles_position(span.end),
-    );
-    let mut out = Vec::new();
-    if crate::extract::is_cram(bam_path) {
-        let repository = crate::extract::build_fasta_repository(ref_path)?;
-        let (mut reader, header) =
-            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
-                .context("failed to open CRAM for the origin scan")?;
-        let queried = header
-            .reference_sequences()
-            .get_index_of(span.chrom.as_bytes());
-        // Not in the header: skip the region rather than let query() raise.
-        if queried.is_none() {
-            return Ok(None);
-        }
-        for result in reader.query(&header, &region)? {
-            let buf = result?.try_into_alignment_record(&header)?;
-            // A container holding several contigs is decoded whole (L2, N4).
-            if !crate::extract::record_is_on_queried_reference(&buf, queried) {
-                continue;
-            }
-            out.extend(origin_record(&header, &buf));
-        }
-    } else {
-        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
-            .build_from_path(bam_path)
-            .with_context(|| format!("failed to open BAM for the origin scan: {}", bam_path))?;
-        let header = reader.read_header()?;
-        // Not in the header: skip the region rather than let query() raise.
-        if header
-            .reference_sequences()
-            .get_index_of(span.chrom.as_bytes())
-            .is_none()
-        {
-            return Ok(None);
-        }
-        for result in reader.query(&header, &region)? {
-            let record = result?;
-            let buf =
-                noodles::sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)?;
-            out.extend(origin_record(&header, &buf));
+/// The file [`gather`] reads, opened once for the footprint and every
+/// look-alike region. Reopening a BAM and reloading its index per region cost
+/// 34-45 ms a region on the 35x chr20 BAM: 17.5 s over a 1 Mb DEL's 514
+/// regions, 88 s over a 3 Mb DEL's 1938. A CRAM is still opened per region,
+/// since each query prunes the index to its own region (M15); its regions
+/// share one reference repository and its cache.
+enum Source {
+    Bam(Box<BamSource>),
+    Cram {
+        path: String,
+        repository: noodles::fasta::Repository,
+    },
+}
+
+/// An open, indexed BAM and its header.
+struct BamSource {
+    reader: noodles::bam::io::IndexedReader<noodles::bgzf::Reader<std::fs::File>>,
+    header: noodles::sam::Header,
+}
+
+impl Source {
+    fn open(bam_path: &str, ref_path: &str) -> Result<Self> {
+        if crate::extract::is_cram(bam_path) {
+            Ok(Source::Cram {
+                path: bam_path.to_string(),
+                repository: crate::extract::build_fasta_repository(ref_path)?,
+            })
+        } else {
+            let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+                .build_from_path(bam_path)
+                .with_context(|| format!("failed to open BAM for the origin scan: {}", bam_path))?;
+            let header = reader.read_header()?;
+            Ok(Source::Bam(Box::new(BamSource { reader, header })))
         }
     }
-    Ok(Some(out))
+
+    /// Every primary record overlapping `span`, or `None` when the file's
+    /// header has no contig named `span.chrom`.
+    ///
+    /// A look-alike region can land on a contig the header does not have: a
+    /// BAM aligned to GRCh38 with its alt contigs and then re-headered down to
+    /// the no_alt set -- what `scripts/validate_pipeline.sh` forces every
+    /// background BAM to be, since Delly refuses anything else -- keeps its
+    /// reads' `XA` hits on the contigs the header lost. Querying such a region
+    /// raises noodles' "region reference sequence does not exist in reference
+    /// sequences", which used to abort the whole run. The header decides, so no
+    /// other query error is swallowed, and [`gather`] counts the skips and logs
+    /// them once.
+    fn scan(&mut self, span: &Span) -> Result<Option<Vec<OriginRecord>>> {
+        let region = noodles::core::Region::new(
+            span.chrom.as_str(),
+            crate::extract::safe_noodles_position(span.start + 1)
+                ..=crate::extract::safe_noodles_position(span.end),
+        );
+        let mut out = Vec::new();
+        match self {
+            Source::Cram { path, repository } => {
+                let (mut reader, header) =
+                    crate::extract::open_cram_reader_for_region(path, repository, &region)
+                        .context("failed to open CRAM for the origin scan")?;
+                let queried = header
+                    .reference_sequences()
+                    .get_index_of(span.chrom.as_bytes());
+                // Not in the header: skip the region rather than let query() raise.
+                if queried.is_none() {
+                    return Ok(None);
+                }
+                for result in reader.query(&header, &region)? {
+                    let buf = result?.try_into_alignment_record(&header)?;
+                    // A container holding several contigs is decoded whole (L2, N4).
+                    if !crate::extract::record_is_on_queried_reference(&buf, queried) {
+                        continue;
+                    }
+                    out.extend(origin_record(&header, &buf));
+                }
+            }
+            Source::Bam(bam) => {
+                let BamSource { reader, header } = &mut **bam;
+                // Not in the header: skip the region rather than let query() raise.
+                if header
+                    .reference_sequences()
+                    .get_index_of(span.chrom.as_bytes())
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                for result in reader.query(header, &region)? {
+                    let record = result?;
+                    let buf =
+                        noodles::sam::alignment::RecordBuf::try_from_alignment_record(header, &record)?;
+                    out.extend(origin_record(header, &buf));
+                }
+            }
+        }
+        Ok(Some(out))
+    }
 }
 
 /// How many records, from the start of the file, [`require_xa`] reads
@@ -697,7 +765,8 @@ pub fn gather(
     read_length: usize,
     pool: &ReadPool,
 ) -> Result<OriginSite> {
-    let spot = scan(bam_path, ref_path, footprint)?.ok_or_else(|| {
+    let mut source = Source::open(bam_path, ref_path)?;
+    let spot = source.scan(footprint)?.ok_or_else(|| {
         anyhow::anyhow!(
             "the BAM's header has no contig named {}, so the event's own footprint {} \
              cannot be read",
@@ -711,7 +780,7 @@ pub fn gather(
     let mut records = spot;
     let mut skipped: Vec<&str> = Vec::new();
     for region in &lookalikes {
-        let Some(found) = scan(bam_path, ref_path, region)? else {
+        let Some(found) = source.scan(region)? else {
             skipped.push(region.chrom.as_str());
             continue;
         };
