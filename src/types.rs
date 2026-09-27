@@ -80,7 +80,7 @@ impl SimEvent {
     /// Whether this event's donor pool is drawn from more than one locus.
     ///
     /// `extract_pool_for_event` searches two windows for a multi-locus event
-    /// and one for everything else, and `donor_coverage_for_tiling` demands
+    /// and one for everything else, and `coverage_for_tiling` demands
     /// donor coverage at *every* breakpoint side of a multi-locus event but
     /// only *somewhere* around a single-locus one. Those two rules have to
     /// agree, and they used to be two independent `SimEvent::Fusion` patterns

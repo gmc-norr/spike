@@ -270,18 +270,14 @@ fn simulate_event_inner(
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
         .unwrap_or((sv_chrom.clone(), sv_start));
-    let (cov, uncovered_breakpoint_sides) = match origin {
-        Some(site) => {
-            origin_coverage_for_tiling(site, haplotype, pool, (&first_bp_chrom, first_bp_ref))?
-        }
-        None => donor_coverage_for_tiling(
-            event,
-            haplotype,
-            pool,
-            (&sv_chrom, sv_start, sv_end),
-            (&first_bp_chrom, first_bp_ref),
-        )?,
-    };
+    let (cov, uncovered_breakpoint_sides) = coverage_for_tiling(
+        event,
+        haplotype,
+        pool,
+        origin,
+        (&sv_chrom, sv_start, sv_end),
+        (&first_bp_chrom, first_bp_ref),
+    )?;
 
     // CR2: measured only. The tiling below still scales every fragment by
     // `cov`; this says how far the donor's own depth is from it. Under origin
@@ -563,13 +559,21 @@ fn breakpoint_sides(haplotype: &VariantHaplotype) -> Vec<(String, u64)> {
 /// Returned alongside it: the sides the event was kept *despite*. Keeping it
 /// is right, but it is not nothing -- the haplotype still spans those sides,
 /// so the fragments tiled across them are scaled by depth measured somewhere
-/// else and land where the input BAM has no read. The caller logs that and
-/// puts it in the run README; a silent coverage island is what this return
-/// value exists to prevent.
-fn donor_coverage_for_tiling(
+/// else and land where the input BAM has no read. This logs that, and the
+/// caller puts it in the run README; a silent coverage island is what this
+/// return value exists to prevent.
+///
+/// Under `--edit-model origin` (R1), `origin` is the event's site and the
+/// depth is its origin depth in fragment units, not the pool's, which is 0
+/// inside a perfect twin. Only events that remove reads get a site, and those
+/// come from one locus, so the fusion rule does not arise there. The two
+/// models share this one function so they cannot drift: origin's former copy
+/// had already dropped the warning below (PD-14, PD-30).
+fn coverage_for_tiling(
     event: &SimEvent,
     haplotype: &VariantHaplotype,
     pool: &ReadPool,
+    origin: Option<&crate::origin::OriginSite>,
     event_span: (&str, u64, u64),
     fallback_bp: (&str, u64),
 ) -> Result<(f64, Vec<String>)> {
@@ -580,9 +584,13 @@ fn donor_coverage_for_tiling(
         sides.push((fallback_bp.0.to_string(), fallback_bp.1));
     }
 
+    let origin_depth = origin.map(|site| site.depth());
     let covs: Vec<f64> = sides
         .iter()
-        .map(|(chrom, pos)| estimate_coverage_at(pool, chrom, *pos, 2000))
+        .map(|(chrom, pos)| match &origin_depth {
+            Some(depth) => depth.fragment_coverage_at(chrom, *pos, 2000),
+            None => estimate_coverage_at(pool, chrom, *pos, 2000),
+        })
         .collect();
     let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
 
@@ -602,14 +610,30 @@ fn donor_coverage_for_tiling(
         .collect();
 
     if !refuse {
-        let cov = covs
+        let (first, cov) = covs
             .iter()
             .copied()
-            .find(|&c| covered(c))
+            .enumerate()
+            .find(|&(_, c)| covered(c))
             .expect("a kept event has at least one covered breakpoint side");
+        if origin.is_some() {
+            let (chrom, pos) = &sides[first];
+            log::info!(
+                "  origin depth at {}:{}: {:.1}x (the donor pool's there: {:.1}x)",
+                chrom,
+                pos,
+                cov,
+                estimate_coverage_at(pool, chrom, *pos, 2000),
+            );
+        }
         if !uncovered.is_empty() {
+            let bare = if origin.is_some() {
+                "the origin depth is 0 at"
+            } else {
+                "the donor pool has no reads over"
+            };
             log::warn!(
-                "event {}:{}-{} is kept although the donor pool has no reads over \
+                "event {}:{}-{} is kept although {} \
                  {}: one bare breakpoint side is the far edge of a sliced or panel \
                  BAM, not a reason to refuse. But the haplotype spans every side, \
                  so the fragments tiled across the bare part are scaled by the \
@@ -619,6 +643,7 @@ fn donor_coverage_for_tiling(
                 event_span.0,
                 event_span.1,
                 event_span.2,
+                bare,
                 uncovered.join(", "),
                 cov,
             );
@@ -627,6 +652,16 @@ fn donor_coverage_for_tiling(
     }
 
     let positions = uncovered.join(", ");
+    if let Some(site) = origin {
+        anyhow::bail!(
+            "event over {} has no origin depth at any of its breakpoints ({}): no read at \
+             the spot or at its {} look-alike region(s) could have come from there, so \
+             spike would invent the reads it plants and still write a truth VCF beside them.",
+            site.footprint,
+            positions,
+            site.lookalikes.len(),
+        );
+    }
     // "one side" only when it is one: the parenthesis lists them all, so the
     // singular contradicted the message's own evidence.
     let scope = if is_fusion {
@@ -657,59 +692,6 @@ fn donor_coverage_for_tiling(
         positions,
         pool.pairs.len(),
     );
-}
-
-/// [`donor_coverage_for_tiling`] under `--edit-model origin` (R1).
-///
-/// The depth is the site's origin depth in fragment units, not the pool's,
-/// which is 0 inside a perfect twin. The event is refused only when no
-/// breakpoint side has origin depth above 0; the depth returned is the first
-/// covered side's. Only events that remove reads get a site, and those come
-/// from one locus, so the fusion rule does not arise.
-fn origin_coverage_for_tiling(
-    site: &crate::origin::OriginSite,
-    haplotype: &VariantHaplotype,
-    pool: &ReadPool,
-    fallback_bp: (&str, u64),
-) -> Result<(f64, Vec<String>)> {
-    let mut sides = breakpoint_sides(haplotype);
-    if sides.is_empty() {
-        sides.push((fallback_bp.0.to_string(), fallback_bp.1));
-    }
-    let depth = site.depth();
-    let covs: Vec<f64> = sides
-        .iter()
-        .map(|(chrom, pos)| depth.fragment_coverage_at(chrom, *pos, 2000))
-        .collect();
-    let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
-    let uncovered: Vec<String> = sides
-        .iter()
-        .zip(&covs)
-        .filter(|(_, &c)| !covered(c))
-        .map(|((chrom, pos), _)| format!("{}:{}", chrom, pos))
-        .collect();
-    let Some(((chrom, pos), cov)) = sides
-        .iter()
-        .zip(covs.iter().copied())
-        .find(|(_, c)| covered(*c))
-    else {
-        anyhow::bail!(
-            "event over {} has no origin depth at any of its breakpoints ({}): no read at \
-             the spot or at its {} look-alike region(s) could have come from there, so \
-             spike would invent the reads it plants and still write a truth VCF beside them.",
-            site.footprint,
-            uncovered.join(", "),
-            site.lookalikes.len(),
-        );
-    };
-    log::info!(
-        "  origin depth at {}:{}: {:.1}x (the donor pool's there: {:.1}x)",
-        chrom,
-        pos,
-        cov,
-        estimate_coverage_at(pool, chrom, *pos, 2000),
-    );
-    Ok((cov, uncovered))
 }
 
 /// The number of fragments to tile, and the fraction they actually plant
@@ -2381,7 +2363,7 @@ mod tests {
 
     #[test]
     fn test_only_a_fusion_is_drawn_from_more_than_one_locus() {
-        // `extract_pool_for_event` (main.rs) and `donor_coverage_for_tiling`
+        // `extract_pool_for_event` (main.rs) and `coverage_for_tiling`
         // (here) both key on this, in two files with no shared helper. The
         // match behind it is exhaustive, so a new event type cannot be added
         // without answering the question; this pins today's answers.
@@ -2577,7 +2559,7 @@ mod tests {
 
         // Pool: 100 pairs near each partner's breakpoint. A fusion is
         // extracted from both loci, so both carry donor reads; a pool holding
-        // only gene A's is the shape `donor_coverage_for_tiling` refuses.
+        // only gene A's is the shape `coverage_for_tiling` refuses.
         let mut pairs = make_covering_pool(8000, 11000, 100).pairs;
         pairs.extend(make_covering_pool(19000, 22000, 100).pairs.into_iter().map(
             |mut p| {
@@ -2833,6 +2815,33 @@ mod tests {
             vec!["chr1:1999".to_string()],
             "an event kept on partial donor coverage must name the sides with none"
         );
+    }
+
+    #[test]
+    fn test_origin_warns_about_a_bare_breakpoint_side_as_clean_does() {
+        // PD-30: origin's copy of the coverage check returned the bare sides
+        // but dropped the warning `clean` logs for them. Same shape as the
+        // test above: DEL chr1:2000-7000, reads over the right side only.
+        crate::loh::tests::capture::install();
+        let mut hap = del_haplotype(2000, 5000);
+        let pool = make_covering_pool(6500, 7500, 100);
+        let records = (0..40u64)
+            .flat_map(|i| {
+                let s = 6500 + 20 * i;
+                [origin_read(&format!("w{}", i), true, s), origin_read(&format!("w{}", i), false, s + 250)]
+            })
+            .collect();
+        let site = OriginSite { footprint: Span::new("chr1", 0, 9000), lookalikes: vec![], records, f: 1.0 };
+        let mut rng = StdRng::seed_from_u64(42);
+        let out = simulate_event_origin(
+            1, &del_event(2000, 7000), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.2, Some(&site), &mut rng,
+        )
+        .unwrap();
+        assert_eq!(out.uncovered_breakpoint_sides, vec!["chr1:1999".to_string()]);
+        let warned = crate::loh::tests::capture::warnings_matching(
+            "event chr1:2000-7000 is kept although the origin depth is 0 at chr1:1999",
+        );
+        assert_eq!(warned.len(), 1, "{:?}", warned);
     }
 
     #[test]

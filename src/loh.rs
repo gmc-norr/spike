@@ -1204,7 +1204,7 @@ fn walk_cigar_collect(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rand::SeedableRng;
 
@@ -1264,7 +1264,7 @@ mod tests {
 
     /// Collects `log::warn!` messages so a test can assert which branch a
     /// call took. The logger is global, so tests filter by their own path.
-    mod capture {
+    pub(crate) mod capture {
         use std::sync::{Mutex, OnceLock};
 
         static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());

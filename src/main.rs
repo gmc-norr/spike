@@ -1406,7 +1406,7 @@ fn extract_pool_for_event(
         // on how many loci an event is drawn from live in two files, so tie
         // them together here: a multi-locus event that reached this branch
         // would fill its pool from one window and then be graded by
-        // `donor_coverage_for_tiling`'s permissive rule.
+        // `coverage_for_tiling`'s permissive rule.
         debug_assert!(
             !event.is_multi_locus(),
             "a multi-locus event must extract one window per locus: {:?}",
