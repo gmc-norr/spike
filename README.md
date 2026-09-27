@@ -474,6 +474,17 @@ That is the review's `lowmap` probe, half of whose pairs are at MAPQ 0: a deleti
 
   On the pipeline's six, `--min-mapq 0` brings five under 0.5. The sixth, `chr20:63093346-63094243`, stays at 11 of 18. Those 11 are all at MAPQ 20 or above, but none is a proper pair (one has an unmapped mate), so MAPQ is not what keeps them out.
 
+#### Editing hard spots: `--edit-model origin` (experimental)
+
+`--min-mapq 0` makes the MAPQ 0 reads editable, but it removes each one as if it certainly came from the event. It also never touches the look-alike copy the aligner split those reads with. `--edit-model origin` models what a real variant does there instead:
+
+- Every primary read over the event's footprint (the event ± 2 kb), and over its look-alike regions, gets a chance of having come from the footprint. The chance comes from its MAPQ and its `XA` alternative hits.
+- It is removed by that chance times its copy's rate, but only if spike's new reads can replace it: every mapped mate could have come from inside the footprint.
+- Chances from several events add up. A duplicate shares its original's fate.
+- The number of new reads comes from where reads came from (the origin depth). It does not come from the donor pool, which can be empty inside a perfect twin.
+
+It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the first 100,000 records of the BAM carries one. A spot whose MAPQ 0 reads lack `XA` is normal: under bwa-mem's `-h 5` rule their hits number more than 5, so each gets a chance of 1/6. At `chr20:7117236-7121236` in the 35x HG002 BAM, 822 reads are MAPQ 0 and 1 carries `XA`, yet the file's first 100,000 records hold 15,255 with it. The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
+
 `align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
@@ -1387,6 +1398,11 @@ Options:
           Duplication model: "full" (default) builds a full tandem haplotype with duplicated region appearing twice, producing both junction reads and correct depth increase from a single tiling pass. "junction" uses the legacy junction-only haplotype with separate depth copies
           
           [default: full]
+
+      --edit-model <EDIT_MODEL>
+          Which original reads an event replaces. "clean" (default): only the donor pool's pairs (both mates at --min-mapq or above, a proper pair, no duplicate, secondary, supplementary or QC-fail flag) inside the event's footprint. "origin" (experimental): every primary read at the event and at its look-alikes, each removed by its chance of having come from the edited copy, read from its MAPQ and its XA tag. It needs the aligner's XA tags (bwa-mem and bwa-mem2 write them)
+          
+          [default: clean]
 
   -h, --help
           Print help (see a summary with '-h')
