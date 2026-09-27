@@ -1391,9 +1391,9 @@ Options:
           [default: 42]
 
   -t, --threads <THREADS>
-          Threads for the align.sh and merge.sh scripts spike writes.
+          Threads for spike and for the align.sh and merge.sh scripts it writes.
           
-          The aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort -@, merge -@) get this many. spike itself runs on one thread.
+          spike splits the work that draws no random numbers across this many threads, so a given --seed gives the same output at any count. The aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort -@, merge -@) get this many too.
           
           [default: 4]
 

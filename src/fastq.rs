@@ -51,6 +51,31 @@ fn validate_quality(qual: &[u8], seq: &[u8], read_name: &str, mate: u8) -> Resul
     Ok(())
 }
 
+/// Write one mate's records of `pairs`, in order, to `file` as gzipped FASTQ.
+fn write_mate(file: std::fs::File, pairs: &[ReadPair], mate: u8, path: &Path) -> Result<()> {
+    // Use fast compression — these are intermediate files.
+    let mut gz = GzEncoder::new(std::io::BufWriter::new(file), Compression::fast());
+    let records = pairs.iter().try_for_each(|pair| -> std::io::Result<()> {
+        let (seq, qual) = if mate == 1 { (&pair.seq1, &pair.qual1) } else { (&pair.seq2, &pair.qual2) };
+        writeln!(gz, "@{}/{}", pair.name, mate)?;
+        gz.write_all(seq)?;
+        write!(gz, "\n+\n")?;
+        gz.write_all(qual)?;
+        writeln!(gz)
+    });
+    // `finish()` only flushes flate2's own internal buffer into the
+    // `BufWriter` it returns; small output can still be sitting unwritten in
+    // that `BufWriter`'s buffer. Without an explicit `flush()` here, a write
+    // error (e.g. a full disk) surfaces only when the `BufWriter` is dropped,
+    // where `Drop::flush` errors are silently discarded -- so a failed write
+    // would be reported as `Ok` (L4). It is finished even after a failed
+    // record, for the same reason.
+    let finished = gz.finish().and_then(|mut w| w.flush());
+    records
+        .with_context(|| format!("failed to write {}", path.display()))
+        .and(finished.with_context(|| format!("failed to finish writing {}", path.display())))
+}
+
 /// Write paired FASTQ files from a set of read pairs.
 ///
 /// Outputs:
@@ -74,46 +99,15 @@ pub fn write_paired_fastq(pairs: &[ReadPair], output_dir: &str) -> Result<(Strin
     let r2_file = std::fs::File::create(&r2_path)
         .with_context(|| format!("failed to create {}", r2_path.display()))?;
 
-    // Use fast compression — these are intermediate files.
-    let mut r1_gz = GzEncoder::new(std::io::BufWriter::new(r1_file), Compression::fast());
-    let mut r2_gz = GzEncoder::new(std::io::BufWriter::new(r2_file), Compression::fast());
-
-    for pair in pairs {
-        // Read 1.
-        writeln!(r1_gz, "@{}/1", pair.name)?;
-        r1_gz.write_all(&pair.seq1)?;
-        write!(r1_gz, "\n+\n")?;
-        r1_gz.write_all(&pair.qual1)?;
-        writeln!(r1_gz)?;
-
-        // Read 2.
-        writeln!(r2_gz, "@{}/2", pair.name)?;
-        r2_gz.write_all(&pair.seq2)?;
-        write!(r2_gz, "\n+\n")?;
-        r2_gz.write_all(&pair.qual2)?;
-        writeln!(r2_gz)?;
-    }
-
-    // `finish()` only flushes flate2's own internal buffer into the
-    // `BufWriter` it returns; small output can still be sitting unwritten
-    // in that `BufWriter`'s buffer. Without an explicit `flush()` here, a
-    // write error (e.g. a full disk) surfaces only when the `BufWriter` is
-    // dropped, where `Drop::flush` errors are silently discarded — so a
-    // failed write would be reported as `Ok` (L4).
-    //
-    // Both streams are finished and flushed unconditionally, before either
-    // error is propagated: an early `?` on R1 would leave `r2_gz` to be
-    // dropped unfinished, and `GzEncoder::drop` discards its own error the
-    // same way — reproducing the exact defect above for R2, for every run
-    // where R1 fails first.
-    let r1_result = r1_gz
-        .finish()
-        .and_then(|mut w| w.flush())
-        .with_context(|| format!("failed to finish writing {}", r1_path.display()));
-    let r2_result = r2_gz
-        .finish()
-        .and_then(|mut w| w.flush())
-        .with_context(|| format!("failed to finish writing {}", r2_path.display()));
+    // Each mate's file is its own stream, so the two are written side by
+    // side; each holds the same bytes as when they were written in turn.
+    // Both are finished and flushed before either error is propagated: an
+    // early `?` on R1 would leave R2 unfinished, and `GzEncoder::drop`
+    // discards its own error (L4).
+    let (r1_result, r2_result) = rayon::join(
+        || write_mate(r1_file, pairs, 1, &r1_path),
+        || write_mate(r2_file, pairs, 2, &r2_path),
+    );
 
     match (r1_result, r2_result) {
         (Ok(()), Ok(())) => {}
@@ -317,6 +311,46 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The gzip bytes one mate's file must hold: every pair's record for that
+    /// mate, in order, through the same encoder at the same level.
+    fn expected_gz(pairs: &[ReadPair], mate: u8) -> Vec<u8> {
+        let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+        for pair in pairs {
+            let (seq, qual) = if mate == 1 { (&pair.seq1, &pair.qual1) } else { (&pair.seq2, &pair.qual2) };
+            writeln!(gz, "@{}/{}", pair.name, mate).unwrap();
+            gz.write_all(seq).unwrap();
+            write!(gz, "\n+\n").unwrap();
+            gz.write_all(qual).unwrap();
+            writeln!(gz).unwrap();
+        }
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn test_each_file_holds_the_same_bytes_at_any_thread_count() {
+        // R1 and R2 may be written side by side; each must still be exactly
+        // what one encoder writing that mate's records in order produces.
+        let pairs: Vec<ReadPair> = (0..3000)
+            .map(|i| {
+                let mut p = pair_named(&format!("r{}", i), 151, vec![b'!' + (i % 40) as u8; 151], vec![b'!' + 30; 151]);
+                p.seq2 = vec![b"ACGT"[i % 4]; 151];
+                p
+            })
+            .collect();
+        for threads in [1, 4] {
+            let dir = scratch_dir(&format!("bytes{}", threads));
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| write_paired_fastq(&pairs, dir.to_str().unwrap()))
+                .unwrap();
+            assert!(std::fs::read(dir.join("R1.fq.gz")).unwrap() == expected_gz(&pairs, 1), "R1 at {} thread(s)", threads);
+            assert!(std::fs::read(dir.join("R2.fq.gz")).unwrap() == expected_gz(&pairs, 2), "R2 at {} thread(s)", threads);
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
     #[test]

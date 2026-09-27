@@ -20,7 +20,7 @@ mod types;
 mod validate;
 mod vcf_input;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -107,10 +107,12 @@ struct Args {
     #[arg(long, default_value_t = 42)]
     seed: u64,
 
-    /// Threads for the align.sh and merge.sh scripts spike writes.
+    /// Threads for spike and for the align.sh and merge.sh scripts it writes.
     ///
-    /// The aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort
-    /// -@, merge -@) get this many. spike itself runs on one thread.
+    /// spike splits the work that draws no random numbers across this many
+    /// threads, so a given --seed gives the same output at any count. The
+    /// aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort -@,
+    /// merge -@) get this many too.
     #[arg(short, long, default_value_t = 4)]
     threads: usize,
 
@@ -403,6 +405,13 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+
+    // One pool for every split in the run. Nothing drawn from `rng` runs in
+    // it, so the output does not depend on the count.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads.max(1))
+        .build_global()
+        .context("could not start spike's thread pool")?;
 
     // Validate inputs.
     validate_allele_fraction(args.allele_fraction)?;

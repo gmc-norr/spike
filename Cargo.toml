@@ -16,6 +16,7 @@ env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 flate2 = "1"
+rayon = "1"
 
 [profile.release]
 opt-level = 3
