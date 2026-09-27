@@ -45,10 +45,40 @@ pub fn simulate_event(
     vaf: f64,
     rng: &mut StdRng,
 ) -> Result<SplicedOutput> {
-    let copies = sample_copies_for_event(event, haplotype, config, synth_gen.reference(), rng)?;
-    simulate_event_with_copies(
-        event_index, event, pool, haplotype, config, synth_gen, vaf, &copies, rng,
+    simulate_event_origin(
+        event_index, event, pool, haplotype, config, synth_gen, vaf, None, rng,
     )
+}
+
+/// [`simulate_event`] under `--edit-model origin` when `origin` is `Some`.
+/// The site's fragments are judged by where they came from, and the pool's
+/// pairs are not suppressed here. `None` is exactly `simulate_event`.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_event_origin(
+    event_index: usize,
+    event: &SimEvent,
+    pool: &ReadPool,
+    haplotype: &mut VariantHaplotype,
+    config: &SimConfig,
+    synth_gen: &SynthReadGenerator,
+    vaf: f64,
+    origin: Option<&crate::origin::OriginSite>,
+    rng: &mut StdRng,
+) -> Result<SplicedOutput> {
+    let copies = sample_copies_for_event(event, haplotype, config, synth_gen.reference(), rng)?;
+    simulate_event_inner(
+        event_index, event, pool, haplotype, config, synth_gen, vaf, &copies, origin, rng,
+    )
+}
+
+/// Whether `event` only adds reads: a fusion, or a DUP under the legacy
+/// junction model. It removes no original, so `--edit-model` does not apply.
+pub fn is_additive(event: &SimEvent, dup_model: &str) -> bool {
+    match event {
+        SimEvent::Fusion { .. } => true,
+        SimEvent::Duplication { .. } => dup_model == "junction",
+        _ => false,
+    }
 }
 
 /// Read the sample's two copies over each reference region the haplotype
@@ -108,8 +138,6 @@ fn sample_copies_for_event(
     Ok(copies)
 }
 
-/// [`simulate_event`] with the sample's two copies already read, per
-/// reference region (chromosome) of the haplotype.
 #[allow(clippy::too_many_arguments)]
 fn simulate_event_with_copies(
     event_index: usize,
@@ -120,6 +148,26 @@ fn simulate_event_with_copies(
     synth_gen: &SynthReadGenerator,
     vaf: f64,
     copies: &[(String, loh::SampleCopies)],
+    rng: &mut StdRng,
+) -> Result<SplicedOutput> {
+    simulate_event_inner(
+        event_index, event, pool, haplotype, config, synth_gen, vaf, copies, None, rng,
+    )
+}
+
+/// [`simulate_event`] with the sample's two copies already read, per
+/// reference region (chromosome) of the haplotype.
+#[allow(clippy::too_many_arguments)]
+fn simulate_event_inner(
+    event_index: usize,
+    event: &SimEvent,
+    pool: &ReadPool,
+    haplotype: &mut VariantHaplotype,
+    config: &SimConfig,
+    synth_gen: &SynthReadGenerator,
+    vaf: f64,
+    copies: &[(String, loh::SampleCopies)],
+    origin: Option<&crate::origin::OriginSite>,
     rng: &mut StdRng,
 ) -> Result<SplicedOutput> {
     let name_prefix = format!("ev{:04}", event_index);
@@ -143,11 +191,7 @@ fn simulate_event_with_copies(
     // For fusions (and DUPs with legacy junction model), we keep all original
     // reads and add chimeric on top. For full tandem DUPs, we suppress+replace
     // like DEL/INV since the full haplotype provides both depth and junction reads.
-    let is_additive = match event {
-        SimEvent::Fusion { .. } => true,
-        SimEvent::Duplication { .. } => config.dup_model == "junction",
-        _ => false,
-    };
+    let is_additive = is_additive(event, &config.dup_model);
 
     // Above VAF 0.5 the event is on both copies in some cells, so part of the
     // synthetic reads come from the other copy. Its share of the added reads
@@ -178,6 +222,18 @@ fn simulate_event_with_copies(
     // reads near the breakpoint and DUP depth copies are added on top.
     let (hap_ref_start, hap_ref_end) = haplotype.ref_range().unwrap_or((sv_start, sv_end));
 
+    if let Some(site) = origin {
+        let footprint =
+            crate::origin::Span::new(haplotype.primary_chrom(), hap_ref_start, hap_ref_end);
+        anyhow::ensure!(
+            !is_additive && site.footprint == footprint,
+            "origin site {} does not match the haplotype's footprint {} -- this is a bug; \
+             please report it",
+            site.footprint,
+            footprint,
+        );
+    }
+
     let mut kept = Vec::new();
     let mut suppressed: Vec<String> = Vec::new();
 
@@ -185,7 +241,10 @@ fn simulate_event_with_copies(
         // Only pairs entirely inside the haplotype's reference footprint are
         // replaced. Tiled fragments never extend past the haplotype ends, so
         // suppressing pairs that stick out would leave a depth dip there.
-        let replaceable = !is_additive
+        // Under origin nothing is suppressed here: every event's chances are
+        // summed first and drawn once, in `origin::decide` (R5).
+        let replaceable = origin.is_none()
+            && !is_additive
             && classify_pair_relation(pair, hap_ref_start, hap_ref_end) == PairRelation::Inside;
         let copy = read_copy.get(&pair.name).copied();
         if replaceable && rng.gen::<f64>() < copy_rate(copy, vaf) {
@@ -202,17 +261,29 @@ fn simulate_event_with_copies(
         .first()
         .and_then(|&bp| haplotype.hap_to_ref(bp.saturating_sub(1)))
         .unwrap_or((sv_chrom.clone(), sv_start));
-    let (cov, uncovered_breakpoint_sides) = donor_coverage_for_tiling(
-        event,
-        haplotype,
-        pool,
-        (&sv_chrom, sv_start, sv_end),
-        (&first_bp_chrom, first_bp_ref),
-    )?;
+    let (cov, uncovered_breakpoint_sides) = match origin {
+        Some(site) => {
+            origin_coverage_for_tiling(site, haplotype, pool, (&first_bp_chrom, first_bp_ref))?
+        }
+        None => donor_coverage_for_tiling(
+            event,
+            haplotype,
+            pool,
+            (&sv_chrom, sv_start, sv_end),
+            (&first_bp_chrom, first_bp_ref),
+        )?,
+    };
 
     // CR2: measured only. The tiling below still scales every fragment by
-    // `cov`; this says how far the donor's own depth is from it.
-    let depth_fold = depth_fold(haplotype, pool, cov);
+    // `cov`; this says how far the donor's own depth is from it. Under origin
+    // each bin is measured with origin depth, the estimator `cov` came from
+    // (the T3 rule).
+    let depth_fold = match origin {
+        Some(site) => depth_fold_by(haplotype, cov, &|chrom, pos, window| {
+            site.fragment_coverage_at(chrom, pos, window)
+        }),
+        None => depth_fold(haplotype, pool, cov),
+    };
 
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
@@ -279,6 +350,9 @@ fn simulate_event_with_copies(
         uncovered_breakpoint_sides,
         adjusted_vaf,
         depth_fold,
+        origin_chances: origin
+            .map(|site| site.removal_chances(&read_copy, vaf))
+            .unwrap_or_default(),
     })
 }
 
@@ -324,6 +398,22 @@ pub fn combine_event_outputs(outputs: Vec<SplicedOutput>) -> Vec<ReadPair> {
     }
     dedup_by_name(&mut all_pairs);
     all_pairs
+}
+
+/// Under `--edit-model origin`, move each event's pool pairs that
+/// `origin::decide` removed from `kept_originals` to `suppressed_names`, so
+/// [`combine_event_outputs`] drops them and [`consumed_original_names`] still
+/// lists them. Removed names in no pool are the caller's to list.
+pub fn apply_removals(outputs: &mut [SplicedOutput], removed: &BTreeSet<String>) {
+    for output in outputs.iter_mut() {
+        let (gone, kept): (Vec<ReadPair>, Vec<ReadPair>) =
+            std::mem::take(&mut output.kept_originals)
+                .into_iter()
+                .partition(|p| removed.contains(&p.name));
+        output.kept_originals = kept;
+        output.suppressed_names.extend(gone.into_iter().map(|p| p.name));
+        output.suppressed_count = output.suppressed_names.len();
+    }
 }
 
 /// Deduplicate read pairs by name, keeping the last occurrence.
@@ -541,6 +631,58 @@ fn donor_coverage_for_tiling(
         positions,
         pool.pairs.len(),
     );
+}
+
+/// [`donor_coverage_for_tiling`] under `--edit-model origin` (R1).
+///
+/// The depth is the site's origin depth in fragment units, not the pool's,
+/// which is 0 inside a perfect twin. The event is refused only when no
+/// breakpoint side has origin depth above 0; the depth returned is the first
+/// covered side's. Only events that remove reads get a site, and those come
+/// from one locus, so the fusion rule does not arise.
+fn origin_coverage_for_tiling(
+    site: &crate::origin::OriginSite,
+    haplotype: &VariantHaplotype,
+    pool: &ReadPool,
+    fallback_bp: (&str, u64),
+) -> Result<(f64, Vec<String>)> {
+    let mut sides = breakpoint_sides(haplotype);
+    if sides.is_empty() {
+        sides.push((fallback_bp.0.to_string(), fallback_bp.1));
+    }
+    let covs: Vec<f64> = sides
+        .iter()
+        .map(|(chrom, pos)| site.fragment_coverage_at(chrom, *pos, 2000))
+        .collect();
+    let covered = |cov: f64| !cov.is_nan() && cov > 0.0;
+    let uncovered: Vec<String> = sides
+        .iter()
+        .zip(&covs)
+        .filter(|(_, &c)| !covered(c))
+        .map(|((chrom, pos), _)| format!("{}:{}", chrom, pos))
+        .collect();
+    let Some(((chrom, pos), cov)) = sides
+        .iter()
+        .zip(covs.iter().copied())
+        .find(|(_, c)| covered(*c))
+    else {
+        anyhow::bail!(
+            "event over {} has no origin depth at any of its breakpoints ({}): no read at \
+             the spot or at its {} look-alike region(s) could have come from there, so \
+             spike would invent the reads it plants and still write a truth VCF beside them.",
+            site.footprint,
+            uncovered.join(", "),
+            site.lookalikes.len(),
+        );
+    };
+    log::info!(
+        "  origin depth at {}:{}: {:.1}x (the donor pool's there: {:.1}x)",
+        chrom,
+        pos,
+        cov,
+        estimate_coverage_at(pool, chrom, *pos, 2000),
+    );
+    Ok((cov, uncovered))
 }
 
 /// The number of fragments to tile, and the fraction they actually plant
@@ -915,14 +1057,13 @@ fn tile_haplotype_reads(
     (pairs, plan.adjusted_vaf)
 }
 
-/// The largest fold between the donor's depth in any bin this haplotype's
-/// fragments are drawn from and `cov`, the depth they are all scaled by (CR2).
-///
-/// Each reference interval a segment is drawn from is cut into
-/// `max(1, round(len / 1000))` equal bins, and each bin's depth is measured
-/// the way `cov` is: [`estimate_coverage_at`] on the same pool, the bin as its
-/// window. Measuring only; nothing here changes what is tiled.
-fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthFold {
+/// [`depth_fold`] with each bin's depth measured by `coverage_at(chrom,
+/// center, width)` instead of the pool.
+fn depth_fold_by(
+    haplotype: &VariantHaplotype,
+    cov: f64,
+    coverage_at: &dyn Fn(&str, u64, u64) -> f64,
+) -> DepthFold {
     const BIN: u64 = 1000;
     let mut worst = DepthFold {
         fold: 1.0,
@@ -939,7 +1080,7 @@ fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthF
         for b in 0..n_bins {
             let start = origin.ref_start + len * b / n_bins;
             let end = origin.ref_start + len * (b + 1) / n_bins;
-            let depth = estimate_coverage_at(pool, &origin.chrom, (start + end) / 2, end - start);
+            let depth = coverage_at(&origin.chrom, (start + end) / 2, end - start);
             let fold = ((depth + 1.0) / (cov + 1.0)).max((cov + 1.0) / (depth + 1.0));
             if fold > worst.fold {
                 worst.fold = fold;
@@ -949,6 +1090,19 @@ fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthF
         }
     }
     worst
+}
+
+/// The largest fold between the donor's depth in any bin this haplotype's
+/// fragments are drawn from and `cov`, the depth they are all scaled by (CR2).
+///
+/// Each reference interval a segment is drawn from is cut into
+/// `max(1, round(len / 1000))` equal bins, and each bin's depth is measured
+/// the way `cov` is: [`estimate_coverage_at`] on the same pool, the bin as its
+/// window. Measuring only; nothing here changes what is tiled.
+fn depth_fold(haplotype: &VariantHaplotype, pool: &ReadPool, cov: f64) -> DepthFold {
+    depth_fold_by(haplotype, cov, &|chrom, pos, window| {
+        estimate_coverage_at(pool, chrom, pos, window)
+    })
 }
 
 /// Estimate fragment depth at a reference position on `chrom`.
@@ -3062,6 +3216,7 @@ mod tests {
             uncovered_breakpoint_sides: Vec::new(),
             adjusted_vaf: None,
             depth_fold: DepthFold::default(),
+            origin_chances: Vec::new(),
         }
     }
 
@@ -3179,5 +3334,127 @@ mod tests {
             total,
             frac
         );
+    }
+
+    // ── Task 8: the origin path ─────────────────────────────────────────
+
+    use crate::origin::{self, OriginRecord, OriginSite, Span};
+
+    /// A MAPQ 60 read of 150 bp at `start` on chr1, with no XA.
+    fn origin_read(name: &str, first: bool, start: u64) -> OriginRecord {
+        OriginRecord {
+            name: name.to_string(),
+            first,
+            placements: origin::placements(Span::new("chr1", start, start + 150), 60, &[]),
+            duplicate: false,
+            qc_fail: false,
+            mate_unmapped: false,
+            five_prime: origin::FivePrime { chrom: "chr1".into(), pos: start, reverse: !first },
+        }
+    }
+
+    /// 80 unique pairs over chr1:0-5000, the footprint of `del_haplotype(2000, 1000)`.
+    fn origin_site(footprint: Span) -> OriginSite {
+        let records = (0..80u64)
+            .flat_map(|i| {
+                let s = 100 + 50 * i;
+                [origin_read(&format!("o{}", i), true, s), origin_read(&format!("o{}", i), false, s + 250)]
+            })
+            .collect();
+        OriginSite { footprint, lookalikes: vec![], records, f: 1.0 }
+    }
+
+    fn origin_del_event() -> SimEvent {
+        SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 2000,
+            del_end: 3000,
+            gene: "TEST".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        }
+    }
+
+    #[test]
+    fn test_origin_keeps_an_event_whose_pool_has_no_read_in_the_footprint() {
+        // R1: the pool is 500 kb away, so `clean` refuses this event
+        // (test_simulate_event_refuses_pool_with_no_coverage_at_breakpoint).
+        // Under origin the depth comes from the site.
+        let mut hap = del_haplotype(2000, 1000);
+        let pool = make_covering_pool(500_000, 540_000, 200);
+        let site = origin_site(Span::new("chr1", 0, 5000));
+        let mut rng = StdRng::seed_from_u64(42);
+        let out = simulate_event_origin(
+            1, &origin_del_event(), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, Some(&site), &mut rng,
+        )
+        .unwrap();
+
+        // Nothing is suppressed here: `origin::decide` draws after all events.
+        assert_eq!(out.kept_originals.len(), 200);
+        assert_eq!(out.suppressed_count, 0);
+        assert!(!out.chimeric_pairs.is_empty());
+        assert_eq!(out.origin_chances.len(), 80);
+        assert!(out.origin_chances.iter().all(|c| (c.chance - 0.5 * (1.0 - 1e-6)).abs() < 1e-9));
+    }
+
+    #[test]
+    fn test_origin_leaves_the_pool_pairs_inside_the_footprint_for_the_final_draw() {
+        // These are the pairs `clean` suppresses here, at rate 1/2. Under
+        // origin every one comes back kept: `origin::decide` removes them only
+        // after every event's chances are summed (R5).
+        let mut hap = del_haplotype(2000, 1000);
+        let pool = make_covering_pool(0, 4000, 100);
+        assert!(pool.pairs.iter().all(|p| p.ref_end <= 5000), "every pair lies inside chr1:0-5000");
+        let site = origin_site(Span::new("chr1", 0, 5000));
+        let mut rng = StdRng::seed_from_u64(42);
+        let out = simulate_event_origin(
+            1, &origin_del_event(), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, Some(&site), &mut rng,
+        )
+        .unwrap();
+        assert_eq!(out.suppressed_count, 0);
+        assert_eq!(out.kept_originals.len(), 100);
+    }
+
+    #[test]
+    fn test_origin_site_that_misses_the_haplotype_footprint_is_a_bug() {
+        let mut hap = del_haplotype(2000, 1000);
+        let pool = make_covering_pool(0, 5000, 200);
+        let site = origin_site(Span::new("chr1", 0, 4000));
+        let mut rng = StdRng::seed_from_u64(42);
+        let err = simulate_event_origin(
+            1, &origin_del_event(), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, Some(&site), &mut rng,
+        )
+        .err()
+        .expect("a mismatched site must be refused")
+        .to_string();
+        assert!(err.contains("bug"), "{}", err);
+    }
+
+    #[test]
+    fn test_depth_fold_by_measures_bins_with_the_given_estimator() {
+        let hap = tandem_dup_haplotype(11_000, 15_000, 1_000);
+        let fold = depth_fold_by(&hap, 40.0, &|_, _, _| 10.0);
+        assert!((fold.fold - 41.0 / 11.0).abs() < 1e-9, "{:?}", fold);
+    }
+
+    #[test]
+    fn test_apply_removals_moves_removed_pool_pairs_to_suppressed() {
+        let mut outputs = vec![spliced(&["a", "b"], &[], &["c"])];
+        let removed: BTreeSet<String> = ["a".to_string(), "not_in_a_pool".to_string()].into();
+        apply_removals(&mut outputs, &removed);
+        assert_eq!(sorted_names(&outputs[0].kept_originals), ["b"]);
+        assert_eq!(outputs[0].suppressed_names, ["c", "a"]);
+        assert_eq!(outputs[0].suppressed_count, 2);
+        // A removed read in no pool is neither re-emitted nor listed here;
+        // main lists it in replaced_reads.txt itself.
+        assert!(!consumed_original_names(&outputs).contains("not_in_a_pool"));
+    }
+
+    #[test]
+    fn test_is_additive_names_fusions_and_junction_dups() {
+        assert!(!is_additive(&origin_del_event(), "full"));
+        let dup = SimEvent::Duplication { chrom: "chr1".into(), dup_start: 10, dup_end: 20, gene: "G".into(), allele_fraction: None };
+        assert!(is_additive(&dup, "junction"));
+        assert!(!is_additive(&dup, "full"));
     }
 }

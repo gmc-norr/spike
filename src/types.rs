@@ -253,6 +253,10 @@ pub struct SplicedOutput {
     /// How far the donor's depth, where this event's fragments are drawn,
     /// departs from the one depth they are all scaled by (CR2).
     pub depth_fold: DepthFold,
+    /// Under `--edit-model origin`, this event's chance of removing each
+    /// fragment it can remove. `origin::decide` sums them over every event
+    /// and draws once per fragment. Empty under `clean`.
+    pub origin_chances: Vec<crate::origin::Chance>,
 }
 
 /// The largest fold between the donor's depth in a bin an event's fragments
