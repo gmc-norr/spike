@@ -779,11 +779,15 @@ pub fn gather(
         spot.iter().map(|r| (r.name.clone(), r.first)).collect();
     let mut records = spot;
     let mut skipped: Vec<&str> = Vec::new();
+    let mut empty: Vec<&Span> = Vec::new();
     for region in &lookalikes {
         let Some(found) = source.scan(region)? else {
             skipped.push(region.chrom.as_str());
             continue;
         };
+        if found.is_empty() {
+            empty.push(region);
+        }
         for r in found {
             if seen.insert((r.name.clone(), r.first)) {
                 records.push(r);
@@ -804,6 +808,23 @@ pub fn gather(
             footprint,
             contigs.len(),
             skipped[0],
+        );
+    }
+    if !empty.is_empty() {
+        // A look-alike exists because reads at the spot list it in XA, so in
+        // a whole-genome BAM it holds the reads of its own copy. Empty, the
+        // file most likely lacks it (PD-27).
+        log::warn!(
+            "origin: {} of {} look-alike region(s) of {} hold no read in this BAM (e.g. {}). \
+             A look-alike exists because reads at the event list it as an equally good \
+             place, so a whole-genome BAM holds reads there; a BAM cut to one chromosome or \
+             region does not. origin removes nothing from those regions, and the event's \
+             origin depth misses the share their reads would add. Use a whole-genome BAM \
+             so those regions can be read.",
+            empty.len(),
+            lookalikes.len(),
+            footprint,
+            empty[0],
         );
     }
     Ok(OriginSite {
@@ -1404,6 +1425,46 @@ mod tests {
         assert_eq!(site.records.len(), 4);
         let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
         assert_eq!(names, ["m", "n"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// chrT, 60 kb; two MAPQ 0 pairs at the spot whose `XA` hits name
+    /// chrT:45 kb, where the file holds no read -- as in a BAM cut down to
+    /// the event's own region, or to one chromosome.
+    fn empty_lookalike_bam(dir: &std::path::Path) -> String {
+        let (r1, r2) = (0x63u16, 0x93u16);
+        let records = [
+            bam_record("m", r1, 21_001, 0, Some("chrT,+45001,100M,0;"), 21_201),
+            bam_record("m", r2, 21_201, 0, Some("chrT,-45201,100M,0;"), 21_001),
+            bam_record("n", r1, 22_001, 0, Some("chrT,+45051,100M,0;"), 22_201),
+            bam_record("n", r2, 22_201, 0, Some("chrT,-45251,100M,0;"), 22_001),
+        ];
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("empty.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_gather_warns_when_a_lookalike_region_holds_no_read() {
+        // PD-27: on a BAM holding only the event's chromosome, every
+        // look-alike elsewhere is empty, so origin removes nothing there and
+        // said nothing. A look-alike exists because reads point there, so in
+        // a whole-genome BAM it holds the reads of its own copy.
+        crate::loh::tests::capture::install();
+        let dir = scratch("empty_lookalike");
+        let bam = empty_lookalike_bam(&dir);
+        let site = gather(&bam, "", &Span::new("chrT", 20_500, 25_000), 100, &bases_pool()).unwrap();
+        assert_eq!(site.lookalikes, vec![Span::new("chrT", 44_900, 45_450)]);
+        let warned = crate::loh::tests::capture::warnings_matching(
+            "1 of 1 look-alike region(s) of chrT:20500-25000 hold no read",
+        );
+        assert_eq!(warned.len(), 1, "{:?}", warned);
+        // A look-alike that holds its copy's reads raises nothing.
+        let twin = twin_bam(&dir);
+        let site = gather(&twin, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
+        assert!(!site.lookalikes.is_empty());
+        assert!(
+            crate::loh::tests::capture::warnings_matching("look-alike region(s) of chrT:20000-25000 hold no read")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
