@@ -97,3 +97,52 @@ Not split: tiling, the removal draw, phasing, the per-event loop, CRAM reads.
      cannot go below about 24 s.
 
 If a gate fails, the branch is not offered for merge; the result says why.
+
+## Result (2026-09-28): REFUTED by the `--threads 1` gate
+
+Built as planned (`17fe11d`..`3db68cc`, binary md5 `d20c7c4b`; master
+`cb756ec` binary `fd4ad3f5`). Gates 1-3 pass; gate 4 fails on its
+`--threads 1` half, so the branch is not offered for merge.
+
+1. **Byte-identical: PASS.** All 15 sets (the 11 small ones plus the four
+   3 Mb runs) give the same signature as master at `--threads` 1, 4 and 16:
+   exit code, gzip and content md5 of R1 and R2, `replaced_reads.txt`, the
+   truth VCF body and the log without timestamps. The check can fail: the
+   same `c1` and `o1` sets at `--seed 2` give different FASTQ md5s and logs,
+   and the comparison reports them different.
+2. **Tests: PASS.** 625 pass, 1 ignored (613 on master). Each split piece has a
+   many-thread vs one-thread test, each shown red under a mutation.
+3. **Clippy: PASS.** 12 bin / 14 test warnings, the same as master.
+4. **Speed: FAIL.** One run each, one at a time, after a master warm-up.
+   Master at `--threads 1` is the baseline (master's `src/` has no thread
+   code, so its thread count does not change its own work).
+
+   | Event | Model | master | t1 | t4 | t8 | t16 |
+   |---|---|---|---|---|---|---|
+   | del 1 kb (`chr20:7119236-7120236`) | clean | 0.4 s | 0.5 s | 0.5 s | 0.5 s | 0.5 s |
+   | del 1 kb | origin | 0.6 s | 0.8 s | 0.8 s | 0.7 s | 0.7 s |
+   | del 3 Mb (`chr20:14550000-17550000`) | clean | 18.2 s | 20.0 s (+9.9%) | 9.4 s | 7.8 s | 7.1 s |
+   | del 3 Mb | origin | 49.0 s | 57.5 s (+17.3%) | 23.7 s | **19.0 s (-61.2%)** | 16.0 s |
+   | dup 3 Mb | clean | 35.2 s | 37.4 s (+6.2%) | 25.5 s | 23.7 s | 23.0 s |
+   | dup 3 Mb | origin | 64.1 s | 71.1 s (+10.9%) | 40.0 s | **36.7 s (-42.7%)** | 32.7 s |
+
+   - At `--threads 8` both 3 Mb origin events are well over 25% faster:
+     this half passes.
+   - At `--threads 1` all four 3 Mb runs are more than 5% slower than
+     master: this half fails. The 1 kb runs are within 0.2 s (timing
+     resolution 0.1 s).
+   - A second pair of runs repeated it (3 Mb del, `--threads 1`): clean
+     19.2 s vs 21.8 s (+13%), origin 49.2 s vs 58.2 s (+18%). The log's
+     1-second stamps put the loss in five or six steps of 1-3 s each, not in
+     one place. The largest is origin's look-alike read (18 s to 21 s). The
+     others are the census, the quality profile, the fragment grouping and
+     the removal chances.
+   - Peak memory rises at every count: 3 Mb runs +12% to +49%; the 1 kb
+     origin run grows from 188 MB to 538 MB at 16 threads. Why was not
+     measured (each look-alike batch opening its own reader is one guess).
+
+   PREDICTED at t8 was origin about 30 s and clean about 26 s. Measured:
+   origin 19.0 / 36.7 s, clean 7.8 / 23.7 s.
+
+**Not done:** the README "Run time" section still describes master, as
+this branch is not kept.
