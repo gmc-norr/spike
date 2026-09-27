@@ -1072,6 +1072,22 @@ mod tests {
     }
 
     #[test]
+    fn test_a_family_whose_members_disagree_gets_no_phase_call() {
+        // R7: two unflagged members of one family, called on different
+        // copies. The family gets no call, so each is removed at vaf, as if
+        // neither had one -- not at the first member's rate of 1.
+        let a = OriginRecord { mate_unmapped: true, ..record("a", true, 100, 60, &[]) };
+        let b = OriginRecord { name: "b".into(), ..a.clone() };
+        let site = OriginSite { footprint: fp(), lookalikes: vec![], records: vec![a, b], f: 1.0 };
+        let disagree: HashMap<String, bool> =
+            [("a".to_string(), true), ("b".to_string(), false)].into();
+        let chances = site.removal_chances(&disagree, 0.5);
+        let no_call = site.removal_chances(&HashMap::new(), 0.5);
+        assert_eq!(chances.len(), 2);
+        assert_eq!(chances, no_call);
+    }
+
+    #[test]
     fn test_a_family_shares_one_fate_even_when_its_chances_differ() {
         // R7: one draw per family, against its highest member's total. Member
         // by member, a draw between 0.5 and 0.99 would remove only "orig".

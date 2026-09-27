@@ -744,12 +744,7 @@ fn main() -> Result<()> {
     // names; every removed name goes to replaced_reads.txt.
     let mut origin_removed: BTreeSet<String> = BTreeSet::new();
     if edit_origin {
-        let chances: Vec<origin::Chance> = event_outputs
-            .iter()
-            .flat_map(|o| o.origin_chances.iter().cloned())
-            .collect();
-        origin_removed = origin::decide(&chances, &mut rng);
-        simulate::apply_removals(&mut event_outputs, &origin_removed);
+        origin_removed = simulate::draw_origin_removals(&mut event_outputs, &mut rng);
         for (stat, output) in event_stats.iter_mut().zip(&event_outputs) {
             // apply_removals moved the removed pairs out of kept_originals into
             // suppressed_names, so both halves of this stat went stale at once.

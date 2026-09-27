@@ -425,6 +425,20 @@ pub fn apply_removals(outputs: &mut [SplicedOutput], removed: &BTreeSet<String>)
     }
 }
 
+/// `--edit-model origin`'s one draw (R5): every event's chances go to one
+/// [`crate::origin::decide`], which sums them per fragment and draws once per
+/// family; then [`apply_removals`] moves each event's removed pool pairs.
+/// Returns every removed name.
+pub fn draw_origin_removals(outputs: &mut [SplicedOutput], rng: &mut StdRng) -> BTreeSet<String> {
+    let chances: Vec<crate::origin::Chance> = outputs
+        .iter()
+        .flat_map(|o| o.origin_chances.iter().cloned())
+        .collect();
+    let removed = crate::origin::decide(&chances, rng);
+    apply_removals(outputs, &removed);
+    removed
+}
+
 /// Deduplicate read pairs by name, keeping the last occurrence.
 ///
 /// Keeping the last occurrence makes event-order behavior explicit when
@@ -3484,6 +3498,65 @@ mod tests {
         // A removed read in no pool is neither re-emitted nor listed here;
         // main lists it in replaced_reads.txt itself.
         assert!(!consumed_original_names(&outputs).contains("not_in_a_pool"));
+    }
+
+    fn origin_chance(name: &str, family: u64, p: f64) -> origin::Chance {
+        origin::Chance {
+            name: name.to_string(),
+            family: vec![origin::FivePrime { chrom: "chr1".into(), pos: family, reverse: false }],
+            chance: p,
+        }
+    }
+
+    #[test]
+    fn test_origin_draw_takes_every_events_chances() {
+        // R5 as main calls it: the one draw sees every event's chances, so a
+        // fragment only the second event can remove still goes.
+        let mut first = spliced(&["a"], &[], &[]);
+        first.origin_chances = vec![origin_chance("a", 1, 1.0)];
+        let mut second = spliced(&["b"], &[], &[]);
+        second.origin_chances = vec![origin_chance("b", 2, 1.0)];
+        let mut outputs = vec![first, second];
+        let removed = draw_origin_removals(&mut outputs, &mut StdRng::seed_from_u64(1));
+        assert_eq!(removed, BTreeSet::from(["a".to_string(), "b".to_string()]));
+        assert_eq!(outputs[1].suppressed_names, ["b"]);
+        assert!(outputs[1].kept_originals.is_empty());
+    }
+
+    #[test]
+    fn test_origin_draw_sums_a_fragments_chances_over_events() {
+        // R5: two events each give "c" 1/2; together 1, so it goes on every
+        // seed. Only the first event's chance, or one draw per event, would
+        // keep it on some.
+        for seed in 0..50 {
+            let mut first = spliced(&["c"], &[], &[]);
+            first.origin_chances = vec![origin_chance("c", 3, 0.5)];
+            let mut second = spliced(&[], &[], &[]);
+            second.origin_chances = vec![origin_chance("c", 3, 0.5)];
+            let mut outputs = vec![first, second];
+            let removed = draw_origin_removals(&mut outputs, &mut StdRng::seed_from_u64(seed));
+            assert!(removed.contains("c"), "seed {}", seed);
+        }
+    }
+
+    #[test]
+    fn test_origin_measures_the_depth_fold_with_origin_depth() {
+        // The T3 rule: under origin, SIM_DEPTH_FOLD compares each bin's
+        // origin depth with the origin depth the tiling is scaled by. The
+        // pool is 500 kb away, so the pool's depth in every bin is 0 and
+        // gives another fold.
+        let mut hap = del_haplotype(2000, 1000);
+        let pool = make_covering_pool(500_000, 540_000, 200);
+        let site = origin_site(Span::new("chr1", 0, 5000));
+        let mut rng = StdRng::seed_from_u64(42);
+        let out = simulate_event_origin(
+            1, &origin_del_event(), &pool, &mut hap, &make_config(), &mock_synth_gen(150), 0.5, Some(&site), &mut rng,
+        )
+        .unwrap();
+        let cov = out.depth_fold.scaled_by;
+        let by_origin = depth_fold_by(&hap, cov, &|c, p, w| site.fragment_coverage_at(c, p, w));
+        assert_eq!(out.depth_fold, by_origin);
+        assert_ne!(out.depth_fold, depth_fold(&hap, &pool, cov));
     }
 
     #[test]
