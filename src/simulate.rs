@@ -227,7 +227,15 @@ fn simulate_event_inner(
         let footprint =
             crate::origin::Span::new(haplotype.primary_chrom(), hap_ref_start, hap_ref_end);
         anyhow::ensure!(
-            !is_additive && site.footprint == footprint,
+            !is_additive,
+            "origin site {} was handed to an additive event (a fusion, or a DUP under \
+             --dup-model junction) -- additive events remove no originals, so \
+             --edit-model origin does not apply to them; being handed a site here is a bug \
+             in the caller",
+            site.footprint,
+        );
+        anyhow::ensure!(
+            site.footprint == footprint,
             "origin site {} does not match the haplotype's footprint {} -- this is a bug; \
              please report it",
             site.footprint,
@@ -3429,6 +3437,33 @@ mod tests {
         .expect("a mismatched site must be refused")
         .to_string();
         assert!(err.contains("bug"), "{}", err);
+
+        // Same guard, the other conjunct: the footprint matches, but the
+        // event is additive (a DUP under --dup-model junction). Additive
+        // events remove no originals, so `--edit-model origin` never
+        // applies to them -- being handed a site is a bug in the caller,
+        // not a coordinate mismatch, and must not be reported as one.
+        let mut additive_hap = del_haplotype(2000, 1000);
+        let additive_pool = make_covering_pool(0, 5000, 200);
+        let matching_site = origin_site(Span::new("chr1", 0, 5000));
+        let mut additive_config = make_config();
+        additive_config.dup_model = "junction".to_string();
+        let dup_event = SimEvent::Duplication {
+            chrom: "chr1".to_string(),
+            dup_start: 2000,
+            dup_end: 3000,
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.5),
+        };
+        let mut additive_rng = StdRng::seed_from_u64(42);
+        let additive_err = simulate_event_origin(
+            1, &dup_event, &additive_pool, &mut additive_hap, &additive_config,
+            &mock_synth_gen(150), 0.5, Some(&matching_site), &mut additive_rng,
+        )
+        .err()
+        .expect("an additive event handed a site must be refused")
+        .to_string();
+        assert!(additive_err.contains("additive event"), "{}", additive_err);
     }
 
     #[test]
