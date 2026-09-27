@@ -29,7 +29,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Variant haplotype model**: Every variant — from a single SNP to a multi-kilobase structural rearrangement — is represented as an ordered list of *segments*, each drawn from a reference region (possibly reverse-complemented) or from novel sequence. These segments are concatenated into a single linear haplotype sequence. Reads tiled uniformly across this linear sequence become automatically chimeric when they span a segment boundary. This single mechanism handles all SV types without any per-type breakpoint logic.
 
-**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top.
+**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top. By default a non-additive event removes only reads from its donor pool; the experimental `--edit-model origin` removes reads by their chance of having come from the event, at the event and at its look-alikes elsewhere in the genome.
 
 **Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a first-order Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
 
@@ -77,7 +77,7 @@ needs:
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `529 passed; 2 failed; 1 ignored`, the
+  with all of them off PATH the suite is `611 passed; 2 failed; 1 ignored`, the
   two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
@@ -452,7 +452,13 @@ The originals to replace are named, not located. spike writes every read name it
 
 Records spike extracted and then suppressed (the deleted copy of a heterozygous deletion, for instance) stay gone: that absence *is* the simulated variant.
 
+Under `--edit-model origin`, `replaced_reads.txt` also names every read `origin` removed, so `merge.sh` can remove records `clean` keeps: duplicates of a removed pair, reads below `--min-mapq`, and reads at a look-alike elsewhere in the genome. See [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental).
+
 The records kept because spike never extracted them (PCR duplicates, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
+
+`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
+
+`merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
 
 #### Reads spike cannot edit
 
@@ -473,10 +479,7 @@ That is the review's `lowmap` probe, half of whose pairs are at MAPQ 0: a deleti
   - at `--min-mapq 0`, only 58 of 5749 (0.010) are, and spike accepts it.
 
   On the pipeline's six, `--min-mapq 0` brings five under 0.5. The sixth, `chr20:63093346-63094243`, stays at 11 of 18. Those 11 are all at MAPQ 20 or above, but none is a proper pair (one has an unmapped mate), so MAPQ is not what keeps them out.
-
-`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
-
-`merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
+- **`--edit-model origin` is the other way** (next section). At `del:chr20:7119236-7120236` on the 35x HG002 BAM it takes the share from 0.940 to 0.016. Under it a read counts as editable when it is in the donor pool or in a pair `origin` may remove. The warning, the refusal and the run README say so, and add that the 0.10 and 0.5 thresholds were set for `clean` and are not yet checked for `origin`.
 
 #### Editing hard spots: `--edit-model origin` (experimental)
 
@@ -487,7 +490,35 @@ That is the review's `lowmap` probe, half of whose pairs are at MAPQ 0: a deleti
 - Chances from several events add up. A duplicate shares its original's fate.
 - The number of new reads comes from where reads came from (the origin depth). It does not come from the donor pool, which can be empty inside a perfect twin.
 
-It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the first 100,000 records of the BAM carries one. A spot whose MAPQ 0 reads lack `XA` is normal: under bwa-mem's `-h 5` rule their hits number more than 5, so each gets a chance of 1/6. At `chr20:7117236-7121236` in the 35x HG002 BAM, 822 reads are MAPQ 0 and 1 carries `XA`, yet the file's first 100,000 records hold 15,255 with it. On a made-up 80 kb genome built with an exact twin, `origin` reproduced the depth a real het deletion leaves at both the event and its look-alike copy, where `--min-mapq 0` did not and `clean` refused for want of donor coverage — a physics test whose rule was locked before the run returned SUPPORTED (`REVIEW.md`, "`--edit-model origin`: physics test"). The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
+It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the first 100,000 records of the BAM carries one. A spot whose MAPQ 0 reads lack `XA` is normal: under bwa-mem's `-h 5` rule their hits number more than 5, so each gets a chance of 1/6. At `chr20:7117236-7121236` in the 35x HG002 BAM, 822 reads are MAPQ 0 and 1 carries `XA`, yet the file's first 100,000 records hold 15,255 with it.
+
+**What changes in the output:**
+- **`replaced_reads.txt` also names every read `origin` removed**, so `merge.sh` takes them out of the whole BAM, including reads `clean` never touches. Measured on `del:chr20:14530000-14531000` over a 100 kb slice of the 35x HG002 BAM (chr20:14,500,000-14,600,000): `origin` lists 41 names more than `clean`, 82 records. 76 of them are duplicates of a removed pair; 6 are not proper pairs, 3 of those below MAPQ 20.
+- **The new reads are scaled by the origin depth.** Around each point, that is the summed chance of every read `origin` may remove, turned into fragment depth. The log prints it beside the pool's depth, e.g. `origin depth at chr20:7119235: 33.7x (the donor pool's there: 8.5x)`. With no origin depth at any breakpoint, spike stops (see [What spike refuses](#what-spike-refuses)).
+- **The census means something else.** `SIM_RESIST` counts a read as editable when it is in the donor pool or in a pair `origin` may remove, and `SIM_DEPTH_FOLD` compares origin depths. Their thresholds (warn above 0.10, refuse above 0.5, warn above a 1.5-fold) were set for `clean` and are not yet checked for `origin`. The warnings, the refusal, the run README and a `##spike_edit_model=origin` header line in `truth.vcf` all say so. `spike validate` does not read that line, so its `resistant` and `depth_fold` rows use the same two thresholds under either model.
+
+**At RF14's site**, `del:chr20:7119236-7120236` on the 35x HG002 BAM with default flags:
+- `clean` refuses: 359 of 382 reads over it (94%) are ones it cannot edit.
+- `origin` runs: 6 of 382 (`SIM_RESIST=0.016`), and `SIM_DEPTH_FOLD=1.30`. It removed 219 fragments at the spot and **0** at its 14 look-alikes.
+
+**The look-alike half does little on real data so far.** Those 14 look-alikes all hold reads (3518 primary reads), so the BAM is not what is missing. Of the 52 fragments there with a read whose `XA` hit lies in the footprint, 25 have a mate that could not have come from the footprint, so the second bullet's rule keeps them. 18 more have a mate outside the regions spike reads. The other 9 pass, yet none was removed in that run. (The count is awk over `samtools view` using `XA` start positions only; see `.claude/judgment-gate-cases.md`.)
+
+**It needs a whole-genome BAM.** A look-alike can be anywhere in the genome, and a BAM cut to one chromosome or region does not hold its reads. spike then warns, once per event. This is `del:chr20:14530000-14531000 --edit-model origin` on the 100 kb slice above:
+
+```
+WARN  spike::origin] origin: 2 of 2 look-alike region(s) of chr20:14528000-14533000 hold
+no read in this BAM (e.g. chr13:59757249-59757716). A look-alike exists because reads at
+the event list it as an equally good place, so a whole-genome BAM holds reads there; a BAM
+cut to one chromosome or region does not. origin removes nothing from those regions, and
+the event's origin depth misses the share their reads would add. Use a whole-genome BAM so
+those regions can be read.
+```
+
+A look-alike on a contig the BAM's header does not list is skipped, with a warning of its own. That happens to a BAM aligned with alt contigs and then re-headered to the no_alt set. Over chr20:3-53 Mb of the pipeline's NA18488 background, the reads' `XA` hits name 1636 contigs, and 1462 of them are not among the header's 195.
+
+`origin` takes longer than `clean` on a big event: see [Run time](#run-time).
+
+On a made-up 80 kb genome built with an exact twin, `origin` reproduced the depth a real het deletion leaves at both the event and its look-alike copy, where `--min-mapq 0` did not and `clean` refused for want of donor coverage — a physics test whose rule was locked before the run returned SUPPORTED (`REVIEW.md`, "`--edit-model origin`: physics test"). The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
 
 ### Validating the spike-in
 
@@ -519,6 +550,7 @@ spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
   --flank          Flanking bp for coverage comparison (default: 5000)
   --json           Output JSON instead of text table
   --strict         Count the advisory checks in the exit status
+  --help, -h       Show this help
 ```
 
 `spike validate --help` prints the same table of checks-by-event-type, with the
@@ -967,11 +999,13 @@ numbers are **read back from the truth VCF**, not recomputed from the reads:
 `resistant` is the `SIM_RESIST` share spike counted while it was editing the
 donor, `depth_fold` the `SIM_DEPTH_FOLD` fold it measured while it was scaling
 the event's fragments. So the two rows report what spike measured at simulation
-time, and they inherit its blind spots -- `SIM_DEPTH_FOLD`'s donor pool holds
-only reads at `--min-mapq` or above, so a bin thin only in mappable reads still
-counts as a fold. They also believe the file they read: a truth VCF edited
+time, and they inherit its blind spots -- under `clean`, `SIM_DEPTH_FOLD`'s
+donor pool holds only reads at `--min-mapq` or above, so a bin thin only in
+mappable reads still counts as a fold. They also believe the file they read: a truth VCF edited
 between the run that wrote it and the validation that reads it is taken at its
-word, because nothing here re-derives either number. What a failing row does
+word, because nothing here re-derives either number. Nor do they read which
+edit model wrote it: a truth VCF from `--edit-model origin` is graded against
+the same two thresholds, which were set for `clean`. What a failing row does
 establish is that spike's own census of the run went past the threshold spike
 warns at, which is a reason to read that run's log and README rather than this
 BAM.
@@ -1264,6 +1298,18 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 The `--indel-error-rate` specifies the fraction of sequencing errors that are indels (vs substitutions). Typical Illumina values are 0.0-0.05.
 
+### Run time
+
+spike itself runs on one thread. `--threads` sets only the threads `align.sh` and `merge.sh` give the aligner and samtools. Measured on the 35x HG002 BAM with `--seed 1 --allow-resistant`, as wall time and peak memory from `/usr/bin/time`:
+
+| Event | `clean` | `--edit-model origin` |
+| --- | --- | --- |
+| `del:chr20:7119236-7120236` (1 kb) | 0.4 s, 188 MB | 0.6 s, 188 MB |
+| `del:chr20:14550000-17550000` (3 Mb) | 19.1 s, 1230 MB | 51.2 s, 1819 MB |
+| `dup:chr20:14550000-17550000` (3 Mb) | 37.5 s, 1483 MB | 67.9 s, 2124 MB |
+
+The four 3 Mb runs ran side by side, one core each, on a 72-core machine.
+
 ## Output files
 
 | File | Description |
@@ -1272,10 +1318,10 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 | `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
 | `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
-| `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality; `merge.sh` removes exactly these |
+| `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality, and under `--edit-model origin` every read `origin` removed; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
-| `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- plus pairs dropped for unusable quality, per event and in total), read counts, next-step instructions |
+| `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- then kept, chimeric and suppressed reads, pairs dropped for unusable quality, **Resistant reads** and **Depth fold**), the pairs dropped in total, read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
 
@@ -1287,8 +1333,9 @@ The truth VCF contains one record per simulated event with:
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
 - `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split
 - `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
-- `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. `spike validate` reports it as the advisory `resistant` row. Above 0.5 spike refuses the event unless given `--allow-resistant` (RF8), so in a truth VCF written since then a value above 0.5 means that flag was used. See [Reads spike cannot edit](#reads-spike-cannot-edit)
-- `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. `spike validate` reports it as the advisory `depth_fold` row. See [One depth for the whole event](#one-depth-for-the-whole-event)
+- `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. `spike validate` reports it as the advisory `resistant` row. Above 0.5 spike refuses the event unless given `--allow-resistant` (RF8), so in a truth VCF written since then a value above 0.5 means that flag was used. Under `--edit-model origin` a read in a pair `origin` may remove counts as editable too. See [Reads spike cannot edit](#reads-spike-cannot-edit)
+- `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. Under `--edit-model origin` both depths are origin depths. `spike validate` reports it as the advisory `depth_fold` row. See [One depth for the whole event](#one-depth-for-the-whole-event)
+- Under `--edit-model origin` only, a header line `##spike_edit_model=origin (experimental).` followed by a note that the `SIM_RESIST` and `SIM_DEPTH_FOLD` thresholds were set for `clean` and are not yet checked for `origin`
 - `SIM_GENE` with the associated gene name
 - BND records for fusions (with `]`/`[` notation reflecting orientation)
 
@@ -1437,10 +1484,14 @@ the message is the exact text spike prints, measured by running it.
 | An event where more than half the reads over it are ones spike cannot edit (`SIM_RESIST` above 0.5), without `--allow-resistant` ([Reads spike cannot edit](#reads-spike-cannot-edit)). Every such event is listed at once. | `The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):`<br>`  DEL  chr20:27100001-27110000 (10000bp): 5731 of 5749 reads over it (99.7%) are ones spike cannot edit`<br>`Those reads are below --min-mapq, not a proper pair, or have a mate that fails a filter, and they stay in the merged BAM as they are. If most of them are below --min-mapq, lowering it lets spike edit them. Otherwise remove the events from the input, or pass --allow-resistant to simulate them anyway; truth.vcf then records the share as SIM_RESIST.` | `census.rs` |
 | A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 read pair(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
 | No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
+| `--edit-model origin` on a BAM with no `XA` tag in its first 100,000 records ([Editing hard spots](#editing-hard-spots---edit-model-origin-experimental)) | `--edit-model origin needs the aligner's XA tags (its alternative hits), but none of the first 100000 records of sample.bam carries one. bwa-mem and bwa-mem2 write XA by default, and a later step can strip it. Re-align with one of them, or use --edit-model clean.` | `origin.rs` |
+| `--edit-model origin` with no origin depth at any of the event's breakpoints | `event over chr20:14603000-14608000 has no origin depth at any of its breakpoints (chr20:14604999, chr20:14606000): no read at the spot or at its 0 look-alike region(s) could have come from there, so spike would invent the reads it plants and still write a truth VCF beside them.` | `simulate.rs` |
 | A `--reference` FASTA that is gzip-compressed but not named `.gz`/`.bgz` | `misnamed.fa is gzip-compressed (starts with the gzip magic bytes 1f 8b) but is not named .gz/.bgz, so it would be read as raw uncompressed sequence; rename it to end in .gz or .bgz with a matching .gzi index, or decompress it first` | `reference.rs` |
 | A gene or exon `--event` names that the `--exon-bed` has not got | `gene 'NOSUCH' not found. Available: GENEA, GENEB` | `exon.rs` |
 | A `--gvcf` that cannot be read — missing, not bgzipped, no index, or no `bcftools` for a `.vcf.gz` | `could not read the --gvcf 'bad.vcf.gz'; spike stops rather than simulate without the sample's SNPs`<br>`Caused by: bcftools exited with status exit status: 255 on gVCF 'bad.vcf.gz': Failed to open bad.vcf.gz: not compressed with bgzip. The run stops here.` | `loh.rs` / `simulate.rs` |
 | A read whose quality string does not match its sequence, or holds a byte outside `!`-`~` | `read <name>/1 has 150 quality byte(s) for 151 base(s); refusing to write invalid FASTQ` | `write_paired_fastq` |
+
+Under `--edit-model origin` the resistant-reads refusal says the reads are `neither in the donor pool nor in a pair origin may remove`, and ends with the note that its threshold was set for `clean`. That text is checked by the unit test `census::tests::test_under_origin_the_messages_say_what_origin_counts_and_that_thresholds_are_unchecked`, not by a run like the rows above.
 
 `--exon-bed` has a family of related refusals of its own — a duplicate exon
 number under one gene, an exon range whose start is after its end, a malformed
@@ -1467,6 +1518,8 @@ main.rs          CLI, event parsing, orchestration
 types.rs         Core types: SimEvent, ReadPair, ReadPool, SimConfig
 haplotype.rs     Variant haplotype construction (segment-based)
 simulate.rs      Read suppression + synthetic read tiling
+origin.rs        --edit-model origin: each read's chance of coming from the edited copy, look-alikes, origin depth
+census.rs        Reads spike cannot edit (SIM_RESIST) and the warn/refuse thresholds and messages
 synth.rs         Quality-profiled synthetic read generation
 extract.rs       BAM/CRAM read pair extraction
 stats.rs         Fragment length distribution
@@ -1661,6 +1714,8 @@ Inside pairs are suppressed by the copy they come from (see [Read classification
 
 Averaged over both copies this is `VAF`. At VAF 0.5 it removes every read of the event copy and none of the other — correct LOH. Above 0.5 the event is on both copies in some cells.
 
+This is the default, `--edit-model clean`. The experimental `--edit-model origin` replaces this step. It decides for every primary read at the event and at its look-alikes, in the donor pool or not, and removes each by its chance of having come from the event's footprint times this same per-copy rate; see [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental).
+
 ## Synthetic read tiling
 
 The number of synthetic reads to tile is:
@@ -1668,7 +1723,7 @@ The number of synthetic reads to tile is:
 - **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform over exactly that set, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
 - **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95 -- a request above it is simulated at 0.95, and the truth VCF records `SIM_VAF=0.950` with the request in `SIM_REQ_VAF`).
 
-`mean_fragment_length` is the library's own mean, taken over the same range the generator samples in -- `[read_length, 1500]` -- so the count is normalised by the distribution that is actually emitted. An observed insert size outside that range can never be generated, so it is left out of the model: on HG002 chr20 that is 38 of 4,595 donor pairs (all of them shorter than one 151 bp read), and it moves the mean from 418.6 to 421.0 and the count planted for `del:chr20:38412500-38422500` from 291 to 289. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth.
+`mean_fragment_length` is the library's own mean, taken over the same range the generator samples in -- `[read_length, 1500]` -- so the count is normalised by the distribution that is actually emitted. An observed insert size outside that range can never be generated, so it is left out of the model: on HG002 chr20 that is 38 of 4,595 donor pairs (all of them shorter than one 151 bp read), and it moves the mean from 418.6 to 421.0 and the count planted for `del:chr20:38412500-38422500` from 291 to 289. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth. Under `--edit-model origin` it is the origin depth in the same window instead (see [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental)), because inside a perfect twin the pool holds no read.
 
 ### One depth for the whole event
 
@@ -1678,7 +1733,7 @@ That one `coverage` scales every fragment the event tiles, wherever it lands. Wh
 DUP  chrT:10001-28000 (18000bp): the donor's depth over chrT:17000-18000 is 25.0x, but every fragment this event tiles is scaled by the 100.0x measured at one of its breakpoints (3.88-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).
 ```
 
-(The depths are fragment depths, which is why the review's 75x read depth shows as 100x.) On ordinary loci the fold is not 1: measured on 40 seeded 10 kb DUPs inside the HG002 SV benchmark on chr20 (35x), it ran from **1.11** to **2.46**, median **1.27**, and **6 of the 40** warned. `D` comes from the donor pool, which holds only reads at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is; the fold counts it anyway, and some of those six may be that.
+(The depths are fragment depths, which is why the review's 75x read depth shows as 100x.) On ordinary loci the fold is not 1: measured on 40 seeded 10 kb DUPs inside the HG002 SV benchmark on chr20 (35x), it ran from **1.11** to **2.46**, median **1.27**, and **6 of the 40** warned. `D` comes from the donor pool, which holds only reads at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is; the fold counts it anyway, and some of those six may be that. Under `--edit-model origin`, `D` and `C` are both origin depths, which count low-MAPQ reads by their chance. The 1.5 threshold was set for the pool's fold and is not yet checked for origin's.
 
 Fragment lengths are sampled from the empirical distribution of the donor reads, which holds the observed insert sizes in `[read_length, 1500]` and nothing else: generation draws from exactly that range, so the model and the generator describe one distribution rather than two. If no donor insert size falls in it, spike warns and falls back to a 400 +/- 80 default clamped into the same range (never a distribution it cannot draw from). Each fragment is placed at a random position on the haplotype and a read pair is synthesized with quality scores from the learned Markov model. The fragment's left end is always read forward and its right end reverse (FR), and a coin flip out of the same seeded stream decides which of the two is R1: about half the pairs come out F1R2 and half F2R1, as in a real library, so read-orientation filters (Mutect2's, for one) see a balanced strand mix. Whichever mate is R1 is sampled from the R1 quality model.
 
