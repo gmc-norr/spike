@@ -179,3 +179,28 @@ what was claimed, what the claim actually rested on, and which gate would have c
   count from one window was stated as a fact about the file. **Rule for this repo: a claim
   about a whole file is measured on the whole file, or on more than one region of it, and
   says which. An absence at one spot is a fact about that spot.**
+
+## 2026-09-27 -- origin: "the 35x HG002 BAM holds chr20 only", so no look-alike read was removed
+
+- **What was claimed.** The final review of `--edit-model origin` said the 35x HG002 BAM
+  holds reads on chr20 only ("idxstats: chr20 22,206,212, everything else 0"). So `origin`
+  removed 0 fragments at every look-alike on real data, and the real GIAB test had to use
+  whole-genome BAMs to reach that half. It went into the run's PLAN-DEFECTS (PD-27,
+  escalated), the notes to the user and the plan for the GIAB test.
+- **What it rested on.** An idxstats line whose command and file were not written down. The
+  file does not match it: `samtools idxstats` on
+  `HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam` shows reads on 195 contigs
+  (chr1: 81,466,062). The 14 look-alikes of `del:chr20:7119236-7120236` hold 3518 primary
+  reads.
+- **What was actually going on.** `origin` still removes 0 fragments there on the whole
+  genome. Of 52 look-alike fragments with a read whose `XA` hit lies in the footprint, 25 have
+  a mate without one (R4 keeps them), 18 have a mate outside the regions read, and 9 pass
+  (awk over `samtools view`, `XA` start positions only). A whole-genome BAM is needed for the
+  look-alike half, but not enough: at this spot R4 is what keeps it small.
+- **How it was caught.** The warning written for PD-27 (a look-alike region that holds no
+  read) did not fire on that BAM. idxstats was then run on it.
+- **Which gate would have caught it earlier.** Gate D3 (*did I measure it, or infer it?*). A
+  zero was explained ("the reads are not in the file") without measuring the explanation, and
+  the evidence was quoted without its command. **Rule for this repo: a claim about what a file
+  holds names the file and the command beside the number, and a zero's cause is measured
+  before it is written down.**
