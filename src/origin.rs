@@ -706,6 +706,47 @@ impl Source {
         }
         Ok(Some(out))
     }
+
+    /// [`scan`](Self::scan) of one long span on the thread pool: a BAM is
+    /// read in [`crate::extract::read_chunks`] chunks, a CRAM in one query.
+    /// A 3 Mb event's footprint holds 892,170 records on the 35x HG002 BAM.
+    fn scan_long(&mut self, bam_path: &str, span: &Span) -> Result<Option<Vec<OriginRecord>>> {
+        self.scan_in_chunks(bam_path, span, crate::extract::read_chunks(span.start, span.end))
+    }
+
+    /// [`scan_long`](Self::scan_long) in `n_chunks` chunks (see
+    /// [`crate::extract::fold_bam_region`]): the same records in the same
+    /// order as [`scan`](Self::scan).
+    fn scan_in_chunks(
+        &mut self,
+        bam_path: &str,
+        span: &Span,
+        n_chunks: usize,
+    ) -> Result<Option<Vec<OriginRecord>>> {
+        let Source::Bam(bam) = self else {
+            return self.scan(span);
+        };
+        let header = &bam.header;
+        // Not in the header: skip the region rather than let query() raise.
+        if header.reference_sequences().get_index_of(span.chrom.as_bytes()).is_none() {
+            return Ok(None);
+        }
+        let chunks = crate::extract::fold_bam_region(
+            bam_path,
+            &span.chrom,
+            span.start,
+            span.end,
+            n_chunks,
+            "failed to open BAM for the origin scan:",
+            Vec::new,
+            |out: &mut Vec<OriginRecord>, record| {
+                let buf = noodles::sam::alignment::RecordBuf::try_from_alignment_record(header, record)?;
+                out.extend(origin_record(header, &buf));
+                Ok(())
+            },
+        )?;
+        Ok(Some(chunks.concat()))
+    }
 }
 
 /// How many records, from the start of the file, [`require_xa`] reads
@@ -806,7 +847,7 @@ pub fn gather(
     pool: &ReadPool,
 ) -> Result<OriginSite> {
     let mut source = Source::open(bam_path, ref_path)?;
-    let spot = source.scan(footprint)?.ok_or_else(|| {
+    let spot = source.scan_long(bam_path, footprint)?.ok_or_else(|| {
         anyhow::anyhow!(
             "the BAM's header has no contig named {}, so the event's own footprint {} \
              cannot be read",
@@ -1536,6 +1577,34 @@ mod tests {
             .map(|f| (f.name, f.mates.iter().map(|&m| m as *const _).collect()))
             .collect();
         assert!(got == expected, "fragments() differs from one map over the records");
+    }
+
+    #[test]
+    fn test_the_spot_read_in_chunks_gives_what_one_query_gives() {
+        // The event's own footprint may be read chunk by chunk on the thread
+        // pool; it must give the records one query gives, in file order, and
+        // `None` for a contig the header lacks.
+        let dir = scratch("spot_chunks");
+        let bam = twin_bam(&dir);
+        // Four chunks of this footprint each hold reads, and a's read 1
+        // (21000-21100) starts before it, so the first chunk must take it.
+        let footprint = Span::new("chrT", 21_050, 25_000);
+        let mut source = Source::open(&bam, "").unwrap();
+        let one_query = source.scan(&footprint).unwrap().unwrap();
+        // a, b, dup, qcfail, improper and t twice; orphan and e's read 1 once.
+        // The secondary and the supplementary are not candidates, and e's
+        // read 2 starts past the footprint.
+        assert_eq!(one_query.len(), 14);
+        assert_eq!((one_query[0].name.as_str(), one_query[0].first), ("a", true));
+        let chunked = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| Source::open(&bam, "").unwrap().scan_in_chunks(&bam, &footprint, 4).unwrap().unwrap());
+        assert_eq!(chunked, one_query);
+        let missing = Span::new("chr15_KI270852v1_alt", 6_900, 7_450);
+        assert!(source.scan_in_chunks(&bam, &missing, 5).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
