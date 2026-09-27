@@ -138,6 +138,7 @@ fn sample_copies_for_event(
     Ok(copies)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn simulate_event_with_copies(
     event_index: usize,

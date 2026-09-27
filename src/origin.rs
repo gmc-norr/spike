@@ -378,7 +378,7 @@ impl OriginSite {
             .iter()
             .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
             .flat_map(|r| r.placements.iter())
-            .filter(|p| p.span.chrom == chrom && p.span.start < end && start < p.span.end)
+            .filter(|p| p.span.chrom == chrom && p.span.start <= start + (n - 1) * step && start < p.span.end)
             .collect();
         let total: f64 = (0..n)
             .map(|i| {
@@ -875,6 +875,12 @@ mod tests {
         let site = twin_site();
         assert!(close(site.read_coverage_at("chr1", 2075, 100), 20.0));
         assert!(close(site.fragment_coverage_at("chr1", 2075, 100), 30.0));
+        // A window of 1 or 0 makes start == end == pos, so the pre-filter must
+        // bound by the last point the loop samples (`start`), not by `end`:
+        // at pos 2000, the L placement starts exactly there. The same 40
+        // halves the 100-base window counts, over a single sampled point.
+        assert!(close(site.read_coverage_at("chr1", 2000, 1), 20.0));
+        assert!(close(site.read_coverage_at("chr1", 2000, 0), 20.0));
     }
 
     #[test]
