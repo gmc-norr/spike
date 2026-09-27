@@ -598,7 +598,8 @@ fn count_alleles(
     }
 }
 
-/// BAM pass of [`count_alleles`].
+/// BAM pass of [`count_alleles`], on the thread pool (see
+/// [`crate::extract::fold_bam_region`]).
 fn count_alleles_bam(
     bam_path: &str,
     chrom: &str,
@@ -606,57 +607,77 @@ fn count_alleles_bam(
     region_end: u64,
     min_mapq: u8,
 ) -> Result<HashMap<u64, [u32; 4]>> {
+    let n_chunks = crate::extract::read_chunks(region_start, region_end);
+    count_alleles_bam_in(bam_path, chrom, region_start, region_end, min_mapq, n_chunks)
+}
+
+/// [`count_alleles_bam`] in `n_chunks` chunks. Counts add, so the chunks'
+/// counts summed are the counts of one pass.
+fn count_alleles_bam_in(
+    bam_path: &str,
+    chrom: &str,
+    region_start: u64,
+    region_end: u64,
+    min_mapq: u8,
+    n_chunks: usize,
+) -> Result<HashMap<u64, [u32; 4]>> {
+    let per_chunk = crate::extract::fold_bam_region(
+        bam_path,
+        chrom,
+        region_start,
+        region_end,
+        n_chunks,
+        "failed to open BAM for pileup:",
+        HashMap::new,
+        |allele_counts: &mut HashMap<u64, [u32; 4]>, record| {
+            let flags = record.flags();
+
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
+            {
+                return Ok(());
+            }
+
+            let mq: u8 = match record.mapping_quality() {
+                Some(q) => u8::from(q),
+                None => 0,
+            };
+            if mq < min_mapq {
+                return Ok(());
+            }
+
+            let align_start = match record.alignment_start() {
+                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
+                _ => return Ok(()),
+            };
+
+            let seq: Vec<u8> = record.sequence().iter().collect();
+            let cigar = record.cigar();
+
+            walk_cigar_count(
+                &seq,
+                Box::new(cigar.iter()),
+                align_start,
+                region_start,
+                region_end,
+                allele_counts,
+            );
+            Ok(())
+        },
+    )?;
+
     let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
-
-    let mut reader = noodles::bam::io::indexed_reader::Builder::default()
-        .build_from_path(bam_path)
-        .with_context(|| format!("failed to open BAM for pileup: {}", bam_path))?;
-    let header = reader.read_header()?;
-
-    let start_pos = crate::extract::safe_noodles_position(region_start + 1);
-    let end_pos = crate::extract::safe_noodles_position(region_end);
-    let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
-    let query = reader.query(&header, &region)?;
-
-    for rec_result in query {
-        let record = rec_result?;
-        let flags = record.flags();
-
-        if flags.is_unmapped()
-            || flags.is_secondary()
-            || flags.is_supplementary()
-            || flags.is_duplicate()
-            || flags.is_qc_fail()
-        {
-            continue;
+    for chunk in per_chunk {
+        for (pos, counts) in chunk {
+            let total = allele_counts.entry(pos).or_insert([0; 4]);
+            for (t, c) in total.iter_mut().zip(counts) {
+                *t += c;
+            }
         }
-
-        let mq: u8 = match record.mapping_quality() {
-            Some(q) => u8::from(q),
-            None => 0,
-        };
-        if mq < min_mapq {
-            continue;
-        }
-
-        let align_start = match record.alignment_start() {
-            Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
-            _ => continue,
-        };
-
-        let seq: Vec<u8> = record.sequence().iter().collect();
-        let cigar = record.cigar();
-
-        walk_cigar_count(
-            &seq,
-            Box::new(cigar.iter()),
-            align_start,
-            region_start,
-            region_end,
-            &mut allele_counts,
-        );
     }
-
     Ok(allele_counts)
 }
 
@@ -995,7 +1016,8 @@ fn collect_snp_alleles(
     }
 }
 
-/// BAM pass of [`collect_snp_alleles`].
+/// BAM pass of [`collect_snp_alleles`], on the thread pool (see
+/// [`crate::extract::fold_bam_region`]).
 fn collect_snp_alleles_bam(
     bam_path: &str,
     chrom: &str,
@@ -1004,67 +1026,81 @@ fn collect_snp_alleles_bam(
     min_mapq: u8,
     positions: &HashSet<u64>,
 ) -> Result<HashMap<String, Vec<(u64, u8)>>> {
+    let n_chunks = crate::extract::read_chunks(region_start, region_end);
+    collect_snp_alleles_bam_in(bam_path, chrom, region_start, region_end, min_mapq, positions, n_chunks)
+}
+
+/// [`collect_snp_alleles_bam`] in `n_chunks` chunks. Each chunk holds its
+/// records in file order and the chunks are joined in order, so every read
+/// name's alleles come in the order one pass gives them.
+fn collect_snp_alleles_bam_in(
+    bam_path: &str,
+    chrom: &str,
+    region_start: u64,
+    region_end: u64,
+    min_mapq: u8,
+    positions: &HashSet<u64>,
+    n_chunks: usize,
+) -> Result<HashMap<String, Vec<(u64, u8)>>> {
+    let per_chunk = crate::extract::fold_bam_region(
+        bam_path,
+        chrom,
+        region_start,
+        region_end,
+        n_chunks,
+        "failed to open BAM for SNP allele collection:",
+        HashMap::new,
+        |read_alleles: &mut HashMap<String, Vec<(u64, u8)>>, record| {
+            let flags = record.flags();
+
+            if flags.is_unmapped()
+                || flags.is_secondary()
+                || flags.is_supplementary()
+                || flags.is_duplicate()
+                || flags.is_qc_fail()
+            {
+                return Ok(());
+            }
+
+            let mq: u8 = match record.mapping_quality() {
+                Some(q) => u8::from(q),
+                None => 0,
+            };
+            if mq < min_mapq {
+                return Ok(());
+            }
+
+            let name = match record.name() {
+                Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
+                None => return Ok(()),
+            };
+
+            let align_start = match record.alignment_start() {
+                Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
+                _ => return Ok(()),
+            };
+
+            let seq: Vec<u8> = record.sequence().iter().collect();
+            let cigar = record.cigar();
+
+            let alleles = read_alleles.entry(name).or_default();
+            walk_cigar_collect(
+                &seq,
+                Box::new(cigar.iter()),
+                align_start,
+                positions,
+                alleles,
+            );
+            Ok(())
+        },
+    )?;
+
     let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
-
-    let mut reader = noodles::bam::io::indexed_reader::Builder::default()
-        .build_from_path(bam_path)
-        .with_context(|| {
-            format!(
-                "failed to open BAM for SNP allele collection: {}",
-                bam_path
-            )
-        })?;
-    let header = reader.read_header()?;
-
-    let start_pos = crate::extract::safe_noodles_position(region_start + 1);
-    let end_pos = crate::extract::safe_noodles_position(region_end);
-    let region = noodles::core::Region::new(chrom, start_pos..=end_pos);
-    let query = reader.query(&header, &region)?;
-
-    for rec_result in query {
-        let record = rec_result?;
-        let flags = record.flags();
-
-        if flags.is_unmapped()
-            || flags.is_secondary()
-            || flags.is_supplementary()
-            || flags.is_duplicate()
-            || flags.is_qc_fail()
-        {
-            continue;
+    for chunk in per_chunk {
+        for (name, alleles) in chunk {
+            read_alleles.entry(name).or_default().extend(alleles);
         }
-
-        let mq: u8 = match record.mapping_quality() {
-            Some(q) => u8::from(q),
-            None => 0,
-        };
-        if mq < min_mapq {
-            continue;
-        }
-
-        let name = match record.name() {
-            Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
-            None => continue,
-        };
-
-        let align_start = match record.alignment_start() {
-            Some(Ok(p)) => usize::from(p).saturating_sub(1) as u64,
-            _ => continue,
-        };
-
-        let seq: Vec<u8> = record.sequence().iter().collect();
-        let cigar = record.cigar();
-
-        let alleles = read_alleles.entry(name).or_default();
-        walk_cigar_collect(
-            &seq,
-            Box::new(cigar.iter()),
-            align_start,
-            positions,
-            alleles,
-        );
     }
-
     Ok(read_alleles)
 }
 
@@ -1206,6 +1242,63 @@ fn walk_cigar_collect(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// chrT, 20 kb: 600 fragments whose mates overlap by 50 bases (read 1 at
+    /// `p`, read 2 at `p + 50`, 100M each), bases varying by position and
+    /// fragment, every seventh fragment at MAPQ 10.
+    fn overlapping_mates_bam(dir: &std::path::Path) -> String {
+        use noodles::sam::alignment::record::cigar::{op::Kind, Op};
+        use noodles::sam::alignment::record::{Flags, MappingQuality};
+        use noodles::sam::alignment::record_buf::Sequence;
+        use noodles::sam::alignment::RecordBuf;
+        let mut records: Vec<(usize, RecordBuf)> = Vec::new();
+        for i in 0..600usize {
+            let p = 2_000 + i * 17;
+            let mapq = if i % 7 == 0 { 10 } else { 60 };
+            for (flags, pos) in [(0x63u16, p), (0x93u16, p + 50)] {
+                let seq: Vec<u8> = (0..100).map(|k| b"ACGT"[(pos + k + i % 3) % 4]).collect();
+                let record = RecordBuf::builder()
+                    .set_name(format!("f{}", i))
+                    .set_flags(Flags::from(flags))
+                    .set_reference_sequence_id(0)
+                    .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                    .set_mapping_quality(MappingQuality::new(mapq).unwrap())
+                    .set_cigar([Op::new(Kind::Match, 100)].into_iter().collect())
+                    .set_sequence(Sequence::from(seq))
+                    .build();
+                records.push((pos, record));
+            }
+        }
+        records.sort_by_key(|(pos, _)| *pos);
+        let records: Vec<RecordBuf> = records.into_iter().map(|(_, r)| r).collect();
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("mates.bam"), "chrT", 20_000, &records)
+    }
+
+    #[test]
+    fn test_the_pileup_passes_read_in_chunks_give_what_one_query_gives() {
+        // Both pileup passes may read their region chunk by chunk on the
+        // thread pool. The counts must be the same, and each read name's
+        // alleles must come in the same order -- mates overlap, so a name's
+        // list interleaves its two records.
+        let dir = std::env::temp_dir().join(format!("spike_pileup_chunks_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bam = overlapping_mates_bam(&dir);
+        let (start, end) = (3_000, 11_000);
+        let positions: HashSet<u64> = (start..end).step_by(7).collect();
+        let pool4 = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+
+        let counts = count_alleles_bam_in(&bam, "chrT", start, end, 20, 1).unwrap();
+        assert!(counts.len() > 7_000, "{} positions counted", counts.len());
+        assert_eq!(pool4.install(|| count_alleles_bam_in(&bam, "chrT", start, end, 20, 6)).unwrap(), counts);
+
+        let alleles = collect_snp_alleles_bam_in(&bam, "chrT", start, end, 20, &positions, 1).unwrap();
+        assert!(alleles.values().any(|a| a.windows(2).any(|w| w[1].0 < w[0].0)), "no name interleaves its mates");
+        assert_eq!(
+            pool4.install(|| collect_snp_alleles_bam_in(&bam, "chrT", start, end, 20, &positions, 6)).unwrap(),
+            alleles
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use rand::SeedableRng;
 
     fn snp(pos: u64) -> HetSnp {

@@ -878,6 +878,80 @@ pub fn safe_noodles_position(pos: u64) -> noodles::core::Position {
     noodles::core::Position::new(pos_usize).unwrap_or(noodles::core::Position::MIN)
 }
 
+/// A region is read on the thread pool in at most one chunk per thread, and
+/// in no chunk shorter than this: a small event's region stays one query.
+pub const MIN_READ_CHUNK_BP: u64 = 100_000;
+
+/// How many chunks [`fold_bam_region`] reads `[start, end)` in on the current
+/// thread pool: one per thread, none under [`MIN_READ_CHUNK_BP`], at least one.
+pub fn read_chunks(start: u64, end: u64) -> usize {
+    let by_length = end.saturating_sub(start).div_ceil(MIN_READ_CHUNK_BP) as usize;
+    rayon::current_num_threads().min(by_length).max(1)
+}
+
+/// `[start, end)` cut into at most `n` chunks, as equal as whole bases allow.
+fn region_chunks(start: u64, end: u64, n: usize) -> Vec<(u64, u64)> {
+    let len = end.saturating_sub(start);
+    let n = (n.max(1) as u64).min(len.max(1));
+    (0..n)
+        .map(|i| (start + len * i / n, start + len * (i + 1) / n))
+        .collect()
+}
+
+/// Read the BAM records over 0-based `[start, end)` of `chrom` in `n_chunks`
+/// chunks on the thread pool, into one accumulator per chunk, returned in
+/// chunk order.
+///
+/// Each chunk is its own indexed query. A record overlapping two chunks is
+/// handed to one: the chunk holding its alignment start, or the first chunk
+/// for a record that starts before `start`. Within a chunk records come in
+/// file order, so feeding the accumulators in order sees every record once,
+/// in the order one query over the whole region yields them.
+pub fn fold_bam_region<A, I, F>(
+    bam_path: &str,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    n_chunks: usize,
+    open_context: &str,
+    init: I,
+    each: F,
+) -> Result<Vec<A>>
+where
+    A: Send,
+    I: Fn() -> A + Sync,
+    F: Fn(&mut A, &noodles::bam::Record) -> Result<()> + Sync,
+{
+    use rayon::prelude::*;
+    region_chunks(start, end, n_chunks)
+        .into_par_iter()
+        .enumerate()
+        .map(|(i, (chunk_start, chunk_end))| {
+            let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+                .build_from_path(bam_path)
+                .with_context(|| format!("{} {}", open_context, bam_path))?;
+            let header = reader.read_header()?;
+            let region = noodles::core::Region::new(
+                chrom,
+                safe_noodles_position(chunk_start + 1)..=safe_noodles_position(chunk_end),
+            );
+            let mut acc = init();
+            for result in reader.query(&header, &region)? {
+                let record = result?;
+                if i > 0 {
+                    // Owned by an earlier chunk, which read it too.
+                    match record.alignment_start() {
+                        Some(Ok(p)) if usize::from(p) as u64 > chunk_start => {}
+                        _ => continue,
+                    }
+                }
+                each(&mut acc, &record)?;
+            }
+            Ok(acc)
+        })
+        .collect()
+}
+
 /// Reverse-complement a DNA sequence in place.
 /// Complement a single DNA base: A↔T, C↔G.
 pub fn complement_base(base: u8) -> u8 {
@@ -1125,6 +1199,57 @@ pub(crate) mod test_fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_region_read_in_chunks_sees_every_record_once_in_file_order() {
+        // A long region may be read chunk by chunk on the thread pool. Each
+        // record must reach exactly one chunk -- the one holding its start,
+        // or the first for a record starting before the region -- and the
+        // chunks, joined in order, must be the file's own order. Reads start
+        // at every base from 900 to 3999, two at every 50th, so some start
+        // before the region, some on every chunk border, and some together.
+        use noodles::sam::alignment::record::cigar::{op::Kind, Op};
+        use noodles::sam::alignment::record::{Flags, MappingQuality};
+        use noodles::sam::alignment::RecordBuf;
+        let dir = std::env::temp_dir().join(format!("spike_chunks_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut records = Vec::new();
+        for pos in 900..4000usize {
+            for copy in 0..if pos % 50 == 0 { 2 } else { 1 } {
+                records.push(
+                    RecordBuf::builder()
+                        .set_name(format!("r{}_{}", pos, copy))
+                        .set_flags(Flags::from(0x63))
+                        .set_reference_sequence_id(0)
+                        .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                        .set_mapping_quality(MappingQuality::new(60).unwrap())
+                        .set_cigar([Op::new(Kind::Match, 100)].into_iter().collect())
+                        .build(),
+                );
+            }
+        }
+        let bam = test_fixtures::write_one_contig_bam(&dir.join("chunks.bam"), "chrT", 10_000, &records);
+        let read = |chunks: usize| -> Vec<String> {
+            fold_bam_region(&bam, "chrT", 1_000, 4_000, chunks, "failed to open BAM:", Vec::new, |seen, r| {
+                seen.push(String::from_utf8_lossy(r.name().unwrap().as_ref()).into_owned());
+                Ok(())
+            })
+            .unwrap()
+            .concat()
+        };
+        let one_query = read(1);
+        // 1-based starts 902..=3999 overlap [1000, 4000): 3098 starts, 61 of
+        // them (950, 1000, ..., 3950) doubled.
+        assert_eq!(one_query.len(), 3098 + 61);
+        assert_eq!(one_query[0], "r902_0");
+        let chunked = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(|| read(7));
+        assert!(chunked == one_query, "7 chunks on 4 threads differ from one query");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_build_read_pool_order_does_not_depend_on_input_order() {
