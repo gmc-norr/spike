@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce the model findings in CLINICAL_SV_REVIEW.md on synthetic data.
+"""Reproduce the model findings in docs/review/CLINICAL_SV_REVIEW.md on synthetic data.
 
 Requires a built spike binary, Python 3.9+, and samtools on PATH. The optional
 --with-alignment also requires bwa-mem2. This is a diagnostic, not a clinical

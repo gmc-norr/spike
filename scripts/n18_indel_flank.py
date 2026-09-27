@@ -5,7 +5,7 @@ Re-implements `spike validate`'s allele-fraction counting (the N13 pad rule
 for an indel, the base at POS for an SNV, one vote per fragment and none for
 mates that disagree, MAPQ >= 20, N14's binomial grade at an expected 0.5),
 then recounts keeping only reads that reach F bases past the site's repeat
-region on each side. REVIEW.md's N18 plan says what is computed and what
+region on each side. docs/review/REVIEW.md's N18 plan says what is computed and what
 counts as supported or refuted.
 
 The site lists are plain truth VCFs in spike's format (SIM_VAF=0.5):

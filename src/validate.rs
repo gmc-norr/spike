@@ -4158,7 +4158,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
     /// about, and an event window far from it. 15 pairs at chrA:101-1800 carry
     /// MAPQ 0 (a telomere's worth of multi-mapping reads) and 3 pairs inside
     /// chrA:10001-10500 carry MAPQ 60, so the mean MAPQ of all 36 records is
-    /// exactly 10.0 -- the number REVIEW.md measured on whole-genome HG002 --
+    /// exactly 10.0 -- the number docs/review/REVIEW.md measured on whole-genome HG002 --
     /// while the event's own window reads 60. No record carries the duplicate
     /// flag. Returns `(dir, fasta_path, cram_path)`; the caller removes `dir`.
     fn head_and_event_cram(tag: &str) -> (std::path::PathBuf, String, String) {
@@ -4610,7 +4610,7 @@ chr2\t42522656\tsim_fus_1_mate\tN\t]chr2:29416089]N\t999\tPASS\tSVTYPE=BND;MATEI
 
     #[test]
     fn test_allele_freq_passes_correct_runs_and_not_empty_ones() {
-        // The N14 pass criteria locked in REVIEW.md, computed exactly:
+        // The N14 pass criteria locked in docs/review/REVIEW.md, computed exactly:
         // wherever the check is evaluable, a correct run (x ~ Bin(n, p'))
         // passes >= 98% of the time and a run that planted nothing (only
         // 0.1% error reads) passes <= 0.5% of the time.

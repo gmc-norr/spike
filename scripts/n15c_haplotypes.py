@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N15, third attempt: the haplotype rule with the truth set's nearby records.
 
-Re-implements the rule REVIEW.md's "N15 plan, third attempt" locks, for the
+Re-implements the rule docs/review/REVIEW.md's "N15 plan, third attempt" locks, for the
 het indel sites in --sites, reading the other records from --truth (the file
 `spike validate` is given):
 

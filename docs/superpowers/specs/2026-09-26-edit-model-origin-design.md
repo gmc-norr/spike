@@ -7,7 +7,7 @@ an exact twin, `origin` lands inside the truth band at both the event (L 0.739, 
 [0.717, 0.820]) and its look-alike (P 0.763, band [0.762, 0.865]); `--min-mapq 0` lands
 outside both (L 0.271, P 1.296) and `clean` refuses for want of donor coverage. Verdict
 SUPPORTED — the rule was locked in the plan (`a1b2585`) and the harness committed
-(`15c4277`) before the run; the full record is in `REVIEW.md`, section
+(`15c4277`) before the run; the full record is in `docs/review/REVIEW.md`, section
 "`--edit-model origin`: physics test (2026-09-27)". `origin` stays experimental and `clean`
 stays the default: only the real test on the user's GIAB BAMs can change that.
 

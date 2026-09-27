@@ -112,7 +112,7 @@ md5sum /tmp/spike-before/release/spike /tmp/spike-after/release/spike
 ```
 
 Two equal checksums for two commits that change code mean a stale build, not
-a zero effect. See `NF4` in `CLINICAL_SV_NEW_FINDINGS.md`.
+a zero effect. See `NF4` in `docs/review/CLINICAL_SV_NEW_FINDINGS.md`.
 
 ## Quick start
 
@@ -272,7 +272,7 @@ AF specifiers:
 - `af=het` — exactly 0.5: one copy of two (germline heterozygous), the same as
   `af=0.5`. Earlier versions drew it from Beta(40,40), which moved the event
   itself, not just what the reads show: above 0.5 the other copy lost reads
-  too (CR7(c) in `CLINICAL_SV_DESIGN_NOTES.md`).
+  too (CR7(c) in `docs/review/CLINICAL_SV_DESIGN_NOTES.md`).
 - `af=hom` — fixed at 1.0 (homozygous)
 - *(omitted)* — uses the global `--allele-fraction` (default: 0.5)
 
@@ -518,7 +518,7 @@ A look-alike on a contig the BAM's header does not list is skipped, with a warni
 
 `origin` takes longer than `clean` on a big event: see [Run time](#run-time).
 
-On a made-up 80 kb genome built with an exact twin, `origin` reproduced the depth a real het deletion leaves at both the event and its look-alike copy, where `--min-mapq 0` did not and `clean` refused for want of donor coverage — a physics test whose rule was locked before the run returned SUPPORTED (`REVIEW.md`, "`--edit-model origin`: physics test"). The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
+On a made-up 80 kb genome built with an exact twin, `origin` reproduced the depth a real het deletion leaves at both the event and its look-alike copy, where `--min-mapq 0` did not and `clean` refused for want of donor coverage — a physics test whose rule was locked before the run returned SUPPORTED (`docs/review/REVIEW.md`, "`--edit-model origin`: physics test"). The default stays `clean` until `origin` is tested against real data. The design is in `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`.
 
 ### Validating the spike-in
 
@@ -774,7 +774,7 @@ the review's reproduction script (`scripts/review_sv_model.py`) on a synthetic
 probe, a het DUP of `chrT:10000-28000` over a donor whose interior section is
 18.75x PASSed at an observed **1.32** against an expected **1.50** while that
 interior read **81.09x** -- 4.32x, where a locally proportional CN2->CN3
-predicts 28.13x (`CR2` in `REVIEW.md` for the depth, `CR9` for the check passing). spike itself now measures that mismatch at simulation time, as `SIM_DEPTH_FOLD` in the truth VCF (3.88 on that probe; see [One depth for the whole event](#one-depth-for-the-whole-event)), and `spike validate` now reports it as the advisory `depth_fold` row beside this one. Nor does the check see a read its own
+predicts 28.13x (`CR2` in `docs/review/REVIEW.md` for the depth, `CR9` for the check passing). spike itself now measures that mismatch at simulation time, as `SIM_DEPTH_FOLD` in the truth VCF (3.88 on that probe; see [One depth for the whole event](#one-depth-for-the-whole-event)), and `spike validate` now reports it as the advisory `depth_fold` row beside this one. Nor does the check see a read its own
 MAPQ filter rejects: on the same probes, with half the donor pairs at MAPQ 0, a
 deletion requested at AF=1 kept **37.5x** of its reads inside the deletion and
 still PASSed at an observed **0.00**, because `--min-mapq` (default 20) hides
@@ -820,7 +820,7 @@ represents as a `D` operation rather than as a supplementary alignment carries
 no SA tag at all, so a spike-in whose sequence is right can still fail:
 measured on the harness's chr20 window, a correctly planted 505 bp DEL emitted
 188 ALT fragment pairs of which **0** carried an `SA:Z` tag, and `split_reads`
-scored 0 -- a FAIL (`N1` in `REVIEW.md`).
+scored 0 -- a FAIL (`N1` in `docs/review/REVIEW.md`).
 
 `split_reads_each_end` establishes the same thing at **each** breakpoint rather
 than pooled over both: two distinct read names within 500 bp of the event's own
@@ -877,7 +877,7 @@ The entries exist: in those runs' `sim.bam` the junction reads are split, and 10
 3+6, 11 and 1+7 of them carry `SA:Z` at the two ends. But 35 of those 38 entries put
 the supplementary piece on another chromosome, 32 of them at MAPQ 0. The sequence just
 past the far breakpoint is repeated elsewhere, so the aligner cannot place the short
-piece. A real deletion there would align the same way (RF6 in `REVIEW.md`).
+piece. A real deletion there would align the same way (RF6 in `docs/review/REVIEW.md`).
 That is why, for a DEL, `split_reads` is advisory since RF14 and `del_planted`
 decides.
 
@@ -1156,7 +1156,7 @@ five PASSed on an insertion that was never there. Counting only `I` operations
 below the cap, the same five positions give **0, 0, 0, 0, 0**, while genuinely
 planted 3 bp and 12 bp insertions still find 12 reads each and PASS.
 
-**What `ins_reads` gets wrong, measured (RF11 in `REVIEW.md`).** Both errors
+**What `ins_reads` gets wrong, measured (RF11 in `docs/review/REVIEW.md`).** Both errors
 come from counting CIGAR marks near POS rather than reading bases, and they pull
 in opposite directions, so no clip threshold fixes both:
 
@@ -1179,7 +1179,7 @@ So a FAIL on `ins_reads` for a 40-49 bp insertion usually means bwa-mem2 clipped
 the reads, not that the insertion is missing: look at `ins_sequence`. And a PASS
 at 50 bp or more is weaker evidence than two reads suggests.
 
-**Real variants fail these checks too** ("Realism probe" in `REVIEW.md`). Run on
+**Real variants fail these checks too** ("Realism probe" in `docs/review/REVIEW.md`). Run on
 HG002's own BAM against GIAB's truth:
 - `split_reads` fails 12 of the pipeline's 20 real deletions.
 - `ins_reads` fails 47 of 112 real het insertions of 20-39 bp. spike's own
@@ -1187,10 +1187,10 @@ HG002's own BAM against GIAB's truth:
 
 So a FAIL on either row does not show that a spike-in is wrong. And spike's short
 insertions are easier to align than real ones (RF15 in
-`CLINICAL_SV_NEW_FINDINGS.md`).
+`docs/review/CLINICAL_SV_NEW_FINDINGS.md`).
 
 **So `ins_reads` is advisory, and `ins_planted` decides an insertion** (RF13 in
-`REVIEW.md`). On the 35x HG002 BAM:
+`docs/review/REVIEW.md`). On the 35x HG002 BAM:
 - **54 correct insertions.** These were 1, 2, 4, 15, 45 and 300 bp random ones at
   6 sites, 45 bp at VAF 0.1, and 12 of HG002's own insertions at their own
   positions with their own bases. `ins_planted` found spike's reads carrying
@@ -1203,7 +1203,7 @@ insertions are easier to align than real ones (RF15 in
   only as information.
 
 **And for a DEL, `split_reads` is advisory and `del_planted` decides** (RF14 in
-`REVIEW.md`; the measured rates are in the `del_planted` paragraph above). Master's
+`docs/review/REVIEW.md`; the measured rates are in the `del_planted` paragraph above). Master's
 and the new `validate` were run on the same merged BAMs, 178 saved runs:
 - **No run master passed now fails.**
 - **36 runs flipped from fail to pass** (109 → 145 exit 0), including RF6's four
@@ -1501,7 +1501,7 @@ BED line — each naming the gene and the line; see
 An unreadable `--gvcf` used to be a warning: spike suppressed that region's
 reads at random and exited 0, so the output could not be told from a sample
 with no SNPs there. It is a refusal now (CR3 in
-`CLINICAL_SV_DESIGN_NOTES.md`). Measured on the HG002 BAM with a plain-gzip
+`docs/review/CLINICAL_SV_DESIGN_NOTES.md`). Measured on the HG002 BAM with a plain-gzip
 `--gvcf`: exit 1, and the output directory is left empty.
 
 **Still not a refusal:** without `--gvcf`, spike reads the sample's SNPs by
@@ -1665,7 +1665,7 @@ fragments as the local depth, on top of all the original reads, so its
 evidence is stronger than a copy-neutral sample would show. Use it to test
 whether a caller finds a junction; do not read its results as sensitivity or
 genotyping for balanced translocations. spike says this in a warning on every
-run that has a fusion event. See CR6 in `CLINICAL_SV_DESIGN_NOTES.md`.
+run that has a fusion event. See CR6 in `docs/review/CLINICAL_SV_DESIGN_NOTES.md`.
 
 **Observable signals**:
 - Split reads at the fusion junction (one side mapping to gene A, the other to gene B)
@@ -1727,7 +1727,7 @@ The number of synthetic reads to tile is:
 
 ### One depth for the whole event
 
-That one `coverage` scales every fragment the event tiles, wherever it lands. Where the donor's own depth differs from it, the event's depth there is wrong: a het DUP over a stretch at a quarter of the breakpoint's depth came out **81.09x** where a local CN2 -> CN3 is **28.13x** (`CR2` in `REVIEW.md`). spike does not fix that yet, but it measures it (CR2 option B). Each reference interval the event's fragments are drawn from is cut into ~1 kb bins, and each bin's donor depth `D` is measured the same way as `coverage` (`C`). The event's **depth fold** is the largest `max((D+1)/(C+1), (C+1)/(D+1))` over its bins. The log prints it with the bin it came from, the run README has a **Depth fold** column, and `truth.vcf` records it as `SIM_DEPTH_FOLD`, which `spike validate` reads back as its advisory `depth_fold` row. Above **1.5** spike warns:
+That one `coverage` scales every fragment the event tiles, wherever it lands. Where the donor's own depth differs from it, the event's depth there is wrong: a het DUP over a stretch at a quarter of the breakpoint's depth came out **81.09x** where a local CN2 -> CN3 is **28.13x** (`CR2` in `docs/review/REVIEW.md`). spike does not fix that yet, but it measures it (CR2 option B). Each reference interval the event's fragments are drawn from is cut into ~1 kb bins, and each bin's donor depth `D` is measured the same way as `coverage` (`C`). The event's **depth fold** is the largest `max((D+1)/(C+1), (C+1)/(D+1))` over its bins. The log prints it with the bin it came from, the run README has a **Depth fold** column, and `truth.vcf` records it as `SIM_DEPTH_FOLD`, which `spike validate` reads back as its advisory `depth_fold` row. Above **1.5** spike warns:
 
 ```
 DUP  chrT:10001-28000 (18000bp): the donor's depth over chrT:17000-18000 is 25.0x, but every fragment this event tiles is scaled by the 100.0x measured at one of its breakpoints (3.88-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).
@@ -2109,7 +2109,7 @@ Note that `spike validate`'s per-event checks are *not* part of the verdict
 beyond "the report parsed and at least one check passed". On a cross-sample
 spike-in most of them compare against a background that already carries the
 event, so they fail for reasons that have nothing to do with the injection —
-see `N1` in `REVIEW.md`.
+see `N1` in `docs/review/REVIEW.md`.
 
 #### What the harness establishes, and what it does not
 
@@ -2160,7 +2160,7 @@ site, but no short-read caller tried finds them (Delly, Manta, TIDDIT,
 CNVpytor). Those 4 stay in `N_outside_bg`, so `Recall_outside_bg` can still count
 a background deletion as the spike-in's. On the default run it does: 2 of the 10
 at VAF 0.5 and 1 of the 7 at VAF 0.25 are among those 4, and none at VAF 0.1. See
-RF12 in `REVIEW.md`. The converse is no safer: a locus at
+RF12 in `docs/review/REVIEW.md`. The converse is no safer: a locus at
 which the caller made no call has not been shown to be variant-free. The run
 measures what this caller recovered from this background, not what is in it.
 

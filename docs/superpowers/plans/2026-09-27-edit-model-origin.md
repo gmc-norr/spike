@@ -57,7 +57,7 @@ A review of the first revision (`84ca4c8`) found five gaps. Each was checked aga
 | `src/main.rs` | modify | `mod origin`, `--edit-model`, `validate_edit_model`, `origin_footprint`, the per-event site, one `decide` after all events |
 | `src/extract.rs` | modify `test_fixtures` | `write_one_contig_bam` for origin's BAM tests |
 | `scripts/origin_physics.py` | create | the physics test (Task 12) |
-| `README.md`, `REVIEW.md` | modify | user docs; the physics result |
+| `README.md`, `docs/review/REVIEW.md` | modify | user docs; the physics result |
 
 ---
 
@@ -2334,7 +2334,7 @@ Apply each mutation alone and run `CARGO_TARGET_DIR=$S/target-mut cargo test -j 
 
 **Files:**
 - Create: `scripts/origin_physics.py`
-- Modify: `REVIEW.md`. Add a new section at the end, "`--edit-model origin`: physics test".
+- Modify: `docs/review/REVIEW.md`. Add a new section at the end, "`--edit-model origin`: physics test".
 
 **Locked in this plan, before any run.** Commit 1 of the gate is the commit of this file.
 
@@ -2546,12 +2546,12 @@ grep -h "origin" $S/origin-physics/origin.log | head -20
 
 Record the full output. Do not re-run with other seeds, windows or margins. Only a harness-check failure or a NO VERDICT allows a second run. Fix the cause, commit the fix as `code:`, run again, and report that it happened and why.
 
-- [ ] **Step 4: Write the result into `REVIEW.md`.** It holds the locked rule (pointing to this plan), the harness check line, the table of truth1, truth2, clean, mapq0 and origin (exit, L, P), the bands and the verdict. Add the Task 9 byte-identity md5 rows and the Task 11 mutation record. For each measured number, give the command that produced it. Update the spec's Status line to say whether the physics test passed. Update the README section's last paragraph with the verdict in one sentence.
+- [ ] **Step 4: Write the result into `docs/review/REVIEW.md`.** It holds the locked rule (pointing to this plan), the harness check line, the table of truth1, truth2, clean, mapq0 and origin (exit, L, P), the bands and the verdict. Add the Task 9 byte-identity md5 rows and the Task 11 mutation record. For each measured number, give the command that produced it. Update the spec's Status line to say whether the physics test passed. Update the README section's last paragraph with the verdict in one sentence.
 
 - [ ] **Step 5: Commit the result** (never together with the plan commit)
 
 ```bash
-git add REVIEW.md README.md docs/superpowers/specs/2026-09-26-edit-model-origin-design.md
+git add docs/review/REVIEW.md README.md docs/superpowers/specs/2026-09-26-edit-model-origin-design.md
 git commit -m "result: --edit-model origin physics test -- <SUPPORTED / REFUTED / INCONCLUSIVE>
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"

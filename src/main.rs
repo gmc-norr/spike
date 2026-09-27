@@ -289,7 +289,7 @@ fn fusion_mode_warning(events: &[SimEvent]) -> Option<String> {
          reads for one join on top. It is not a balanced translocation: no read on \
          either partner is replaced and there is no reciprocal junction, so the \
          junction evidence is stronger than a copy-neutral sample would show. See \
-         CR6 in CLINICAL_SV_DESIGN_NOTES.md.",
+         CR6 in docs/review/CLINICAL_SV_DESIGN_NOTES.md.",
         n
     ))
 }
@@ -2449,6 +2449,20 @@ mod tests {
         assert!(warning.contains("no reciprocal junction"), "{}", warning);
 
         assert_eq!(fusion_mode_warning(&[del("chr1", 100, 200), ins("chr1", 500)]), None);
+    }
+
+    #[test]
+    fn test_the_fusion_warning_names_a_file_the_repo_has() {
+        // The warning sends the user to a notes file; moving that file
+        // without the warning left it naming one that is not there.
+        let warning = fusion_mode_warning(&[fusion("chr1", 5, "chr2", 9)]).unwrap();
+        let named = warning
+            .split_whitespace()
+            .map(|w| w.trim_end_matches('.'))
+            .find(|w| w.ends_with(".md"))
+            .expect("the warning names a notes file");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(named);
+        assert!(path.is_file(), "the fusion warning names {}, which is not in the repo", named);
     }
 
     #[test]

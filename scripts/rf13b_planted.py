@@ -11,7 +11,7 @@ supplementary, any MAPQ or other flag; two 31-base junction probes from
   the probe that holds an **inserted** base matches exactly, and at most 2
   positions holding a **reference flank** base differ. The first attempt allowed
   2 substitutions anywhere, and a truth with the wrong 4 bases matched (RF13 in
-  REVIEW.md). The flank tolerance stays for the sample's own SNPs, which spike
+  docs/review/REVIEW.md). The flank tolerance stays for the sample's own SNPs, which spike
   writes onto reference positions only (`apply_variants` skips a segment with no
   reference origin, `src/haplotype.rs:612`), and for sequencing errors.
 

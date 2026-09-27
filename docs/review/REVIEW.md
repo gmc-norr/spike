@@ -2857,7 +2857,7 @@ now with a warning naming the realized-vs-recorded fraction.)
 
 A second, independent review of `4efa0f4` for germline WGS SV use, kept verbatim in
 [CLINICAL_SV_REVIEW.md](CLINICAL_SV_REVIEW.md) with its reproduction script
-[scripts/review_sv_model.py](scripts/review_sv_model.py). Its findings R1-R9 are CR1-CR9 here
+[scripts/review_sv_model.py](../../scripts/review_sv_model.py). Its findings R1-R9 are CR1-CR9 here
 so they do not clash with the IDs above. Every finding was reproduced before anything was
 changed; **none was refuted**, and every number the review printed came back identical.
 

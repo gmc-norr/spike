@@ -2058,7 +2058,7 @@ mod tests {
             .collect()
     }
 
-    /// N7's measurement, as REVIEW.md's N7 plan locks it. Run by hand:
+    /// N7's measurement, as docs/review/REVIEW.md's N7 plan locks it. Run by hand:
     /// `SPIKE_N7_BAM=<HG002 35x BAM> cargo test --release -- --ignored
     /// measure_n7_quality_drift --nocapture`. Prints one row per tolerance
     /// window and per repeat, the medians, and N*.

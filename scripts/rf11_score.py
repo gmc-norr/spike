@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RF11 plan: apply the locked decision rule to K1 and K2 (see "RF11" in REVIEW.md).
+"""RF11 plan: apply the locked decision rule to K1 and K2 (see "RF11" in docs/review/REVIEW.md).
 
 Usage: rf11_score.py NULL_COUNTS_TSV K1_OUT_DIR SITES_TSV
 

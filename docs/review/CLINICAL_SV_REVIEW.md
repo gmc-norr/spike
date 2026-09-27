@@ -6,7 +6,7 @@ The central distinction is between **representing a rearranged sequence correctl
 
 **Evidence and limits.** I inspected the simulation, haplotype, synthesis, extraction, phasing, input/output, validation, and validation-harness code; built the current binary; ran its tests and Clippy; and constructed independent synthetic BAM probes. The probes use a 40 kb unique random reference, 150 bp paired reads, 400 bp fragments, Q60, a baseline of 75× base depth, and Spike seed 17. They intentionally remove biological and mapping ambiguity so that the model can be tested directly. Four cases were also aligned with `bwa-mem2` and merged using Spike's own generated scripts; `samtools depth` reproduced the sequence-based measurements. These are simulator correctness experiments, not measurements of clinical caller sensitivity. I did not run a new human whole-genome or multi-caller clinical benchmark.
 
-Reproduce the measurements with [scripts/review_sv_model.py](scripts/review_sv_model.py):
+Reproduce the measurements with [scripts/review_sv_model.py](../../scripts/review_sv_model.py):
 
 ```bash
 cargo build --offline
@@ -31,7 +31,7 @@ The output directory must be new. Requirements: Python 3.9+, `samtools`, and opt
 | R8 | Medium | Mate recovery discards unmatched R1 before the recovery pass | Code plus BAM boundary-pair reproduction |
 | R9 | High for interpreting a benchmark | Current QC and harness results cannot establish SV sequence/genotype correctness or clinical precision | Code plus measured QC blind spots |
 
-**R1. Nearby non-overlapping events can cancel each other's biological effect.** Relevant code: [event overlap check](src/main.rs#L626), [per-event replacement](src/simulate.rs#L166), and [output combination](src/simulate.rs#L301).
+**R1. Nearby non-overlapping events can cancel each other's biological effect.** Relevant code: [event overlap check](../../src/main.rs#L626), [per-event replacement](../../src/simulate.rs#L166), and [output combination](../../src/simulate.rs#L301).
 
 The overlap check considers event intervals, but each event replaces reads across a larger haplotype footprint with 2 kb flanks. Events are simulated independently against the original donor. Combining outputs removes originals suppressed by either event, but unconditionally retains the synthetic reads from both. Synthetic flanks from event B can therefore contain reference sequence that event A deleted. The previous H1 fix removes a different problem—retained *originals* undoing suppression—and does not solve this one.
 
@@ -48,7 +48,7 @@ Baseline depth is 75×. A homozygous deletion should not recover essentially nor
 
 **Action:** immediately reject intersecting replacement footprints, including a fragment margin, unless a shared simulation handles them. The complete solution is to group connected events, assign them to explicit haplotypes, and generate/suppress molecules once per group. Simply dropping synthetic reads by name cannot compose their sequence or phase correctly.
 
-**R2. Uniform tiling changes the donor's spatial coverage profile.** Relevant code: [first covered breakpoint selection](src/simulate.rs#L480), [fragment count](src/simulate.rs#L548), and [uniform placement](src/simulate.rs#L725).
+**R2. Uniform tiling changes the donor's spatial coverage profile.** Relevant code: [first covered breakpoint selection](../../src/simulate.rs#L480), [fragment count](../../src/simulate.rs#L548), and [uniform placement](../../src/simulate.rs#L725).
 
 Spike measures fragment depth in a 2 kb window at the first covered breakpoint side, suppresses local originals, and uses that one estimate across the entire variant haplotype. This replaces real variation in coverage with uniform synthetic coverage. It matters for WGS too: sequence composition, library preparation, and mapping produce spatial variation even without capture.
 
@@ -58,7 +58,7 @@ The approximate rule implemented inside a duplication is `D_out(x) = (1-v) D_don
 
 **Action:** learn a spatial fragment-start intensity, preferably with library and sequence-context terms, and project that process onto the altered haplotypes. Avoid simply treating low aligned depth as a molecular sampling bias: some of it is mappability and should arise naturally when simulated molecules are aligned. Establish dosage preservation in well-mappable control windows and characterize difficult regions separately. Add local, binned donor/output comparisons instead of relying on one event-average ratio.
 
-**R3. Background SNPs are preserved, but background indels and existing rearrangements are not.** Relevant code: [sample copies](src/loh.rs#L34), [SNP-only gVCF parsing](src/loh.rs#L513), and [application to reference-derived haplotypes](src/simulate.rs#L156).
+**R3. Background SNPs are preserved, but background indels and existing rearrangements are not.** Relevant code: [sample copies](../../src/loh.rs#L34), [SNP-only gVCF parsing](../../src/loh.rs#L513), and [application to reference-derived haplotypes](../../src/simulate.rs#L156).
 
 `SampleCopies` stores a base per reference position. The gVCF path explicitly excludes non-SNP alleles; its bookkeeping for spanning deletions does not install those deletions into the synthetic sequence. Thus the simulator preserves many SNP alleles while replacing the sample's indel/SV sequence with reference sequence. The pileup path cannot repair that representation limitation.
 
@@ -66,9 +66,9 @@ Reproduction: the donor has a homozygous 2 bp deletion at reference positions `[
 
 This can alter assembly, repeat context, phasing, and apparent allele balance near an SV. It can also erase or combine an already-present background event unpredictably. It is especially relevant when moving events between samples: absence from a caller's output is not proof that the donor lacks the event.
 
-**Action:** support sample-specific haplotypes containing SNPs, indels, and existing SVs, ideally from phased calls or a suitable assembly. Until then, restrict trusted tests to independently characterized backgrounds and explicitly reject or label footprints containing unsupported variation. Fail closed in a strict mode when the requested sample-variant input cannot be read; [the current error handler](src/simulate.rs#L93) logs a warning and proceeds with empty copies.
+**Action:** support sample-specific haplotypes containing SNPs, indels, and existing SVs, ideally from phased calls or a suitable assembly. Until then, restrict trusted tests to independently characterized backgrounds and explicitly reject or label footprints containing unsupported variation. Fail closed in a strict mode when the requested sample-variant input cannot be read; [the current error handler](../../src/simulate.rs#L93) logs a warning and proceeds with empty copies.
 
-**R4. The donor-training filter also determines which molecules can be edited.** Relevant code: [proper-pair requirement](src/extract.rs#L104), [MAPQ/flag filters](src/extract.rs#L777), [replacement names](src/main.rs#L553), and [merge operation](src/main.rs#L1456).
+**R4. The donor-training filter also determines which molecules can be edited.** Relevant code: [proper-pair requirement](../../src/extract.rs#L104), [MAPQ/flag filters](../../src/extract.rs#L777), [replacement names](../../src/main.rs#L553), and [merge operation](../../src/main.rs#L1456).
 
 Only qualifying proper pairs enter the donor pool. Low-MAPQ pairs, discordant pairs, unmapped mates, and excluded flagged records are generally absent from the replacement-name list and remain in the original BAM after merging. Those molecules cannot undergo the event. Filtering reads to learn a reliable library model is reasonable; using the same selection as the complete editable population is a separate and consequential assumption.
 
@@ -78,7 +78,7 @@ Some clinical callers deliberately ignore these reads, which limits the impact f
 
 **Action:** separate model-training eligibility from replacement eligibility. Track all affected molecules, their mates, and supplementary/secondary representations; decide consistently how the altered genome changes them. Retain an explicit exclusion census and quantify event-resistant depth. Avoid blindly deleting unrelated multimappers: assignment uncertainty should be modeled or the locus declared unsupported.
 
-**R5. Long insertion placement breaks its own reference-overlap constraint.** Relevant code: [novel-only start exclusion from the count](src/simulate.rs#L594), [bounded redraw loop](src/simulate.rs#L729), and [nearest-reference coordinate fallback](src/synth.rs#L813).
+**R5. Long insertion placement breaks its own reference-overlap constraint.** Relevant code: [novel-only start exclusion from the count](../../src/simulate.rs#L594), [bounded redraw loop](../../src/simulate.rs#L729), and [nearest-reference coordinate fallback](../../src/synth.rs#L813).
 
 The count formula excludes starts wholly inside inserted sequence. The placement loop redraws at most ten times, then accepts its last start even if it still lies wholly inside the insertion. The generator accepts those starts because both ends can use a nearest-reference fallback. This consumes a budget intended for reference-overlapping fragments with novel-only reads.
 
@@ -93,7 +93,7 @@ The 31-mer measure is a conservative anchor diagnostic, not an exact count of al
 
 **Action:** sample valid start intervals directly, with probabilities proportional to interval lengths for the sampled fragment size. Do not accept an invalid placement on retry exhaustion. Decide separately whether to simulate novel-only molecules: they are legitimate molecules in real WGS and can matter to assembly, but require their own count and truth provenance. Excluding them deliberately is itself a limitation of an insertion benchmark.
 
-**R6. Fusion mode is a junction-evidence spike, not a balanced germline translocation model.** Relevant code: [additive choice](src/simulate.rs#L138), [additive count](src/simulate.rs#L571), and [fusion haplotype](src/haplotype.rs#L343).
+**R6. Fusion mode is a junction-evidence spike, not a balanced germline translocation model.** Relevant code: [additive choice](../../src/simulate.rs#L138), [additive count](../../src/simulate.rs#L571), and [fusion haplotype](../../src/haplotype.rs#L343).
 
 A fusion keeps every original pair and adds only fragments crossing one new adjacency. A balanced heterozygous reciprocal translocation should alter one copy at each participating chromosome, retain the other copies, and produce both derivative adjacencies while conserving copy number. Two BND mate records describe the two ends of **one adjacency**; they are not the reciprocal derivative chromosome.
 
@@ -101,7 +101,7 @@ With equally covered partners and AF=0.5, the additive formula produces `C` junc
 
 **Action:** provide explicit derivative-chromosome paths, dosage, and phase, with suppression/replacement across both partners. Label the current mode as additive junction evidence. It remains useful for testing whether a caller recognizes a specified join, but does not establish sensitivity or genotyping performance for balanced translocations. The legacy junction DUP mode shares the additive dosage problem; use the full tandem model for simple DUP work after fixing R1–R4.
 
-**R7. Truth lacks information required for germline genotype and sequence validation.** Relevant code: [VCF input fields retained](src/vcf_input.rs#L261), [genotype inferred from AF](src/truth.rs#L321), [INS output](src/truth.rs#L252), [random INS construction](src/main.rs#L1244), and [`af=het`](src/main.rs#L423).
+**R7. Truth lacks information required for germline genotype and sequence validation.** Relevant code: [VCF input fields retained](../../src/vcf_input.rs#L261), [genotype inferred from AF](../../src/truth.rs#L321), [INS output](../../src/truth.rs#L252), [random INS construction](../../src/main.rs#L1244), and [`af=het`](../../src/main.rs#L423).
 
 - **Input GT is not the simulated genotype.** A measured input DEL with `GT=1/1` and no simulation-specific AF produces `SIM_VAF=0.500; GT=0/1`. FILTER and homozygous-reference records are also not selection gates, though those cases have warning counters. A specification-only VCF mode is legitimate, but must not be confused with reproducing a sample's truth genotypes.
 - **No ploidy or absolute copy-number model.** Both the simulation and emitted GT assume two starting copies. A male non-PAR X/Y event cannot have its haploid truth represented properly; baseline CNVs and CN>4 gains also lack an explicit model. Setting AF=1 can obtain complete deletion of eligible reads, but still writes diploid `1/1`.
@@ -111,7 +111,7 @@ With equally covered partners and AF=0.5, the additive formula produces `C` junc
 
 **Action:** store input sample, GT, ploidy, phase, baseline/output CN, actual insertion sequence, derivative adjacencies, and requested molecule fraction separately. Record emitted molecule counts and post-alignment measurements separately from the intended genome. Export sequence-resolved alleles or a referenced allele FASTA plus hashes. Make specification mode versus genotype-reproduction mode explicit.
 
-**R8. Unmatched R1 records are removed before mate recovery.** Relevant code: [BAM pass-one pairing](src/extract.rs#L135) and the corresponding CRAM loop around line 384.
+**R8. Unmatched R1 records are removed before mate recovery.** Relevant code: [BAM pass-one pairing](../../src/extract.rs#L135) and the corresponding CRAM loop around line 384.
 
 The expression `(read1_map.remove(&name), read2_map.remove(&name))` removes R1 even when R2 is absent. That unmatched R1 is consequently unavailable to the second pass. Unmatched R2 can remain, producing an asymmetric recovery behavior.
 
@@ -119,7 +119,7 @@ Measured boundary pair `p003200` has R1 at 12900 and R2 at 13150, both proper an
 
 **Action:** check that both maps contain the name before removing either entry. Test both mate orders on BAM and CRAM, including a mate outside the initial query.
 
-**R9. QC passes are weaker than the truth claims being made.** Relevant code: [coverage tolerance](src/validate.rs#L587), [split-read checks](src/validate.rs#L636), [insertion evidence](src/validate.rs#L698), [SA parsing](src/validate.rs#L2235), [harness comparison](scripts/validate_pipeline.sh#L292), and [benchmark invocation](scripts/validate_pipeline.sh#L849).
+**R9. QC passes are weaker than the truth claims being made.** Relevant code: [coverage tolerance](../../src/validate.rs#L587), [split-read checks](../../src/validate.rs#L636), [insertion evidence](../../src/validate.rs#L698), [SA parsing](../../src/validate.rs#L2235), [harness comparison](../../scripts/validate_pipeline.sh#L292), and [benchmark invocation](../../scripts/validate_pipeline.sh#L849).
 
 The current checks have useful diagnostic value, but several are evidence-presence checks rather than event validation:
 
@@ -151,7 +151,7 @@ Its current realism is uneven:
 
 Quality-score realism is not equivalent to error realism. Matching mean Q or per-cycle Q does not establish a matched substitution spectrum, repeat-dependent indel errors, pair-level quality correlation, clipping, duplicate family sizes, or empirical MAPQ distribution. I would calibrate these against held-out real libraries and real SV carriers before introducing more complicated quality models.
 
-There are also useful engineering improvements: bound memory and stream output for large event sets; use quality histograms instead of retaining multiple copies of observations; avoid rescanning an entire plain gVCF for every event; preserve per-library/read-group context through FASTQ reconstruction; and publish a reproducible environment with declared external test dependencies. Fragment normalization should use the actual sampled distribution: [statistics](src/stats.rs#L27) accept lengths below 10 kb, whereas [generation](src/simulate.rs#L697) conditions them on the read length and a 1500 bp maximum. That mismatch is code-confirmed; I did not quantify its impact on an ordinary WGS library here.
+There are also useful engineering improvements: bound memory and stream output for large event sets; use quality histograms instead of retaining multiple copies of observations; avoid rescanning an entire plain gVCF for every event; preserve per-library/read-group context through FASTQ reconstruction; and publish a reproducible environment with declared external test dependencies. Fragment normalization should use the actual sampled distribution: [statistics](../../src/stats.rs#L27) accept lengths below 10 kb, whereas [generation](../../src/simulate.rs#L697) conditions them on the read length and a 1500 bp maximum. That mismatch is code-confirmed; I did not quantify its impact on an ordinary WGS library here.
 
 **Recommended development order.** First make the simulator's genome and dosage claims correct; improvements to superficial read quality should follow those invariants.
 

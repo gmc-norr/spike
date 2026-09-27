@@ -79,7 +79,7 @@ what was claimed, what the claim actually rested on, and which gate would have c
 
 ## 2026-09-26 -- a locale bug predicted in `highest_vaf` that was not there
 
-- **Claimed.** After the entry above, REVIEW.md filed `highest_vaf` in `validate_pipeline.sh`
+- **Claimed.** After the entry above, docs/review/REVIEW.md filed `highest_vaf` in `validate_pipeline.sh`
   as having the same trap, right today only because 0.5 comes first in `--vafs`. RF12's
   `--min-recall` comment said the same of its compare: "both sides become 0".
 - **What it rested on.** Pattern-matching on the entry above, not a run. Both compares pass
@@ -89,7 +89,7 @@ what was claimed, what the claim actually rested on, and which gate would have c
   `LC_NUMERIC=sv_SE.UTF-8`, the function was right in all 7 orders tried. A mutant that feeds
   the same values as input picked 0.1 from `0.1 0.25 0.5`, so the harness could go red.
 - **Which gate would have caught it.** Gate D question 3 (*did I measure it, or infer it?*).
-  A follow-up in REVIEW.md is a durable claim. **Rule for this repo: a locale claim says how
+  A follow-up in docs/review/REVIEW.md is a durable claim. **Rule for this repo: a locale claim says how
   the number gets into awk. Under mawk, input fields and `printf` output follow `LC_NUMERIC`;
   `-v` values do not. `LC_ALL=C awk` stays the rule, because it is right either way.**
 

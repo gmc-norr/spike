@@ -3,7 +3,7 @@
 
 Counts each site the way `spike validate` does after N18 (the pad rule, one
 vote per fragment, reads reaching 10 bp past the repeat region, MAPQ >= 20),
-re-using `n18_indel_flank.py`, then reports REVIEW.md's N19 readouts:
+re-using `n18_indel_flank.py`, then reports docs/review/REVIEW.md's N19 readouts:
 repeat context (R1), other gaps in voting reads (R2), what the MAPQ filter
 removes (R3) and how far off the failing sites are (R4).
 
