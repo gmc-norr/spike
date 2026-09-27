@@ -623,9 +623,7 @@ fn count_alleles_bam_in(
 ) -> Result<HashMap<u64, [u32; 4]>> {
     let per_chunk = crate::extract::fold_bam_region(
         bam_path,
-        chrom,
-        region_start,
-        region_end,
+        (chrom, region_start, region_end),
         n_chunks,
         &format!("failed to open BAM for pileup: {}", bam_path),
         HashMap::new,
@@ -1044,9 +1042,7 @@ fn collect_snp_alleles_bam_in(
 ) -> Result<HashMap<String, Vec<(u64, u8)>>> {
     let per_chunk = crate::extract::fold_bam_region(
         bam_path,
-        chrom,
-        region_start,
-        region_end,
+        (chrom, region_start, region_end),
         n_chunks,
         &format!("failed to open BAM for SNP allele collection: {}", bam_path),
         HashMap::new,

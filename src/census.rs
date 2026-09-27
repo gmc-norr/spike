@@ -135,9 +135,7 @@ fn count_resistant_with(
         }
         let per_chunk = crate::extract::fold_bam_region(
             alignment_path,
-            chrom,
-            *start,
-            *end,
+            (chrom, *start, *end),
             chunks(*start, *end),
             "failed to open BAM for a read scan",
             Census::default,

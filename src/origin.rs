@@ -736,9 +736,7 @@ impl Source {
         }
         let chunks = crate::extract::fold_bam_region(
             bam_path,
-            &span.chrom,
-            span.start,
-            span.end,
+            (&span.chrom, span.start, span.end),
             n_chunks,
             &format!("failed to open BAM for the origin scan: {}", bam_path),
             Vec::new,

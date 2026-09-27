@@ -219,9 +219,7 @@ fn pass1_bam(
 ) -> Result<Pass1> {
     let chunks = fold_bam_region(
         bam_path,
-        chrom,
-        start,
-        end,
+        (chrom, start, end),
         n_chunks,
         &format!("failed to open BAM: {}", bam_path),
         Pass1Chunk::default,
@@ -953,9 +951,7 @@ fn region_chunks(start: u64, end: u64, n: usize) -> Vec<(u64, u64)> {
 /// in the order one query over the whole region yields them.
 pub fn fold_bam_region<A, I, F>(
     bam_path: &str,
-    chrom: &str,
-    start: u64,
-    end: u64,
+    (chrom, start, end): (&str, u64, u64),
     n_chunks: usize,
     open_context: &str,
     init: I,
@@ -1274,7 +1270,7 @@ mod tests {
         }
         let bam = test_fixtures::write_one_contig_bam(&dir.join("chunks.bam"), "chrT", 10_000, &records);
         let read = |chunks: usize| -> Vec<String> {
-            fold_bam_region(&bam, "chrT", 1_000, 4_000, chunks, "failed to open BAM", Vec::new, |seen, r| {
+            fold_bam_region(&bam, ("chrT", 1_000, 4_000), chunks, "failed to open BAM", Vec::new, |seen, r| {
                 seen.push(String::from_utf8_lossy(r.name().unwrap().as_ref()).into_owned());
                 Ok(())
             })
