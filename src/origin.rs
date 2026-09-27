@@ -9,7 +9,7 @@
 //! event's footprint, read from its MAPQ and its `XA` hits, and removes it
 //! by that chance. The design is
 //! `docs/superpowers/specs/2026-09-26-edit-model-origin-design.md`; comments
-//! name its fixes R1-R5.
+//! name its fixes R1-R8.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -366,7 +366,7 @@ impl OriginSite {
         let start = pos.saturating_sub(window / 2);
         let end = pos.saturating_add(window / 2);
         let range = end - start;
-        let n = range.min(50).max(1);
+        let n = range.clamp(1, 50);
         let step = if n > 1 { range / n } else { 1 };
         let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
         let placed: Vec<&Placement> = self
