@@ -187,7 +187,10 @@ struct Args {
     /// a filter stay in the merged BAM as they are, so the event that reaches
     /// the reads is about VAF x (1 - that share). Above one half, spike refuses
     /// by default rather than write a truth record the reads cannot back.
-    /// truth.vcf records the share as SIM_RESIST either way.
+    /// truth.vcf records the share as SIM_RESIST either way. Under
+    /// --edit-model origin a read in a pair origin may remove counts as
+    /// editable too; the one-half threshold was set for --edit-model clean and
+    /// is not yet checked for origin.
     #[arg(long)]
     allow_resistant: bool,
 
@@ -647,7 +650,7 @@ fn main() -> Result<()> {
             event_census.counted,
             event_census.fraction(),
         );
-        if let Some(warning) = census::warning(&event_label(event), &event_census) {
+        if let Some(warning) = census::warning(&event_label(event), &event_census, edit_origin) {
             log::warn!("{}", warning);
         }
         if let Some(refusal) =
@@ -723,7 +726,8 @@ fn main() -> Result<()> {
             depth_fold: output.depth_fold.clone(),
         });
 
-        if let Some(warning) = census::depth_fold_warning(&event_label(event), &output.depth_fold)
+        if let Some(warning) =
+            census::depth_fold_warning(&event_label(event), &output.depth_fold, edit_origin)
         {
             log::warn!("{}", warning);
         }
@@ -738,7 +742,7 @@ fn main() -> Result<()> {
         }
     }
 
-    if let Some(message) = census::refusal_message(&refusals) {
+    if let Some(message) = census::refusal_message(&refusals, edit_origin) {
         anyhow::bail!("{}", message);
     }
 
@@ -806,6 +810,7 @@ fn main() -> Result<()> {
         &args.reference,
         &shared_ref,
         &ref_contigs,
+        edit_origin,
     )?;
 
     // Write alignment convenience script.
@@ -845,6 +850,7 @@ fn main() -> Result<()> {
         all_output_pairs.len(),
         args.flank,
         dropped_unreplaced,
+        edit_origin,
     )?;
 
     // Summary.
@@ -1964,6 +1970,7 @@ fn write_readme(
     total_pairs: usize,
     flank: u64,
     dropped_unreplaced: usize,
+    edit_origin: bool,
 ) -> Result<()> {
     use std::fmt::Write as FmtWrite;
     use std::io::Write as IoWrite;
@@ -2055,15 +2062,29 @@ fn write_readme(
             })
         })
         .collect();
+    // PD-29, S6: under origin both measures, and their thresholds, differ.
+    let origin_note = if edit_origin {
+        format!(" {}", census::origin_thresholds_note())
+    } else {
+        String::new()
+    };
     if !resistant.is_empty() {
+        let unedited = if edit_origin {
+            "are neither in its donor pool nor in a pair origin may remove (one with a mate \
+             that could not have come from the event's footprint)"
+        } else {
+            "are not in its donor pool: below `--min-mapq`, not a proper pair, or a mate \
+             that fails a filter"
+        };
         writeln!(
             md,
             "**Reads spike could not edit:** {}. The resistant column counts the \
-             primary, non-duplicate reads over each event that are not in its donor pool: \
-             below `--min-mapq`, not a proper pair, or a mate that fails a filter. They \
+             primary, non-duplicate reads over each event that {}. They \
              stay in the merged BAM as they are, so these events are weaker than requested \
-             by about that share. `truth.vcf` records it per event as `SIM_RESIST`.",
-            resistant.join("; ")
+             by about that share. `truth.vcf` records it per event as `SIM_RESIST`.{}",
+            resistant.join("; "),
+            unedited,
+            origin_note,
         )?;
         writeln!(md)?;
     }
@@ -2093,8 +2114,9 @@ fn write_readme(
              column is the largest fold between that and the donor's own depth in any ~1 kb \
              bin the fragments are drawn from; where the two differ, the event's depth there \
              is off by about that fold. `truth.vcf` records it per event as \
-             `SIM_DEPTH_FOLD`.",
-            off.join("; ")
+             `SIM_DEPTH_FOLD`.{}",
+            off.join("; "),
+            origin_note,
         )?;
         writeln!(md)?;
     }
@@ -4081,7 +4103,7 @@ cat "$root/validation_summary.tsv""#,
             &stats,
             4300,
             10_000,
-            412,
+            412, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4128,7 +4150,7 @@ cat "$root/validation_summary.tsv""#,
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 3258, 10_000, 0,
+            &events, &stats, 3258, 10_000, 0, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4164,7 +4186,7 @@ cat "$root/validation_summary.tsv""#,
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 4300, 10_000, 0,
+            &events, &stats, 4300, 10_000, 0, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4204,7 +4226,7 @@ cat "$root/validation_summary.tsv""#,
         let stats = vec![stat(100, 50), stat(200, 4)];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 800, 10_000, 0,
+            &events, &stats, 800, 10_000, 0, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4252,7 +4274,7 @@ cat "$root/validation_summary.tsv""#,
         let stats = vec![stat(3.73, "chr20:38410000-38411000", 10.0), stat(1.12, "", 40.0)];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 600, 10_000, 0,
+            &events, &stats, 600, 10_000, 0, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4268,6 +4290,57 @@ cat "$root/validation_summary.tsv""#,
         assert!(paragraph.contains("chr20:38410000-38411000"), "{}", paragraph);
         assert!(paragraph.contains("10.0x"), "{}", paragraph);
         assert!(!paragraph.contains("chr20:39000001"), "{}", paragraph);
+    }
+
+    #[test]
+    fn test_run_readme_under_origin_says_its_thresholds_are_unchecked() {
+        // PD-29, S6: under --edit-model origin the resistant share counts a
+        // read origin may remove as editable and the fold compares origin
+        // depths, but both thresholds were set for clean. Both paragraphs say
+        // so under origin, and neither changes under clean.
+        let events = vec![del("chr20", 38_412_500, 38_422_500)];
+        let stats = vec![EventStat {
+            vaf: 0.5,
+            adjusted_vaf: None,
+            kept: 0,
+            chimeric: 300,
+            suppressed: 500,
+            dropped_unusable_qual: 0,
+            uncovered_breakpoint_sides: Vec::new(),
+            census: census::Census { counted: 100, resistant: 50 },
+            depth_fold: types::DepthFold {
+                fold: 3.73,
+                scaled_by: 40.0,
+                worst_bin: "chr20:38410000-38411000".to_string(),
+                worst_depth: 10.0,
+            },
+        }];
+        let readme = |origin: bool| {
+            let dir = std::env::temp_dir()
+                .join(format!("spike_readme_model_{}_{}", std::process::id(), origin));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            write_readme(
+                dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
+                &events, &stats, 800, 10_000, 0, origin,
+            )
+            .unwrap();
+            let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            md
+        };
+        let paragraph = |md: &str, head: &str| {
+            md.lines().find(|l| l.starts_with(head)).unwrap_or_else(|| panic!("no {}:\n{}", head, md)).to_string()
+        };
+        let note = census::origin_thresholds_note();
+        let (origin, clean) = (readme(true), readme(false));
+        for head in ["**Reads spike could not edit:**", "**Donor depth off the scaling depth:**"] {
+            assert!(paragraph(&origin, head).contains(&note), "{}", paragraph(&origin, head));
+            assert!(!paragraph(&clean, head).contains("--edit-model"), "{}", paragraph(&clean, head));
+        }
+        let unedited = paragraph(&origin, "**Reads spike could not edit:**");
+        assert!(unedited.contains("neither in its donor pool nor in a pair origin may remove"), "{}", unedited);
+        assert!(!unedited.contains("not a proper pair"), "{}", unedited);
     }
 
     #[test]
@@ -4319,7 +4392,7 @@ cat "$root/validation_summary.tsv""#,
         ];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 4355, 10_000, 0,
+            &events, &stats, 4355, 10_000, 0, false,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();

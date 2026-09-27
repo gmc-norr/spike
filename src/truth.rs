@@ -76,6 +76,7 @@ pub fn write_truth_vcf(
     ref_path: &str,
     reference: &SharedReference,
     contigs: &[(String, u64)],
+    edit_origin: bool,
 ) -> Result<()> {
     // `adjusted_afs` is read below by the same index as `events`, with `.get(i)`,
     // so a short slice would quietly write the request as `SIM_VAF` for every
@@ -157,6 +158,14 @@ pub fn write_truth_vcf(
          and the one depth they are all scaled by, measured at a breakpoint. Where the two \
          differ, the event's depth there is off by about that fold\">"
     )?;
+    // Only under origin, so a clean truth.vcf keeps the header it had.
+    if edit_origin {
+        writeln!(
+            f,
+            "##spike_edit_model=origin (experimental). {}",
+            crate::census::origin_thresholds_note()
+        )?;
+    }
     writeln!(
         f,
         "##INFO=<ID=SIM_GENE,Number=1,Type=String,Description=\"Affected gene\">"
@@ -535,7 +544,7 @@ mod tests {
             del("chr1", 2, 5),
         ];
         let path = std::env::temp_dir().join(format!("spike_truth_sorted_{}.vcf", std::process::id()));
-        write_truth_vcf(&events, &[None; 4], &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None; 4], &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -624,7 +633,7 @@ mod tests {
             .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
         // One entry per event, as `write_truth_vcf` now asserts: this helper
         // builds exactly one.
-        write_truth_vcf(&events, &[None], &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs)
+        write_truth_vcf(&events, &[None], &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -702,11 +711,49 @@ mod tests {
             "ref.fa",
             &reference,
             &contigs,
+            false,
         )
         .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
         text
+    }
+
+    #[test]
+    fn test_truth_vcf_under_origin_says_its_thresholds_are_unchecked() {
+        // PD-29, S6: under --edit-model origin SIM_RESIST and SIM_DEPTH_FOLD
+        // are measured another way, and their thresholds were set for clean.
+        // A clean truth.vcf keeps the header it had.
+        let reference = SharedReference::from_sequences(
+            [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
+        );
+        let contigs = vec![("chr1".to_string(), 14)];
+        let events = vec![SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 2,
+            del_end: 5,
+            gene: "G".to_string(),
+            exons: vec![],
+            allele_fraction: Some(0.5),
+        }];
+        let header = |origin: bool| -> Vec<String> {
+            let path = std::env::temp_dir()
+                .join(format!("spike_truth_model_{}_{}.vcf", std::process::id(), origin));
+            write_truth_vcf(
+                &events, &[None], &[Some(0.2)], &[Some(1.8)], 0.5, path.to_str().unwrap(), "ref.fa",
+                &reference, &contigs, origin,
+            )
+            .unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::remove_file(&path).ok();
+            text.lines().filter(|l| l.starts_with("##")).map(str::to_string).collect()
+        };
+        let (origin, clean) = (header(true), header(false));
+        let notes: Vec<&String> = origin.iter().filter(|l| l.starts_with("##spike_edit_model=origin")).collect();
+        assert_eq!(notes.len(), 1, "{:?}", origin);
+        assert!(notes[0].contains(&crate::census::origin_thresholds_note()), "{}", notes[0]);
+        assert!(!clean.iter().any(|l| l.starts_with("##spike_edit_model")), "{:?}", clean);
+        assert_eq!(origin.len(), clean.len() + 1);
     }
 
     /// The INFO column of the single record in `text`.

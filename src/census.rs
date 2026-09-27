@@ -114,7 +114,7 @@ pub fn count_resistant(
 pub const DEPTH_FOLD_WARN_ABOVE: f64 = 1.5;
 
 /// The warning for an event whose depth fold is above [`DEPTH_FOLD_WARN_ABOVE`].
-pub fn depth_fold_warning(label: &str, fold: &DepthFold) -> Option<String> {
+pub fn depth_fold_warning(label: &str, fold: &DepthFold, edit_origin: bool) -> Option<String> {
     if fold.fold <= DEPTH_FOLD_WARN_ABOVE {
         return None;
     }
@@ -122,8 +122,13 @@ pub fn depth_fold_warning(label: &str, fold: &DepthFold) -> Option<String> {
         "{}: the donor's depth over {} is {:.1}x, but every fragment this event tiles is \
          scaled by the {:.1}x measured at one of its breakpoints ({:.2}-fold). Where the \
          donor's depth differs from that, the event's depth there is wrong by about that \
-         much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).",
-        label, fold.worst_bin, fold.worst_depth, fold.scaled_by, fold.fold,
+         much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).{}",
+        label,
+        fold.worst_bin,
+        fold.worst_depth,
+        fold.scaled_by,
+        fold.fold,
+        origin_suffix(edit_origin),
     ))
 }
 
@@ -153,7 +158,7 @@ pub fn refusal(label: &str, census: &Census, allow: bool) -> Option<String> {
 
 /// The error for a run whose events include any [`refusal`]: every refused
 /// event at once, so a multi-event input can drop them all in one pass.
-pub fn refusal_message(refusals: &[String]) -> Option<String> {
+pub fn refusal_message(refusals: &[String], edit_origin: bool) -> Option<String> {
     if refusals.is_empty() {
         return None;
     }
@@ -164,31 +169,70 @@ pub fn refusal_message(refusals: &[String]) -> Option<String> {
     };
     Some(format!(
         "The reads over {} would carry less than half of what truth.vcf would claim, \
-         so spike stops rather than write it (RF8):\n  {}\nThose reads are below --min-mapq, not a \
-         proper pair, or have a mate that fails a filter, and they stay in the merged \
+         so spike stops rather than write it (RF8):\n  {}\nThose reads are {}, and they stay in the merged \
          BAM as they are. If most of them are below --min-mapq, lowering it lets spike \
          edit them. Otherwise remove the events from the input, or pass \
          --allow-resistant to simulate them anyway; truth.vcf then records the share \
-         as SIM_RESIST.",
+         as SIM_RESIST.{}",
         events,
         refusals.join("\n  "),
+        if edit_origin {
+            UNEDITED_UNDER_ORIGIN
+        } else {
+            "below --min-mapq, not a proper pair, or have a mate that fails a filter"
+        },
+        origin_suffix(edit_origin),
     ))
 }
 
+/// Said wherever the resistant share or the depth fold is reported under
+/// `--edit-model origin` (PD-29, S6). Every threshold here was locked for the
+/// `clean` measures -- the share of reads outside the donor pool, a fold
+/// between pool depths -- and none has been measured for origin's, whose share
+/// counts a read origin may remove as editable and whose fold compares origin
+/// depths.
+/// The reads spike cannot edit under `--edit-model origin`: R4 keeps a pair
+/// with a mate that could not have come from the event's footprint.
+const UNEDITED_UNDER_ORIGIN: &str = "neither in the donor pool nor in a pair origin may remove";
+
+/// [`origin_thresholds_note`] after a space under origin, nothing under clean.
+fn origin_suffix(edit_origin: bool) -> String {
+    if edit_origin {
+        format!(" {}", origin_thresholds_note())
+    } else {
+        String::new()
+    }
+}
+
+pub fn origin_thresholds_note() -> String {
+    format!(
+        "Under --edit-model origin a read origin may remove counts as editable, and the \
+         depth fold compares origin depths; the thresholds (warn above a {} share, refuse \
+         above {}, warn above a {}-fold) were set for --edit-model clean and are not yet \
+         checked for origin.",
+        WARN_ABOVE, REFUSE_ABOVE, DEPTH_FOLD_WARN_ABOVE,
+    )
+}
+
 /// The warning for an event whose resistant share is above [`WARN_ABOVE`].
-pub fn warning(label: &str, census: &Census) -> Option<String> {
+pub fn warning(label: &str, census: &Census, edit_origin: bool) -> Option<String> {
     if census.fraction() <= WARN_ABOVE {
         return None;
     }
     Some(format!(
-        "{}: {} of {} reads over it ({:.0}%) are ones spike cannot edit (below \
-         --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the \
+        "{}: {} of {} reads over it ({:.0}%) are ones spike cannot edit ({}). They stay in the \
          merged BAM as they are, so the event is weaker than requested; truth.vcf records \
-         the share as SIM_RESIST (CR4).",
+         the share as SIM_RESIST (CR4).{}",
         label,
         census.resistant,
         census.counted,
         census.fraction() * 100.0,
+        if edit_origin {
+            UNEDITED_UNDER_ORIGIN
+        } else {
+            "below --min-mapq, not a proper pair, or a mate that fails a filter"
+        },
+        origin_suffix(edit_origin),
     ))
 }
 
@@ -279,6 +323,7 @@ mod tests {
                     worst_bin: "chrT:20000-21000".to_string(),
                     worst_depth: 25.0,
                 },
+                false,
             )
         };
         assert_eq!(at(1.5), None, "1.5 is not above 1.5");
@@ -293,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_census_warns_only_above_the_threshold() {
-        let at = |counted, resistant| warning("DEL chr1:101-200", &Census { counted, resistant });
+        let at = |counted, resistant| warning("DEL chr1:101-200", &Census { counted, resistant }, false);
         assert_eq!(at(100, 10), None, "0.10 is not above 0.10");
         assert_eq!(at(100, 0), None);
         let w = at(100, 11).expect("0.11 is above 0.10");
@@ -325,15 +370,48 @@ mod tests {
     }
 
     #[test]
+    fn test_under_origin_the_messages_say_what_origin_counts_and_that_thresholds_are_unchecked() {
+        // PD-29, S6: under origin a read in a pair origin may remove is
+        // editable, so the clean definition in these messages is wrong there,
+        // and every threshold was set for clean. Under clean nothing changes.
+        let census = Census { counted: 100, resistant: 60 };
+        let fold = DepthFold { fold: 3.88, scaled_by: 100.0, worst_bin: "chrT:20000-21000".to_string(), worst_depth: 25.0 };
+        let refused = || vec![refusal("DEL chr1:101-200", &census, false).unwrap()];
+        let note = origin_thresholds_note();
+        for m in [
+            warning("DEL chr1:101-200", &census, true).unwrap(),
+            refusal_message(&refused(), true).unwrap(),
+        ] {
+            assert!(m.contains("neither in the donor pool nor in a pair origin may remove"), "{}", m);
+            assert!(!m.contains("not a proper pair"), "{}", m);
+            assert!(m.ends_with(&note), "{}", m);
+        }
+        assert!(depth_fold_warning("DUP chrT:10001-28000", &fold, true).unwrap().ends_with(&note));
+        for m in [
+            warning("DEL chr1:101-200", &census, false).unwrap(),
+            refusal_message(&refused(), false).unwrap(),
+            depth_fold_warning("DUP chrT:10001-28000", &fold, false).unwrap(),
+        ] {
+            assert!(!m.contains("--edit-model"), "{}", m);
+        }
+        assert!(warning("DEL chr1:101-200", &census, false)
+            .unwrap()
+            .contains("(below --min-mapq, not a proper pair, or a mate that fails a filter)"));
+        for number in ["0.1", "0.5", "1.5"] {
+            assert!(note.contains(number), "{}", note);
+        }
+    }
+
+    #[test]
     fn test_refusal_message_names_every_refused_event() {
-        assert_eq!(refusal_message(&[]), None, "no refused event, no error");
+        assert_eq!(refusal_message(&[], false), None, "no refused event, no error");
         // Two of validate_pipeline.sh's events on its NA18488 background.
         let at = |label, counted, resistant| {
             refusal(label, &Census { counted, resistant }, false)
         };
         let first = at("DEL chr20:32723064-32724971", 407, 316).expect("0.776 is above 0.5");
         let second = at("DEL chr20:61943514-61945040", 200, 189).expect("0.945 is above 0.5");
-        let m = refusal_message(&[first, second]).expect("two refused events");
+        let m = refusal_message(&[first, second], false).expect("two refused events");
         assert!(m.contains("2 events"), "{}", m);
         assert!(m.contains("DEL chr20:32723064-32724971"), "{}", m);
         assert!(m.contains("316 of 407"), "{}", m);

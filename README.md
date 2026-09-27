@@ -1394,7 +1394,7 @@ Options:
       --allow-resistant
           Simulate an event even when more than half the reads over it are ones spike cannot edit.
           
-          Reads below --min-mapq, not in a proper pair, or with a mate that fails a filter stay in the merged BAM as they are, so the event that reaches the reads is about VAF x (1 - that share). Above one half, spike refuses by default rather than write a truth record the reads cannot back. truth.vcf records the share as SIM_RESIST either way.
+          Reads below --min-mapq, not in a proper pair, or with a mate that fails a filter stay in the merged BAM as they are, so the event that reaches the reads is about VAF x (1 - that share). Above one half, spike refuses by default rather than write a truth record the reads cannot back. truth.vcf records the share as SIM_RESIST either way. Under --edit-model origin a read in a pair origin may remove counts as editable too; the one-half threshold was set for --edit-model clean and is not yet checked for origin.
 
       --dup-model <DUP_MODEL>
           Duplication model: "full" (default) builds a full tandem haplotype with duplicated region appearing twice, producing both junction reads and correct depth increase from a single tiling pass. "junction" uses the legacy junction-only haplotype with separate depth copies
