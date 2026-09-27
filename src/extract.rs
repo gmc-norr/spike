@@ -1070,6 +1070,56 @@ pub(crate) mod test_fixtures {
             cram_path.to_str().unwrap().to_string(),
         )
     }
+
+    /// Write `records`, sorted by position, as a BAM on one contig. Add a
+    /// hand-written `.bai` of one bin that holds them all, the way
+    /// `census::tests::write_pairs_bam` does: a query anywhere on the
+    /// contig reads the whole file. Returns the BAM's path.
+    pub(crate) fn write_one_contig_bam(
+        path: &std::path::Path,
+        contig: &str,
+        contig_len: usize,
+        records: &[noodles::sam::alignment::RecordBuf],
+    ) -> String {
+        use noodles::sam::alignment::io::Write as _;
+        let header = noodles::sam::Header::builder()
+            .add_reference_sequence(
+                contig,
+                noodles::sam::header::record::value::Map::<
+                    noodles::sam::header::record::value::map::ReferenceSequence,
+                >::new(std::num::NonZeroUsize::try_from(contig_len).unwrap()),
+            )
+            .build();
+        {
+            let mut writer = noodles::bam::io::writer::Builder
+                .build_from_path(path)
+                .unwrap();
+            writer.write_header(&header).unwrap();
+            for r in records {
+                writer.write_alignment_record(&header, r).unwrap();
+            }
+            writer.try_finish().unwrap();
+        }
+        let (first_record, end_of_file) = {
+            let mut reader = noodles::bam::io::Reader::new(std::fs::File::open(path).unwrap());
+            reader.read_header().unwrap();
+            let first_record = reader.get_ref().virtual_position();
+            let mut record = noodles::bam::Record::default();
+            while reader.read_record(&mut record).unwrap() != 0 {}
+            (first_record, reader.get_ref().virtual_position())
+        };
+        let mut bai: Vec<u8> = Vec::new();
+        bai.extend_from_slice(b"BAI\x01");
+        bai.extend_from_slice(&1u32.to_le_bytes()); // one reference
+        bai.extend_from_slice(&1u32.to_le_bytes()); // one bin
+        bai.extend_from_slice(&0u32.to_le_bytes()); // bin 0 spans the contig
+        bai.extend_from_slice(&1u32.to_le_bytes()); // one chunk
+        bai.extend_from_slice(&u64::from(first_record).to_le_bytes());
+        bai.extend_from_slice(&u64::from(end_of_file).to_le_bytes());
+        bai.extend_from_slice(&0u32.to_le_bytes()); // no linear index
+        std::fs::write(format!("{}.bai", path.display()), bai).unwrap();
+        path.to_str().unwrap().to_string()
+    }
 }
 
 #[cfg(test)]

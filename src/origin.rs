@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use noodles::sam::alignment::record::cigar::Op;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -506,6 +506,174 @@ pub fn decide(chances: &[Chance], rng: &mut StdRng) -> BTreeSet<String> {
         .collect()
 }
 
+/// One [`OriginRecord`] from an alignment record, or `None` for a record
+/// `origin` does not judge on its own. That is an unmapped, secondary or
+/// supplementary record (those share their primary's name and go with it),
+/// or one without a name. MAPQ 255, "unavailable", counts as 0.
+fn origin_record(
+    header: &noodles::sam::Header,
+    buf: &noodles::sam::alignment::RecordBuf,
+) -> Option<OriginRecord> {
+    use noodles::sam::alignment::record::data::field::Tag;
+    use noodles::sam::alignment::record_buf::data::field::Value;
+
+    let flags = buf.flags();
+    if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
+        return None;
+    }
+    let name = buf.name()?.to_string();
+    let (chrom, _) = header
+        .reference_sequences()
+        .get_index(buf.reference_sequence_id()?)?;
+    let chrom = chrom.to_string();
+    let start = usize::from(buf.alignment_start()?) as u64 - 1;
+    let ops: &[Op] = buf.cigar().as_ref();
+    let xa = match buf.data().get(&Tag::new(b'X', b'A')) {
+        Some(Value::String(s)) => Some(s.to_string()),
+        _ => None,
+    };
+    let alternatives = xa.as_deref().map(parse_xa).unwrap_or_default();
+    let mapq = buf.mapping_quality().map(|q| q.get()).unwrap_or(0);
+    Some(OriginRecord {
+        name,
+        first: flags.is_first_segment(),
+        placements: placements(
+            Span::new(&chrom, start, start + reference_length(ops)),
+            mapq,
+            &alternatives,
+        ),
+        duplicate: flags.is_duplicate(),
+        qc_fail: flags.is_qc_fail(),
+        mate_unmapped: flags.is_mate_unmapped(),
+        five_prime: five_prime(&chrom, start, ops, flags.is_reverse_complemented()),
+    })
+}
+
+/// Every primary record overlapping `span`, from a BAM or a CRAM.
+fn scan(bam_path: &str, ref_path: &str, span: &Span) -> Result<Vec<OriginRecord>> {
+    let region = noodles::core::Region::new(
+        span.chrom.as_str(),
+        crate::extract::safe_noodles_position(span.start + 1)
+            ..=crate::extract::safe_noodles_position(span.end),
+    );
+    let mut out = Vec::new();
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let (mut reader, header) =
+            crate::extract::open_cram_reader_for_region(bam_path, &repository, &region)
+                .context("failed to open CRAM for the origin scan")?;
+        let queried = header
+            .reference_sequences()
+            .get_index_of(span.chrom.as_bytes());
+        for result in reader.query(&header, &region)? {
+            let buf = result?.try_into_alignment_record(&header)?;
+            // A container holding several contigs is decoded whole (L2, N4).
+            if !crate::extract::record_is_on_queried_reference(&buf, queried) {
+                continue;
+            }
+            out.extend(origin_record(&header, &buf));
+        }
+    } else {
+        let mut reader = noodles::bam::io::indexed_reader::Builder::default()
+            .build_from_path(bam_path)
+            .with_context(|| format!("failed to open BAM for the origin scan: {}", bam_path))?;
+        let header = reader.read_header()?;
+        for result in reader.query(&header, &region)? {
+            let record = result?;
+            let buf =
+                noodles::sam::alignment::RecordBuf::try_from_alignment_record(&header, &record)?;
+            out.extend(origin_record(&header, &buf));
+        }
+    }
+    Ok(out)
+}
+
+/// How many records, from the start of the file, [`require_xa`] reads
+/// looking for an `XA` tag. The 35x HG002 BAM's first `XA` is on record 64.
+pub const XA_PROBE_RECORDS: usize = 100_000;
+
+/// The number of records read up to and including the first that carries
+/// `XA`, or `None` when none of the first `limit` does.
+pub fn first_xa_record(bam_path: &str, ref_path: &str, limit: usize) -> Result<Option<usize>> {
+    use noodles::sam::alignment::record::data::field::Tag;
+    let xa = Tag::new(b'X', b'A');
+    if crate::extract::is_cram(bam_path) {
+        let repository = crate::extract::build_fasta_repository(ref_path)?;
+        let mut reader = noodles::cram::io::reader::Builder::default()
+            .set_reference_sequence_repository(repository)
+            .build_from_path(bam_path)
+            .with_context(|| format!("failed to open CRAM: {}", bam_path))?;
+        let header = reader.read_header()?;
+        for (i, result) in reader.records(&header).take(limit).enumerate() {
+            let buf = result?.try_into_alignment_record(&header)?;
+            if buf.data().get(&xa).is_some() {
+                return Ok(Some(i + 1));
+            }
+        }
+    } else {
+        let mut reader = noodles::bam::io::reader::Builder
+            .build_from_path(bam_path)
+            .with_context(|| format!("failed to open BAM: {}", bam_path))?;
+        reader.read_header()?;
+        for (i, result) in reader.records().take(limit).enumerate() {
+            if result?.data().get(&xa).is_some() {
+                return Ok(Some(i + 1));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Stop unless the file keeps the aligner's `XA` tags (R8); otherwise every
+/// MAPQ 0 read would silently get 1/6 and no look-alike would be found.
+///
+/// The check is on the file, not the spot: a spot whose MAPQ 0 reads carry
+/// no `XA` is normal, since under bwa-mem's `-h 5` rule their hits number
+/// more than 5. Returns the record the first `XA` is on.
+pub fn require_xa(bam_path: &str, ref_path: &str) -> Result<usize> {
+    match first_xa_record(bam_path, ref_path, XA_PROBE_RECORDS)? {
+        Some(n) => Ok(n),
+        None => bail!(
+            "--edit-model origin needs the aligner's XA tags (its alternative hits), but none \
+             of the first {} records of {} carries one. bwa-mem and bwa-mem2 write XA by \
+             default, and a later step can strip it. Re-align with one of them, or use \
+             --edit-model clean.",
+            XA_PROBE_RECORDS,
+            bam_path,
+        ),
+    }
+}
+
+/// Read everything `origin` needs for one event: the footprint, its
+/// look-alike regions and `f` (see [`OriginSite`]). Whether the file keeps
+/// `XA` at all is [`require_xa`]'s check, made once per run.
+pub fn gather(
+    bam_path: &str,
+    ref_path: &str,
+    footprint: &Span,
+    read_length: usize,
+    pool: &ReadPool,
+) -> Result<OriginSite> {
+    let spot = scan(bam_path, ref_path, footprint)?;
+    let lookalikes = lookalike_regions(&spot, footprint, read_length as u64);
+    let mut seen: BTreeSet<(String, bool)> =
+        spot.iter().map(|r| (r.name.clone(), r.first)).collect();
+    let mut records = spot;
+    for region in &lookalikes {
+        for r in scan(bam_path, ref_path, region)? {
+            if seen.insert((r.name.clone(), r.first)) {
+                records.push(r);
+            }
+        }
+    }
+    Ok(OriginSite {
+        footprint: footprint.clone(),
+        lookalikes,
+        records,
+        f: fragment_to_read_ratio(pool)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +1036,138 @@ mod tests {
         //   mean (average the members' totals instead of max) -> removed_count = 155
         // 180 sits strictly between the real count and the highest wrong one.
         assert!(removed_count > 180, "removed_count {}", removed_count);
+    }
+
+    use noodles::sam::alignment::record::{Flags, MappingQuality};
+    use noodles::sam::alignment::RecordBuf;
+
+    fn bam_record(name: &str, flags: u16, pos: usize, mapq: u8, xa: Option<&str>, mate_pos: usize) -> RecordBuf {
+        use noodles::sam::alignment::record::data::field::Tag;
+        use noodles::sam::alignment::record_buf::data::field::Value;
+        use noodles::sam::alignment::record_buf::{Data, QualityScores, Sequence};
+        let data: Data = xa.map(|xa| (Tag::new(b'X', b'A'), Value::from(xa))).into_iter().collect();
+        RecordBuf::builder()
+            .set_name(name)
+            .set_flags(Flags::from(flags))
+            .set_reference_sequence_id(0)
+            .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+            .set_mapping_quality(MappingQuality::new(mapq).unwrap())
+            .set_cigar([Op::new(Kind::Match, 100)].into_iter().collect())
+            .set_mate_reference_sequence_id(0)
+            .set_mate_alignment_start(noodles::core::Position::new(mate_pos).unwrap())
+            .set_sequence(Sequence::from(vec![b'A'; 100]))
+            .set_quality_scores(QualityScores::from(vec![30u8; 100]))
+            .set_data(data)
+            .build()
+    }
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("spike_origin_{}_{}", label, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn bases_pool() -> ReadPool {
+        pool((0..30).map(|i| pair(&format!("r{}", i), 500_000 + 10 * i, 400, 150)).collect())
+    }
+
+    /// chrT, 60 kb; footprint chrT:20000-25000, twin P at 42000.
+    /// a: unique at the spot. b: MAPQ 0 at the spot, hits at P. c: MAPQ 0 at
+    /// P, hits at the spot. d: unique at P. e: read 1 at the spot, read 2
+    /// past the footprint's end.
+    fn twin_bam(dir: &std::path::Path) -> String {
+        let (r1, r2) = (0x63u16, 0x93u16);
+        let records = [
+            bam_record("a", r1, 21_001, 60, None, 21_201),
+            bam_record("a", r2, 21_201, 60, None, 21_001),
+            bam_record("b", r1, 22_001, 0, Some("chrT,+42001,100M,0;"), 22_201),
+            bam_record("b", r2, 22_201, 0, Some("chrT,-42201,100M,0;"), 22_001),
+            bam_record("e", r1, 24_801, 60, None, 25_101),
+            bam_record("e", r2, 25_101, 60, None, 24_801),
+            bam_record("c", r1, 42_001, 0, Some("chrT,+22001,100M,0;"), 42_201),
+            bam_record("c", r2, 42_201, 0, Some("chrT,-22201,100M,0;"), 42_001),
+            bam_record("d", r1, 42_301, 60, None, 42_501),
+            bam_record("d", r2, 42_501, 60, None, 42_301),
+        ];
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("twin.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_gather_reads_the_spot_and_its_lookalike() {
+        let dir = scratch("gather");
+        let bam = twin_bam(&dir);
+        let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
+
+        assert_eq!(site.lookalikes, vec![Span::new("chrT", 41_900, 42_400)]);
+        let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
+        assert_eq!(names, ["a", "b", "c", "e"]);
+        assert_eq!(site.removable_names(), ["a", "b", "c"]);
+        let c = site.fragments().into_iter().find(|f| f.name == "c").unwrap();
+        assert!(!c.at_spot(&site.footprint));
+        assert!(close(c.chance(&site.footprint), 0.5));
+        assert!(close(site.f, 400.0 / 300.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two MAPQ 0 reads at the spot, with no XA anywhere in the file.
+    fn noxa_bam(dir: &std::path::Path) -> String {
+        let records = [
+            bam_record("z", 0x63, 21_001, 0, None, 21_201),
+            bam_record("z", 0x93, 21_201, 0, None, 21_001),
+        ];
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("noxa.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_gather_does_not_stop_at_a_spot_whose_mapq0_reads_lack_xa() {
+        // R8: under bwa-mem's -h 5 rule such reads have more than 5 hits, so
+        // each gets 1/6. Whether the file kept XA at all is `require_xa`'s question.
+        let dir = scratch("spot_noxa");
+        let bam = noxa_bam(&dir);
+        let site = gather(&bam, "", &Span::new("chrT", 20_000, 25_000), 100, &bases_pool()).unwrap();
+        let z = site.fragments().into_iter().find(|f| f.name == "z").unwrap();
+        assert!(close(z.chance(&site.footprint), 1.0 / 6.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_first_xa_record_counts_records_up_to_the_first_xa() {
+        // In `twin_bam` the first record with XA is b's read 1, the third.
+        let dir = scratch("first_xa");
+        let bam = twin_bam(&dir);
+        assert_eq!(first_xa_record(&bam, "", 100).unwrap(), Some(3));
+        assert_eq!(first_xa_record(&bam, "", 2).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_require_xa_stops_a_file_without_xa() {
+        // R8.
+        let dir = scratch("require_xa");
+        let err = require_xa(&noxa_bam(&dir), "").unwrap_err().to_string();
+        assert!(err.contains("XA") && err.contains("--edit-model clean"), "{}", err);
+        assert_eq!(require_xa(&twin_bam(&dir), "").unwrap(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_first_xa_record_reads_a_cram() {
+        // The two-contig CRAM carries SA:Z on every record and no XA.
+        let dir = scratch("cram_xa");
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
+        assert_eq!(first_xa_record(&cram, &fasta, 100).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_gather_reads_only_the_queried_contig_of_a_cram() {
+        // A container holding two contigs is decoded whole (L2, N4).
+        let dir = scratch("cram");
+        let (fasta, cram) = crate::extract::test_fixtures::write_two_contig_cram(&dir);
+        let site = gather(&cram, &fasta, &Span::new("chrA", 0, 1000), 100, &bases_pool()).unwrap();
+        let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
+        assert_eq!(names, ["chrA_pair0", "chrA_pair1", "chrA_pair2"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
