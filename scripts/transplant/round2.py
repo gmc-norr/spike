@@ -82,11 +82,12 @@ class Neighbours:
         short, long_ = {}, {}
         for c, s, e, k in spans:
             (long_ if e - s > LONG_SPAN else short).setdefault(c, []).append((s, e, k))
-        self.short = {c: sorted(v) for c, v in short.items()}
+        # By span only: a record's key and an SV's None cannot be ordered.
+        self.short = {c: sorted(v, key=lambda x: x[:2]) for c, v in short.items()}
         self.short_starts = {c: [s for s, _, _ in v] for c, v in self.short.items()}
         self.long_starts, self.long_max_end = {}, {}
         for c, v in long_.items():
-            v.sort()
+            v.sort(key=lambda x: x[:2])
             self.long_starts[c] = [s for s, _, _ in v]
             ends, m = [], -1
             for _, e, _ in v:

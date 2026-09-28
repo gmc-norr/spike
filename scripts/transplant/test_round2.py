@@ -67,6 +67,13 @@ def test_a_small_variant_with_another_record_within_150_bp_is_dropped():
     assert r2.classify(h1, h2, region, margin=150, svs=others)["forward"] == []
 
 
+def test_an_sv_with_the_same_span_as_a_record_is_a_neighbour_not_a_crash():
+    region = {"chr1": [(0, 100_000)]}
+    h1 = [("chr1", 1_000, "C", "T", HET), ("chr1", 5_000, "C", "T", HET)]
+    svs = [("chr1", 1_000, 1_000), ("chr1", 20_000, 22_000), ("chr1", 20_000, 22_000)]
+    assert r2.classify(h1, [], region, margin=150, svs=svs)["forward"] == [("SNV", "chr1", 5_000, "C", "T")]
+
+
 def test_a_variant_must_lie_inside_one_region_interval():
     region = {"chr1": [(0, 1_000), (1_000, 2_000)]}
     h1 = [("chr1", 500, "C", "T", HET), ("chr1", 999, "GCAT", "G", HET)]     # [999, 1002] crosses 1,000
