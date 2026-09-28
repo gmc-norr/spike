@@ -31,6 +31,7 @@ PILOT_GROUPS = ["SNV", "INS20-49", "DUP50-299"]
 SMALL_MARGIN = 150
 LONG_SPAN = 1_000  # records longer than this are checked for isolation apart
 DRAW_SEED = {"pilot": 1, "full": 2}
+UNIQUE_MAX = 1.10  # round 2b: a duplication's array over its copy, below this
 # Which broken control must fail which metric (round 2's plan).
 MUST_FAIL = {"A": ("B1",), "E": ("B1",), "J": ("B1", "B2")}
 REFUSED_SNV = re.compile(r"^\s*SNV\s+(\S+):(\d+) (\S+)>(\S+): \d+ of \d+ reads over it", re.M)
@@ -145,6 +146,17 @@ def isolated_dups(dups, svs, margin, segment):
         s, e = segment(event)
         if not any(o not in own and o[1] < e + margin and o[2] > s - margin for o in by_chrom.get(event[1], [])):
             keep.append(event)
+    return keep
+
+
+def unique_dups(dups, fetch, segment):
+    """Round 2b: the duplications whose copy is not part of a longer tandem array (array < 1.10x the copy)."""
+    keep = []
+    for e in dups:
+        s, en = segment(e)
+        rs, re_ = se.repeat_region(fetch, e[1], s, en, e[4][len(e[3]):].upper())
+        if (re_ - rs) / (en - s) < UNIQUE_MAX:
+            keep.append(e)
     return keep
 
 
@@ -309,7 +321,7 @@ def main(argv):
     svs = t.sv_intervals("HG001") + t.sv_intervals("HG002")
     small = classify(read_table(os.path.join(a.prep, "h1.all.tsv")), read_table(os.path.join(a.prep, "h2.all.tsv")),
                      read_bed(os.path.join(a.prep, "small.bed")), SMALL_MARGIN, svs)
-    dups = {k: isolated_dups(v, svs, t.NEIGHBOUR, segment)
+    dups = {k: unique_dups(isolated_dups(v, svs, t.NEIGHBOUR, segment), fetch, segment)
             for k, v in dup_candidates(os.path.join(a.prep, "insbench"), fetch).items()}
     cands = {k: small[k] + dups[k] for k in small}
     t.write_tsv(os.path.join(a.out, "pools.tsv"), ["set", "group", "n"],

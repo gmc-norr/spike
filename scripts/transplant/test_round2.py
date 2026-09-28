@@ -143,3 +143,32 @@ def test_the_pilot_stops_when_b1_passes_any_metric():
     assert r2.pilot_stops(ok) == []
     bad = ok + [["forward", "B1", "INS20-49", "E", True]]
     assert r2.pilot_stops(bad) == ["B1 passes E in INS20-49"]
+
+
+def _ref_with_arrays():
+    import random
+    rng = random.Random(3)
+    seq = [rng.choice("ACGT") for _ in range(20_000)]
+    other = {"A": "C", "C": "G", "G": "T", "T": "A"}
+    unit = "".join(seq[5000:5050])
+    seq[5000:5250] = list(unit * 5)                       # a 50 bp copy inside a 250 bp array
+    seq[5250] = other[seq[5000]]
+    seq[8100:8110] = seq[8000:8010]                       # a 100 bp copy the reference repeats 10 bp on: 1.10x
+    seq[8110] = other[seq[8010]]
+    seq[12100:12109] = seq[12000:12009]                   # 9 bp on: 1.09x
+    seq[12109] = other[seq[12009]]
+    for s in (1000, 8000, 12000):                         # nothing repeats leftward
+        seq[s - 1] = other[seq[s + 99]]
+    seq[4999] = other[seq[5049]]
+    return "".join(seq)
+
+
+def test_only_duplications_whose_copy_is_not_in_a_longer_tandem_array_are_kept():
+    ref = _ref_with_arrays()
+    fetch = lambda c, s, e: ref[max(0, s):max(0, e)]  # noqa: E731
+
+    def dup(s, n):
+        return ("DUP", "chrT", s, ref[s - 1], ref[s - 1] + ref[s:s + n])
+    events = [dup(1000, 100), dup(5000, 50), dup(8000, 100), dup(12000, 100)]
+    segment = lambda e: (e[2], e[2] + len(e[4]) - 1)  # noqa: E731
+    assert r2.unique_dups(events, fetch, segment) == [events[0], events[3]]
