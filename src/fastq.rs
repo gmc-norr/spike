@@ -51,18 +51,26 @@ fn validate_quality(qual: &[u8], seq: &[u8], read_name: &str, mate: u8) -> Resul
     Ok(())
 }
 
-/// Write one mate's records of `pairs`, in order, to `file` as gzipped FASTQ.
-fn write_mate(file: std::fs::File, pairs: &[ReadPair], mate: u8, path: &Path) -> Result<()> {
+type FastqGz = GzEncoder<std::io::BufWriter<std::fs::File>>;
+
+/// A gzipped FASTQ stream into `file`.
+fn fastq_gz(file: std::fs::File) -> FastqGz {
     // Use fast compression — these are intermediate files.
-    let mut gz = GzEncoder::new(std::io::BufWriter::new(file), Compression::fast());
-    let records = pairs.iter().try_for_each(|pair| -> std::io::Result<()> {
-        let (seq, qual) = if mate == 1 { (&pair.seq1, &pair.qual1) } else { (&pair.seq2, &pair.qual2) };
-        writeln!(gz, "@{}/{}", pair.name, mate)?;
-        gz.write_all(seq)?;
-        write!(gz, "\n+\n")?;
-        gz.write_all(qual)?;
-        writeln!(gz)
-    });
+    GzEncoder::new(std::io::BufWriter::new(file), Compression::fast())
+}
+
+/// Write `pair`'s record for `mate` (1 or 2).
+fn write_record(gz: &mut FastqGz, pair: &ReadPair, mate: u8) -> std::io::Result<()> {
+    let (seq, qual) = if mate == 1 { (&pair.seq1, &pair.qual1) } else { (&pair.seq2, &pair.qual2) };
+    writeln!(gz, "@{}/{}", pair.name, mate)?;
+    gz.write_all(seq)?;
+    write!(gz, "\n+\n")?;
+    gz.write_all(qual)?;
+    writeln!(gz)
+}
+
+/// Finish `gz`, the stream to `path`, after writing its records gave `records`.
+fn finish(gz: FastqGz, records: std::io::Result<()>, path: &Path) -> Result<()> {
     // `finish()` only flushes flate2's own internal buffer into the
     // `BufWriter` it returns; small output can still be sitting unwritten in
     // that `BufWriter`'s buffer. Without an explicit `flush()` here, a write
@@ -74,6 +82,33 @@ fn write_mate(file: std::fs::File, pairs: &[ReadPair], mate: u8, path: &Path) ->
     records
         .with_context(|| format!("failed to write {}", path.display()))
         .and(finished.with_context(|| format!("failed to finish writing {}", path.display())))
+}
+
+/// Write one mate's records of `pairs`, in order, to `file` as gzipped FASTQ.
+fn write_mate(file: std::fs::File, pairs: &[ReadPair], mate: u8, path: &Path) -> Result<()> {
+    let mut gz = fastq_gz(file);
+    let records = pairs.iter().try_for_each(|pair| write_record(&mut gz, pair, mate));
+    finish(gz, records, path)
+}
+
+/// Both mates' records, a pair at a time: on one thread each pair is read
+/// once. A file stops at its own first failed record, as in [`write_mate`].
+fn write_mates_in_turn(
+    (r1_file, r1_path): (std::fs::File, &Path),
+    (r2_file, r2_path): (std::fs::File, &Path),
+    pairs: &[ReadPair],
+) -> (Result<()>, Result<()>) {
+    let (mut r1, mut r2) = (fastq_gz(r1_file), fastq_gz(r2_file));
+    let (mut r1_records, mut r2_records) = (Ok(()), Ok(()));
+    for pair in pairs {
+        if r1_records.is_ok() {
+            r1_records = write_record(&mut r1, pair, 1);
+        }
+        if r2_records.is_ok() {
+            r2_records = write_record(&mut r2, pair, 2);
+        }
+    }
+    (finish(r1, r1_records, r1_path), finish(r2, r2_records, r2_path))
 }
 
 /// Write paired FASTQ files from a set of read pairs.
@@ -99,15 +134,19 @@ pub fn write_paired_fastq(pairs: &[ReadPair], output_dir: &str) -> Result<(Strin
     let r2_file = std::fs::File::create(&r2_path)
         .with_context(|| format!("failed to create {}", r2_path.display()))?;
 
-    // Each mate's file is its own stream, so the two are written side by
-    // side; each holds the same bytes as when they were written in turn.
-    // Both are finished and flushed before either error is propagated: an
-    // early `?` on R1 would leave R2 unfinished, and `GzEncoder::drop`
-    // discards its own error (L4).
-    let (r1_result, r2_result) = rayon::join(
-        || write_mate(r1_file, pairs, 1, &r1_path),
-        || write_mate(r2_file, pairs, 2, &r2_path),
-    );
+    // Each mate's file is its own stream, so on more than one thread the two
+    // are written side by side; each holds the same bytes as when they are
+    // written in turn. Both are finished and flushed before either error is
+    // propagated: an early `?` on R1 would leave R2 unfinished, and
+    // `GzEncoder::drop` discards its own error (L4).
+    let (r1_result, r2_result) = if crate::extract::one_thread() {
+        write_mates_in_turn((r1_file, &r1_path), (r2_file, &r2_path), pairs)
+    } else {
+        rayon::join(
+            || write_mate(r1_file, pairs, 1, &r1_path),
+            || write_mate(r2_file, pairs, 2, &r2_path),
+        )
+    };
 
     match (r1_result, r2_result) {
         (Ok(()), Ok(())) => {}
@@ -230,13 +269,16 @@ mod tests {
 
         let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
 
-        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+        for threads in [1, 4] {
+            let result = write_on(threads, &pairs, &dir);
 
-        assert!(
-            result.is_err(),
-            "writing the final FASTQ to a full disk must be reported as an \
-             error, not returned as Ok"
-        );
+            assert!(
+                result.is_err(),
+                "writing the final FASTQ to a full disk must be reported as an \
+                 error, not returned as Ok (at {} thread(s))",
+                threads
+            );
+        }
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -254,22 +296,26 @@ mod tests {
 
         let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
 
-        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+        for threads in [1, 4] {
+            let result = write_on(threads, &pairs, &dir);
 
-        let err = format!(
-            "{:#}",
-            result.expect_err("writing R2's final FASTQ to a full disk must be reported as an error")
-        );
-        assert!(
-            err.contains("R2.fq.gz"),
-            "error must name R2 as the stream that failed: {}",
-            err
-        );
-        assert!(
-            !err.contains("R1.fq.gz"),
-            "R1 succeeded and must not be blamed for R2's failure: {}",
-            err
-        );
+            let err = format!(
+                "{:#}",
+                result.expect_err("writing R2's final FASTQ to a full disk must be reported as an error")
+            );
+            assert!(
+                err.contains("R2.fq.gz"),
+                "error must name R2 as the stream that failed (at {} thread(s)): {}",
+                threads,
+                err
+            );
+            assert!(
+                !err.contains("R1.fq.gz"),
+                "R1 succeeded and must not be blamed for R2's failure (at {} thread(s)): {}",
+                threads,
+                err
+            );
+        }
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -293,24 +339,37 @@ mod tests {
 
         let pairs = vec![pair_with_qual(vec![b'!' + 30; 10], vec![b'!' + 30; 10])];
 
-        let result = write_paired_fastq(&pairs, dir.to_str().unwrap());
+        for threads in [1, 4] {
+            let result = write_on(threads, &pairs, &dir);
 
-        let err = format!(
-            "{:#}",
-            result.expect_err("writing to a full disk must be reported as an error")
-        );
-        assert!(
-            err.contains("R1.fq.gz"),
-            "error must still name R1 as one of the streams that failed: {}",
-            err
-        );
-        assert!(
-            err.contains("R2.fq.gz"),
-            "R2's failure must not be swallowed just because R1 failed first: {}",
-            err
-        );
+            let err = format!(
+                "{:#}",
+                result.expect_err("writing to a full disk must be reported as an error")
+            );
+            assert!(
+                err.contains("R1.fq.gz"),
+                "error must still name R1 as one of the streams that failed (at {} thread(s)): {}",
+                threads,
+                err
+            );
+            assert!(
+                err.contains("R2.fq.gz"),
+                "R2's failure must not be swallowed just because R1 failed first (at {} thread(s)): {}",
+                threads,
+                err
+            );
+        }
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// [`write_paired_fastq`] into `dir` on a pool of `threads` threads.
+    fn write_on(threads: usize, pairs: &[ReadPair], dir: &Path) -> Result<(String, String)> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| write_paired_fastq(pairs, dir.to_str().unwrap()))
     }
 
     /// The gzip bytes one mate's file must hold: every pair's record for that

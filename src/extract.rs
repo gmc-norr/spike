@@ -919,6 +919,13 @@ pub fn safe_noodles_position(pos: u64) -> noodles::core::Position {
     noodles::core::Position::new(pos_usize).unwrap_or(noodles::core::Position::MIN)
 }
 
+/// Whether the current thread pool has one thread. A split piece then does
+/// the work of its one-thread form, with no chunking, merging or copying on
+/// top: split at one thread, the pieces were 6-17% slower on 3 Mb events.
+pub fn one_thread() -> bool {
+    rayon::current_num_threads() == 1
+}
+
 /// A region is read on the thread pool in at most one chunk per thread, and
 /// in no chunk shorter than this: a small event's region stays one query.
 pub const MIN_READ_CHUNK_BP: u64 = 100_000;
