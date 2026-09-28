@@ -113,3 +113,25 @@ or the verdict is "inconclusive" (the test is blind):
 
 Insertions, duplications, inversions, small variants; `--edit-model
 origin`; SV callers (round 2); PD-29's depth-fold threshold.
+
+## Pilot (2026-09-28): STOPPED by its own check
+
+Run with `761c0d1`, spike master `fe15a46` (binary md5 `0302a168`); raw
+output in the session scratchpad, `transplant/pilot/`. 10 events per set in
+the 300-999 bp bin; one forward event (chr16:29379957-29380309) refused by
+spike (RF8), so forward has 9.
+
+- **B1 fails, as it must:** median J 0.25 against real 0.49 (forward), E1
+  0.72 against 0.53. The test sees a half dose.
+- **The second check stops the run:** c's 10th-90th width for J is 0.509,
+  wider than the median real J, 0.409 (forward and reverse real events
+  pooled). The plan says to stop and rethink the evidence here.
+- Seen, not judged (10 events, a pilot gives no verdict): median J, real
+  0.49 / fake 0.44 (forward) and 0.40 / 0.43 (reverse); median E1 0.53 /
+  0.51 and 0.53 / 0.54. The sham leaves no junction evidence (median J 0.00)
+  and E1 0.97-0.99.
+- Likely why the check fires (not measured): J counts about 15 reads per
+  event at 30x, so counting noise alone spreads one event's J by about a
+  quarter of its value between two samples.
+
+The full run is not started.
