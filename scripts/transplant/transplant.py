@@ -46,7 +46,8 @@ BINS = ["50-299", "300-999", "1k-10k"]
 MIN_DEL = 50
 NEIGHBOUR = 1_000
 RUN_GAP = 100_000
-SEED = 1
+SEED = 1  # spike's --seed
+DRAW_SEED = {"pilot": 1, "full": 2}  # round 1b: fresh events for the full run
 MAX_RECIPIENT_EVIDENCE = 1
 B1_VAF = 0.25
 B2_SHIFT = 200
@@ -121,6 +122,32 @@ def percentile(values, q):
     lo = int(pos)
     hi = min(lo + 1, len(v) - 1)
     return v[lo] + (v[hi] - v[lo]) * (pos - lo)
+
+
+def without(events, excluded):
+    """`events` less those in `excluded` (the pilot's, in round 1b)."""
+    return [e for e in events if e not in excluded]
+
+
+# Which broken control must fail which metric (round 1b): B2 moves the junction,
+# not the depth over a long deletion.
+MUST_FAIL = {"J": ("B1", "B2"), "E1": ("B1",)}
+
+
+def verdict(result, controls, metric):
+    """pass / fail, or inconclusive when a control that must fail `metric` passed or is missing."""
+    if any(controls.get(arm) is None or controls[arm]["pass"] for arm in MUST_FAIL[metric]):
+        return "inconclusive"
+    return "pass" if result["pass"] else "fail"
+
+
+def overall(statuses):
+    """A bin and direction: supported if every metric passes, refuted if any fails."""
+    if "fail" in statuses:
+        return "refuted"
+    if statuses and all(s == "pass" for s in statuses):
+        return "supported"
+    return "inconclusive"
 
 
 def judge(d, c):
@@ -275,6 +302,7 @@ def main(argv):
     ap.add_argument("--spike", required=True)
     ap.add_argument("--bench", required=True)
     ap.add_argument("--threads", type=int, default=16)
+    ap.add_argument("--exclude", help="an events.tsv whose events may not be drawn (the pilot's, round 1b)")
     a = ap.parse_args(argv)
     os.makedirs(a.out, exist_ok=True)
     log = os.path.join(a.out, "spike.log")
@@ -285,13 +313,18 @@ def main(argv):
     bound = {s: proper_bound(b) for s, b in BAMS.items()}
     write_tsv(os.path.join(a.out, "bounds.tsv"), ["sample", "proper_pair_bound"], sorted(bound.items()))
 
+    excluded = set()
+    if a.exclude:
+        with open(a.exclude) as fh:
+            next(fh)
+            excluded = {(c, int(s), int(e)) for _, _, c, s, e in (line.rstrip("\n").split("\t") for line in fh)}
     others = sv_intervals("HG001") + sv_intervals("HG002")
     cands = {k: isolated(v, others) for k, v in candidates(a.bench).items()}
 
     ev_rows, chosen = [], {}
     for key in ("forward", "reverse", "shared"):
         for b in bins:
-            pool = [e for e in cands[key] if size_bin(e[2] - e[1]) == b]
+            pool = without([e for e in cands[key] if size_bin(e[2] - e[1]) == b], excluded)
             if key == "shared":
                 keep = lambda e: True  # noqa: E731
             else:
@@ -301,7 +334,7 @@ def main(argv):
                     row = evidence.measure(BAMS[recipient], *e, bound[recipient])
                     ev_rows.append([key, b, "recipient_before", *e, *[row[c] for c in evidence.COLUMNS]])
                     return row["n_any"] <= MAX_RECIPIENT_EVIDENCE
-            chosen[(key, b)] = draw(pool, per_bin, SEED, keep)
+            chosen[(key, b)] = draw(pool, per_bin, DRAW_SEED[a.stage], keep)
     write_tsv(os.path.join(a.out, "events.tsv"), ["set", "bin", "chrom", "start", "end"],
               [[k, b, *e] for (k, b), es in chosen.items() for e in es])
 
@@ -369,6 +402,21 @@ def judge_all(out, ev_rows, bins, arms):
                                        ("n_d", "n_c", "median_d", "c25", "c75", "width_d", "width_c", "bias_ok", "spread_ok", "pass")])
     write_tsv(os.path.join(out, "judge.tsv"), ["set", "arm", "bin", "metric", "n_d", "n_c", "median_d", "c25", "c75",
                                                "width_d", "width_c", "bias_ok", "spread_ok", "pass"], results)
+    # Round 1b's verdicts: both directions lean on the forward broken controls.
+    judged = {(r[0], r[1], r[2], r[3]): {"pass": r[-1]} for r in results}
+    verdicts = []
+    for key in ("forward", "reverse"):
+        for b in bins:
+            statuses = []
+            for metric in ("J", "E1"):
+                res = judged.get((key, "normal", b, metric))
+                if res is None:
+                    continue
+                controls = {arm: judged.get(("forward", arm, b, metric)) for arm in ("B1", "B2")}
+                statuses.append(verdict(res, controls, metric))
+                verdicts.append([key, b, metric, statuses[-1]])
+            verdicts.append([key, b, "overall", overall(statuses)])
+    write_tsv(os.path.join(out, "verdicts.tsv"), ["set", "bin", "metric", "verdict"], verdicts)
 
 
 if __name__ == "__main__":

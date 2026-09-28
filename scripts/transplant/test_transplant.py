@@ -75,6 +75,33 @@ def test_percentiles_interpolate_linearly():
     assert t.percentile([7], 90) == 7
 
 
+def test_the_pilot_events_are_left_out():
+    pool = [("chr1", 0, 400), ("chr1", 5_000, 5_400), ("chr2", 0, 400)]
+    assert t.without(pool, {("chr1", 5_000, 5_400)}) == [("chr1", 0, 400), ("chr2", 0, 400)]
+
+
+PASS, FAIL = {"pass": True}, {"pass": False}
+
+
+def test_a_metric_is_judged_only_when_the_controls_that_must_fail_it_fail():
+    assert t.verdict(PASS, {"B1": FAIL, "B2": FAIL}, "J") == "pass"
+    assert t.verdict(FAIL, {"B1": FAIL, "B2": FAIL}, "J") == "fail"
+    assert t.verdict(PASS, {"B1": FAIL, "B2": PASS}, "J") == "inconclusive"   # B2 blind to J
+    assert t.verdict(PASS, {"B1": PASS, "B2": FAIL}, "J") == "inconclusive"
+    assert t.verdict(PASS, {"B1": FAIL, "B2": PASS}, "E1") == "pass"          # B2 is not asked about E1
+    assert t.verdict(PASS, {"B1": PASS, "B2": FAIL}, "E1") == "inconclusive"
+    assert t.verdict(PASS, {"B2": FAIL}, "E1") == "inconclusive"              # B1 missing
+
+
+def test_a_bin_is_supported_only_when_every_metric_passes():
+    assert t.overall(["pass", "pass"]) == "supported"
+    assert t.overall(["pass"]) == "supported"
+    assert t.overall(["pass", "fail"]) == "refuted"
+    assert t.overall(["fail", "inconclusive"]) == "refuted"
+    assert t.overall(["pass", "inconclusive"]) == "inconclusive"
+    assert t.overall([]) == "inconclusive"
+
+
 def test_the_pass_rule_needs_the_median_inside_the_middle_half_and_no_wider_spread():
     c = list(range(-10, 11))                 # 25th..75th: -5..5; 10th..90th width 16
     assert t.judge([0, 1, -1, 2, -2], c)["pass"]
