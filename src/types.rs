@@ -188,7 +188,7 @@ pub struct SimConfig {
     pub ref_path: String,
     pub allele_fraction: f64, // 0.0 to 1.0
     pub flank_bp: u64,
-    pub read_length: usize, // derived from BAM stats
+    pub read_length: usize, // cycles: the BAM's most common read length (bam_stats)
     pub min_mapq: u8,
     /// Optional gVCF file for LOH simulation (het SNP positions).
     pub gvcf_path: Option<String>,
@@ -197,6 +197,21 @@ pub struct SimConfig {
     pub indel_error_rate: f64,
     /// Duplication model: "full" (full tandem haplotype) or "junction" (legacy junction-only).
     pub dup_model: String,
+    /// Whether the input library's reads were adapter-trimmed before
+    /// alignment (`bam_stats`); see `SynthReadGenerator::with_adapter_trim`.
+    pub adapter_trimmed: bool,
+}
+
+impl SimConfig {
+    /// The shortest fragment the donor fragment model keeps: the one the
+    /// generator draws down to (`SynthReadGenerator::min_fragment_len`).
+    pub fn min_fragment_len(&self) -> usize {
+        if self.adapter_trimmed {
+            1
+        } else {
+            self.read_length
+        }
+    }
 }
 
 /// A read pair extracted from BAM, stored in FASTQ-ready form.

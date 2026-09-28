@@ -219,20 +219,20 @@ struct Args {
 /// complete pairs.
 const HAP_FLANK: u64 = 2000;
 
-/// Check the input BAM's mean read length against spike's max supported
-/// fragment length (L5). spike's tiling and depth-copy generation both
-/// sample a fragment length in `[read_length, MAX_FRAGMENT_LEN]`; if the
-/// read length itself exceeds that max, no valid fragment exists and
-/// `FragmentDist::sample_in_range` panics deep inside per-event processing.
-/// Reject it here instead, before any work starts, with a message that
-/// explains why: spike simulates fixed-length paired-end reads and does not
-/// support long-read (PacBio/ONT) libraries.
+/// Check the input BAM's read length (its most common) against spike's max
+/// supported fragment length (L5). In a library that was not adapter-trimmed,
+/// spike's tiling and depth-copy generation both sample a fragment length in
+/// `[read_length, MAX_FRAGMENT_LEN]`; if the read length itself exceeds that
+/// max, no valid fragment exists and `FragmentDist::sample_in_range` panics
+/// deep inside per-event processing. Reject it here instead, before any work
+/// starts, with a message that explains why: spike simulates short
+/// paired-end reads and does not support long-read (PacBio/ONT) libraries.
 fn validate_read_length(read_length: usize) -> Result<()> {
     let max = crate::stats::MAX_FRAGMENT_LEN;
     if read_length as i64 > max {
         bail!(
-            "input BAM's mean read length ({read_length}bp) exceeds spike's max \
-             supported fragment length ({max}bp); spike simulates fixed-length \
+            "input BAM's read length ({read_length}bp, its most common) exceeds spike's \
+             max supported fragment length ({max}bp); spike simulates short \
              paired-end reads and does not support long-read (PacBio/ONT) libraries",
         );
     }
@@ -467,10 +467,11 @@ fn main() -> Result<()> {
 
     validate_edit_model(&args.edit_model)?;
 
-    // Compute BAM stats for read length.
+    // Compute BAM stats: the cycles each read is sequenced for, and whether
+    // the library was adapter-trimmed.
     let bam_stats =
         crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
-    let read_length = bam_stats.read_length.round() as usize;
+    let read_length = bam_stats.cycles;
     validate_read_length(read_length)?;
 
     // The simulated read group reuses the original sample, so merged.bam stays
@@ -492,6 +493,7 @@ fn main() -> Result<()> {
         gvcf_path: args.gvcf.clone(),
         indel_error_rate: args.indel_error_rate,
         dup_model: args.dup_model.clone(),
+        adapter_trimmed: bam_stats.adapter_trimmed,
     };
 
     // Parse --region if provided.
@@ -673,15 +675,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        // Build quality profile and synth generator.
-        let quality_profile =
-            synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
-        let synth_gen = synth::SynthReadGenerator::new(
-            quality_profile,
-            &shared_ref,
-            config.read_length,
-            config.indel_error_rate,
-        );
+        let synth_gen = synth_generator(&pool, &shared_ref, &config);
 
         // Build variant haplotype.
         let mut haplotype =
@@ -1445,7 +1439,7 @@ fn extract_pool_for_event(
         event,
         &windows_searched,
         dropped_unusable_qual,
-        config.read_length,
+        config,
     )?;
     Ok((pool, pool_chrom, dropped_unusable_qual))
 }
@@ -1515,12 +1509,24 @@ const MIN_DONOR_PAIRS: usize = 30;
 ///
 /// Split out of `extract_pool_for_event` so the pool the simulation runs on
 /// can be checked without a BAM behind it.
+/// The event's read generator: its quality profile learned from the donor
+/// pool, sequencing `config.read_length` cycles, trimmed as the library was.
+fn synth_generator<'a>(
+    pool: &ReadPool,
+    reference: &'a crate::reference::SharedReference,
+    config: &SimConfig,
+) -> synth::SynthReadGenerator<'a> {
+    let quality_profile = synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
+    synth::SynthReadGenerator::new(quality_profile, reference, config.read_length, config.indel_error_rate)
+        .with_adapter_trim(config.adapter_trimmed)
+}
+
 fn finish_donor_pool(
     mut all_pairs: Vec<ReadPair>,
     event: &SimEvent,
     windows_searched: &[String],
     dropped_unusable_qual: usize,
-    read_length: usize,
+    config: &SimConfig,
 ) -> Result<ReadPool> {
     // Windows can share reads, and the same fragment must not enter the pool
     // -- or the fragment distribution -- twice. Dedup before counting: a
@@ -1550,8 +1556,8 @@ fn finish_donor_pool(
     }
 
     // The model is built over the same range the generator samples in, so
-    // `read_length` has to reach it -- see `FragmentDist::from_read_pairs`.
-    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs, read_length);
+    // its minimum has to reach it -- see `FragmentDist::from_read_pairs`.
+    let frag_dist = stats::FragmentDist::from_read_pairs(&all_pairs, config.min_fragment_len());
     Ok(extract::build_read_pool(all_pairs, frag_dist))
 }
 
@@ -3934,10 +3940,68 @@ cat "$root/validation_summary.tsv""#,
 
     // --- N5: a donor pool too small to simulate from must fail loudly ---
 
-    /// Read length for the donor-pool fixtures: the fragment model keeps
-    /// only insert sizes in [read_length, MAX_FRAGMENT_LEN], and every
-    /// fixture pair's 400bp insert lies inside this one.
+    /// Read length for the donor-pool fixtures: in a library that was not
+    /// adapter-trimmed the fragment model keeps only insert sizes in
+    /// [read_length, MAX_FRAGMENT_LEN], and every fixture pair's 400bp insert
+    /// lies inside this one.
     const TEST_READ_LENGTH: usize = 150;
+
+    /// The config the donor-pool fixtures run under: `TEST_READ_LENGTH`
+    /// cycles, from a library that was or was not adapter-trimmed.
+    fn pool_config(adapter_trimmed: bool) -> SimConfig {
+        SimConfig {
+            bam_path: String::new(),
+            ref_path: String::new(),
+            allele_fraction: 0.5,
+            flank_bp: 1000,
+            read_length: TEST_READ_LENGTH,
+            min_mapq: 20,
+            gvcf_path: None,
+            indel_error_rate: 0.0,
+            dup_model: "full".to_string(),
+            adapter_trimmed,
+        }
+    }
+
+    #[test]
+    fn test_a_trimmed_library_s_donor_pool_keeps_fragments_shorter_than_a_read() {
+        let mut pairs = donor_pairs(MIN_DONOR_PAIRS);
+        for p in pairs.iter_mut().take(10) {
+            p.insert_size = 90;
+        }
+        let pool = |trimmed: bool| {
+            finish_donor_pool(
+                pairs.clone(),
+                &del("chr20", 30_000_000, 30_010_000),
+                &["chr20:29990000-30020000".to_string()],
+                0,
+                &pool_config(trimmed),
+            )
+            .expect("a full pool")
+        };
+        assert!(pool(true).frag_dist.lengths.contains(&90));
+        assert!(!pool(false).frag_dist.lengths.contains(&90));
+    }
+
+    #[test]
+    fn test_the_generator_follows_the_library_s_trimming() {
+        let mut seqs = std::collections::HashMap::new();
+        seqs.insert("chr20".to_string(), vec![b'A'; 1_000]);
+        let reference = crate::reference::SharedReference::from_sequences(seqs);
+        let pool = finish_donor_pool(
+            donor_pairs(MIN_DONOR_PAIRS),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+            0,
+            &pool_config(false),
+        )
+        .expect("a full pool");
+        assert_eq!(synth_generator(&pool, &reference, &pool_config(true)).min_fragment_len(), 1);
+        assert_eq!(
+            synth_generator(&pool, &reference, &pool_config(false)).min_fragment_len(),
+            TEST_READ_LENGTH as i64
+        );
+    }
 
     /// One usable donor pair, 100 bp, at `start`.
     fn donor_pair(name: &str, start: u64) -> ReadPair {
@@ -3973,7 +4037,7 @@ cat "$root/validation_summary.tsv""#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
-            TEST_READ_LENGTH,
+            &pool_config(false),
         ) {
             Ok(pool) => panic!(
                 "empty donor pool accepted; the run would write a truth VCF off {} pairs",
@@ -4005,7 +4069,7 @@ cat "$root/validation_summary.tsv""#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
-            TEST_READ_LENGTH,
+            &pool_config(false),
         ) {
             Ok(_) => panic!("{} donor pairs accepted", MIN_DONOR_PAIRS - 1),
             Err(e) => e.to_string(),
@@ -4026,7 +4090,7 @@ cat "$root/validation_summary.tsv""#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             0,
-            TEST_READ_LENGTH,
+            &pool_config(false),
         )
         .expect("a pool at the minimum must be usable");
         assert_eq!(pool.pairs.len(), MIN_DONOR_PAIRS);
@@ -4046,7 +4110,7 @@ cat "$root/validation_summary.tsv""#,
                 &del("chr20", 30_000_000, 30_010_000),
                 &["chr20:29990000-30020000".to_string()],
                 0,
-                TEST_READ_LENGTH,
+                &pool_config(false),
             )
             .is_err(),
             "a duplicated fragment must not lift a pool over the floor"
@@ -4066,7 +4130,7 @@ cat "$root/validation_summary.tsv""#,
             &del("chr20", 30_000_000, 30_010_000),
             &["chr20:29990000-30020000".to_string()],
             40,
-            TEST_READ_LENGTH,
+            &pool_config(false),
         ) {
             Ok(_) => panic!("12 donor pairs accepted"),
             Err(e) => e.to_string(),
@@ -4454,7 +4518,7 @@ cat "$root/validation_summary.tsv""#,
                 "chr2:28990000-29010000".to_string(),
             ],
             0,
-            TEST_READ_LENGTH,
+            &pool_config(false),
         ) {
             Ok(_) => panic!("empty fusion donor pool accepted"),
             Err(e) => e.to_string(),

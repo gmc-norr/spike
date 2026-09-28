@@ -1481,7 +1481,7 @@ the message is the exact text spike prints, measured by running it.
 | `--dup-model` other than `full`/`junction` | `invalid --dup-model 'tandem', expected 'full' or 'junction'` | `main.rs` |
 | `--region` with a 0 start (it is 1-based) | `region start must be >= 1 (1-based), got 0 in 'chr20:0-1000'` | `parse_region` |
 | `--region` with start after end | `region start > end (5000 > 1000) in 'chr20:5000-1000'; check your interval` | `parse_region` |
-| A long-read BAM (mean read length above spike's max fragment length) | `input BAM's mean read length (1501bp) exceeds spike's max supported fragment length (1500bp); spike simulates fixed-length paired-end reads and does not support long-read (PacBio/ONT) libraries` | `validate_read_length` |
+| A long-read BAM (read length above spike's max fragment length) | `input BAM's read length (1501bp, its most common) exceeds spike's max supported fragment length (1500bp); spike simulates short paired-end reads and does not support long-read (PacBio/ONT) libraries` | `validate_read_length` |
 | An event beyond the end of its chromosome | `DEL event start on chr20 is at or beyond chromosome length (99000000 >= 64444167)` | `validate_interval` / `validate_point` |
 | An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
@@ -1534,7 +1534,7 @@ vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND/SNP/indel)
 truth.rs         Truth VCF output
 fastq.rs         Gzipped paired FASTQ writer
 reference.rs     Indexed FASTA reading + in-memory sequence store
-bam_stats.rs     BAM/CRAM read length and single-end check
+bam_stats.rs     BAM/CRAM read length, adapter trimming and single-end check
 validate.rs      `spike validate` subcommand: automated spike-in quality checks
 ```
 
@@ -1544,7 +1544,12 @@ All SV types share a common simulation framework: (1) build a linear variant hap
 
 A segment whose flank runs off the end of a contig is truncated to what the reference actually holds: the haplotype is shorter there, its reference footprint stops at the contig end, and the count of synthetic reads follows the shorter haplotype.
 
-spike generates fixed-length paired-end reads and needs a fragment at least as long as one read; it caps the fragment lengths it draws at 1500bp, so it does not support long-read (PacBio/ONT) libraries. If the input BAM/CRAM's mean read length exceeds 1500bp, spike exits with an error before doing any work rather than generating reads that don't match the library.
+spike sequences each read for the input library's cycle count, the most common read length among the first 50,000 primary records, and trims reads the way that library's were. A library counts as **adapter-trimmed** when at least 1,000 of those records are full length and under 5% of them end in `A`, the TruSeq adapter's first base. On the HG001 and HG002 NovaSeq X 30x BAMs this share is 0.000; on an untrimmed HG002 BAM it is 0.300.
+
+- **Adapter-trimmed library:** a fragment shorter than the cycle count gives two reads as long as the fragment, and the fragment model keeps every insert size up to 1500bp. When the fragment runs past both reads, each read then loses the longest 3' end that spells a prefix of `AGATCGGAAGAGC`. That is what the real reads of those BAMs show: about 61% are 151 bp and 27% are 150 bp, and 99.3-100% of the 147-150 bp ones are followed by exactly the adapter bases they lost (docs/superpowers/plans/2026-09-28-read-length.md).
+- **Otherwise:** every read is the cycle count long, and no fragment is shorter than one read.
+
+spike caps the fragment lengths it draws at 1500bp, so it does not support long-read (PacBio/ONT) libraries. If the input BAM/CRAM's read length exceeds 1500bp, spike exits with an error before doing any work rather than generating reads that don't match the library.
 
 For the same reason spike needs a **paired-end** library: every donor read comes from an extracted pair, and the quality profile is trained on R1 and R2 separately. A single-end BAM/CRAM yields no donor material, so spike exits with an error naming the file rather than emitting a handful of synthetic pairs built on an empty quality profile. Single-end is detected from SAM flag `0x1`, which a paired library sets on every read whether or not the pair aligned properly — a paired BAM with no proper pairs in it passes this check. Reaching 50,000 primary records with no `0x1` on any of them **is** how the scan establishes that, so it stops there instead of reading the file to the end; a paired file stops there too, since the scan only needs the read length (the fragment lengths spike draws come from the extracted donor pairs, not from this scan). The message says whether the cap bound: at end of file the count it reports is every primary record in the file and the verdict is certain, while at the cap it is a window, and the message says so — a file that does hold pairs but puts 50,000 consecutive primary records without `0x1` at its head would be reported the same way. That is bounded rather than impossible: spike's input is a coordinate-sorted indexed BAM/CRAM, where a mixed library's single- and paired-end reads interleave at every locus, so no supported input is known to reach it.
 
@@ -1949,7 +1954,7 @@ As a last line of defense, `write_paired_fastq` validates every pair *before* it
 
 ### Indel error model
 
-When `--indel-error-rate` is set above 0, a fraction of sequencing errors are modeled as insertions or deletions (50/50 split) rather than substitutions. This maintains fixed read length: insertions consume an output position without advancing the reference, and deletions skip a reference base without consuming an output position.
+When `--indel-error-rate` is set above 0, a fraction of sequencing errors are modeled as insertions or deletions (50/50 split) rather than substitutions. This keeps each read's length: insertions consume an output position without advancing the reference, and deletions skip a reference base without consuming an output position.
 
 Because a deletion error consumes a template base without emitting one, the read runs past the end of the window it would otherwise need. Generation therefore fetches 10 extra template bases past each read's 3' end — to the right of a forward read, to the left of a reverse one — so those bases are real sequence. `N` padding is now only a last resort at a contig or haplotype end.
 

@@ -3,7 +3,7 @@ use log::info;
 
 /// What spike reads off the head of the input BAM/CRAM.
 ///
-/// Only the read length is used downstream. An insert size and a coverage
+/// Only the read length and the trimming verdict are used downstream. An insert size and a coverage
 /// estimate used to sit here too, read by nothing but their own log line: the
 /// fragment distribution the simulation samples from is built from the
 /// extracted donor pool (`FragmentDist::from_read_pairs`), and the coverage
@@ -11,11 +11,24 @@ use log::info;
 /// printed about 0.005x for any 35x WGS BAM (N6).
 #[derive(Debug, Clone)]
 pub struct BamStats {
-    /// Mean read length.
-    pub read_length: f64,
+    /// The cycles each read was sequenced for: the most common read length.
+    pub cycles: usize,
+    /// Whether the reads were adapter-trimmed before alignment: at least
+    /// `TRIM_MIN_FULL_LENGTH_READS` sampled reads are `cycles` long, and
+    /// under `TRIM_MAX_A_SHARE` of those end in A (the adapter's first base).
+    pub adapter_trimmed: bool,
     /// Primary, mapped records the scan examined.
     pub records_sampled: usize,
 }
+
+/// Full-length reads the scan must see before judging trimming.
+pub const TRIM_MIN_FULL_LENGTH_READS: usize = 1_000;
+
+/// Below this share of full-length reads ending in A, the library was
+/// adapter-trimmed. Measured: 0.000 on the trimmed HG001 and HG002 30x BAMs,
+/// 0.300 on an untrimmed HG002 BAM
+/// (docs/superpowers/plans/2026-09-28-read-length.md).
+pub const TRIM_MAX_A_SHARE: f64 = 0.05;
 
 /// Compute alignment statistics from the first `sample_size` primary, mapped
 /// records. Supports both BAM and CRAM formats.
@@ -46,7 +59,7 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
         .with_context(|| format!("Failed to open BAM file: {}", bam_path))?;
     reader.read_header()?;
 
-    let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
+    let mut read_lengths: Vec<(usize, bool)> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
 
@@ -66,9 +79,9 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
         total_records += 1;
         saw_segmented |= flags.is_segmented();
 
-        let seq_len = record.sequence().len();
-        if seq_len > 0 {
-            read_lengths.push(seq_len as f64);
+        let seq: Vec<u8> = record.sequence().iter().collect();
+        if !seq.is_empty() {
+            read_lengths.push((seq.len(), three_prime_is_a(&seq, flags.is_reverse_complemented())));
         }
 
         if total_records >= sample_size {
@@ -95,7 +108,7 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
         .with_context(|| format!("Failed to open CRAM file: {}", cram_path))?;
     let header = reader.read_header()?;
 
-    let mut read_lengths: Vec<f64> = Vec::with_capacity(sample_size);
+    let mut read_lengths: Vec<(usize, bool)> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
 
@@ -119,9 +132,9 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
         total_records += 1;
         saw_segmented |= flags.is_segmented();
 
-        let seq_len = buf.sequence().len();
-        if seq_len > 0 {
-            read_lengths.push(seq_len as f64);
+        let seq: &[u8] = buf.sequence().as_ref();
+        if !seq.is_empty() {
+            read_lengths.push((seq.len(), three_prime_is_a(seq, flags.is_reverse_complemented())));
         }
 
         if total_records >= sample_size {
@@ -189,24 +202,54 @@ fn reject_single_end(
 }
 
 /// Compute final statistics from collected samples.
-fn finalize_stats(read_lengths: Vec<f64>, total_records: usize) -> Result<BamStats> {
-    let read_length = if read_lengths.is_empty() {
-        150.0
-    } else {
-        read_lengths.iter().sum::<f64>() / read_lengths.len() as f64
-    };
+///
+/// `read_lengths` holds each sampled read's length and whether its 3' base
+/// is A.
+fn finalize_stats(read_lengths: Vec<(usize, bool)>, total_records: usize) -> Result<BamStats> {
+    let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for &(len, _) in &read_lengths {
+        *counts.entry(len).or_default() += 1;
+    }
+    // The most common length; a tie goes to the longer one.
+    let cycles = counts
+        .iter()
+        .max_by_key(|&(&len, &n)| (n, len))
+        .map(|(&len, _)| len)
+        .unwrap_or(150);
+    let full = read_lengths.iter().filter(|&&(len, _)| len == cycles).count();
+    let ends_in_a = read_lengths.iter().filter(|&&(len, a)| len == cycles && a).count();
+    let adapter_trimmed = full >= TRIM_MIN_FULL_LENGTH_READS
+        && (ends_in_a as f64 / full as f64) < TRIM_MAX_A_SHARE;
 
     let stats = BamStats {
-        read_length,
+        cycles,
+        adapter_trimmed,
         records_sampled: total_records,
     };
 
     info!(
-        "Stats: read_len={:.0} ({} records sampled)",
-        stats.read_length, stats.records_sampled
+        "Stats: {} cycles (the most common read length); {} of {} full-length reads end in A, \
+         so the library was {}adapter-trimmed ({} records sampled)",
+        stats.cycles,
+        ends_in_a,
+        full,
+        if stats.adapter_trimmed { "" } else { "not " },
+        stats.records_sampled
     );
 
     Ok(stats)
+}
+
+/// Whether a read's 3' base, in sequencing orientation, is A: its last base,
+/// or for a reverse-strand record (stored reverse-complemented) its first
+/// base complemented.
+fn three_prime_is_a(seq: &[u8], is_reverse: bool) -> bool {
+    let base = if is_reverse { seq.first() } else { seq.last() };
+    match base.map(|b| b.to_ascii_uppercase()) {
+        Some(b'A') => !is_reverse,
+        Some(b'T') => is_reverse,
+        _ => false,
+    }
 }
 
 /// Choose the sample name for the simulated read group from the `@RG` `SM`
@@ -526,12 +569,50 @@ mod tests {
 
         let stats = compute_stats(&cram, 50, Some(&fasta)).expect("a paired CRAM is usable");
         assert_eq!(stats.records_sampled, 10, "5 pairs = 10 primary records");
-        assert!(
-            (stats.read_length - 100.0).abs() < f64::EPSILON,
-            "every read is 100 bp, got {}",
-            stats.read_length
-        );
+        assert_eq!(stats.cycles, 100, "every read is 100 bp");
+        assert!(!stats.adapter_trimmed, "10 reads are too few to tell");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `n` reads of `len` bp, the first `ends_in_a` of them ending in A.
+    fn samples(n: usize, len: usize, ends_in_a: usize) -> Vec<(usize, bool)> {
+        (0..n).map(|i| (len, i < ends_in_a)).collect()
+    }
+
+    #[test]
+    fn test_cycles_are_the_most_common_read_length() {
+        let mut s = samples(2_000, 151, 0);
+        s.extend(samples(10, 250, 0));
+        s.extend(samples(900, 150, 300));
+        assert_eq!(finalize_stats(s, 2_910).unwrap().cycles, 151);
+        assert_eq!(finalize_stats(vec![], 0).unwrap().cycles, 150, "no reads: the old default");
+    }
+
+    #[test]
+    fn test_a_library_is_adapter_trimmed_when_its_full_length_reads_almost_never_end_in_a() {
+        // Measured: 0.000 on the trimmed HG001/HG002 30x BAMs, 0.300 on an
+        // untrimmed HG002 BAM (docs/superpowers/plans/2026-09-28-read-length.md).
+        let trimmed = |n: usize, a: usize| finalize_stats(samples(n, 151, a), n).unwrap().adapter_trimmed;
+        assert!(trimmed(1_000, 0));
+        assert!(trimmed(1_000, 49));
+        assert!(!trimmed(1_000, 50), "0.05 is not under 0.05");
+        assert!(!trimmed(2_000, 600), "an untrimmed library: 0.3 end in A");
+        assert!(!trimmed(999, 0), "too few full-length reads to tell");
+        let mut s = samples(1_000, 151, 0);
+        s.extend(samples(1_000, 150, 1_000));
+        assert!(finalize_stats(s, 2_000).unwrap().adapter_trimmed, "shorter reads do not count");
+        let mut s = samples(900, 151, 0);
+        s.extend(samples(800, 150, 0));
+        assert!(!finalize_stats(s, 1_700).unwrap().adapter_trimmed, "900 full-length reads are too few");
+    }
+
+    #[test]
+    fn test_a_read_s_3_prime_base_is_read_in_sequencing_orientation() {
+        assert!(three_prime_is_a(b"CCA", false));
+        assert!(!three_prime_is_a(b"ACC", false));
+        assert!(three_prime_is_a(b"TCC", true), "a reverse read's 3' end is its first base, complemented");
+        assert!(!three_prime_is_a(b"ACC", true));
+        assert!(!three_prime_is_a(b"", false));
     }
 
     #[test]

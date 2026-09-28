@@ -426,6 +426,12 @@ pub struct SynthReadGenerator<'a> {
     /// Fraction of sequencing errors that are indels (vs substitutions).
     /// 0.0 = substitution-only (default), ~0.05 = typical Illumina.
     indel_error_rate: f64,
+    /// Whether the input library's reads were adapter-trimmed before
+    /// alignment. Then a read is `read_length` cycles, cut to its fragment
+    /// when the fragment is shorter, and loses any 3' end that spells the
+    /// adapter's start (see `adapter_suffix_len`). Otherwise every read is
+    /// `read_length` long and no fragment is shorter than one read.
+    adapter_trimmed: bool,
 }
 
 impl<'a> SynthReadGenerator<'a> {
@@ -440,12 +446,45 @@ impl<'a> SynthReadGenerator<'a> {
             reference,
             read_length,
             indel_error_rate,
+            adapter_trimmed: false,
         }
     }
 
-    /// Read length this generator was configured for.
-    pub fn read_length(&self) -> usize {
-        self.read_length
+    /// This generator for a library whose reads were (`on`) or were not
+    /// adapter-trimmed; `new` builds an untrimmed one.
+    pub fn with_adapter_trim(mut self, on: bool) -> Self {
+        self.adapter_trimmed = on;
+        self
+    }
+
+    /// The shortest fragment this generator sequences: any, in a trimmed
+    /// library, where a short fragment's reads are cut to it; one read's
+    /// length otherwise.
+    pub fn min_fragment_len(&self) -> i64 {
+        if self.adapter_trimmed {
+            1
+        } else {
+            self.read_length as i64
+        }
+    }
+
+    /// How long each mate of a `frag_len` fragment is sequenced, before
+    /// adapter trimming; `None` when no read can come off it.
+    fn mate_length(&self, frag_len: u64) -> Option<u64> {
+        let cycles = self.read_length as u64;
+        let rl = if self.adapter_trimmed { cycles.min(frag_len) } else { cycles };
+        (rl > 0 && frag_len >= rl).then_some(rl)
+    }
+
+    /// Cut a read's 3' end where it spells the adapter's start, as an
+    /// adapter-trimmed library's were -- only when the fragment ran past both
+    /// reads, so no adapter was read in full.
+    fn trim_adapter_start(&self, frag_len: u64, seq: &mut Vec<u8>, qual: &mut Vec<u8>) {
+        if self.adapter_trimmed && frag_len >= self.read_length as u64 {
+            let keep = seq.len() - adapter_suffix_len(seq);
+            seq.truncate(keep);
+            qual.truncate(keep);
+        }
     }
 
     /// The reference this generator reads from.
@@ -562,7 +601,8 @@ impl<'a> SynthReadGenerator<'a> {
     ///   in sequencing order and the returned `(sequence, quality)` is already
     ///   in FASTQ orientation — the caller must not reverse it again. A
     ///   forward read is returned in reference orientation, which is the same
-    ///   thing. Reads are `read_length` long either way.
+    ///   thing. Reads are `rl` long either way.
+    #[allow(clippy::too_many_arguments)]
     fn generate_read(
         &self,
         chrom: &str,
@@ -570,9 +610,9 @@ impl<'a> SynthReadGenerator<'a> {
         alleles: &HashMap<u64, u8>,
         read_num: u8,
         is_reverse: bool,
+        rl: usize,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
-        let rl = self.read_length;
         // Fetch extra ref bases in case indel errors shift our position. They
         // go past the read's 3' end, which for a reverse read is to the left.
         let slack = if self.indel_error_rate > 0.0 { INDEL_SLACK as u64 } else { 0 };
@@ -618,7 +658,9 @@ impl<'a> SynthReadGenerator<'a> {
     ///
     /// The fragment is `[frag_start, frag_start + frag_len)` either way; a
     /// coin flip decides which mate comes off which end. F1R2: R1 forward at
-    /// `frag_start`, R2 reverse at `frag_start + frag_len - read_length`.
+    /// `frag_start`, R2 reverse at `frag_start + frag_len - rl`, where `rl`
+    /// is `read_length` -- or, in an adapter-trimmed library, the fragment's
+    /// length when that is shorter (see `mate_length`, `trim_adapter_start`).
     /// F2R1: the other way round. Real libraries are ~50/50 (M13), and a
     /// one-sided strand makes callers' read-orientation filters fire.
     /// The reverse mate is stored in FASTQ orientation (reverse-complemented).
@@ -632,10 +674,7 @@ impl<'a> SynthReadGenerator<'a> {
         name: &str,
         rng: &mut StdRng,
     ) -> Option<ReadPair> {
-        let rl = self.read_length as u64;
-        if frag_len < rl {
-            return None;
-        }
+        let rl = self.mate_length(frag_len)?;
 
         let right_start = frag_start + frag_len - rl;
 
@@ -649,13 +688,16 @@ impl<'a> SynthReadGenerator<'a> {
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
         // Forward mate (left end of the fragment).
-        let (fwd_seq, fwd_qual) =
-            self.generate_read(chrom, frag_start, alleles, fwd_num, false, rng);
+        let (mut fwd_seq, mut fwd_qual) =
+            self.generate_read(chrom, frag_start, alleles, fwd_num, false, rl as usize, rng);
 
         // Reverse mate (right end) — generated in sequencing order, so it
         // already comes back in FASTQ orientation.
-        let (rev_seq, rev_qual) =
-            self.generate_read(chrom, right_start, alleles, rev_num, true, rng);
+        let (mut rev_seq, mut rev_qual) =
+            self.generate_read(chrom, right_start, alleles, rev_num, true, rl as usize, rng);
+
+        self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
+        self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
 
         let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
             (rev_seq, rev_qual, fwd_seq, fwd_qual)
@@ -689,10 +731,12 @@ impl<'a> SynthReadGenerator<'a> {
         frag_dist: &FragmentDist,
         rng: &mut StdRng,
     ) -> Option<ReadPair> {
-        let rl = self.read_length as i64;
-
         // Sample new fragment length.
-        let new_frag = frag_dist.sample_in_range(rng, rl, crate::stats::MAX_FRAGMENT_LEN) as u64;
+        let new_frag = frag_dist.sample_in_range(
+            rng,
+            self.min_fragment_len(),
+            crate::stats::MAX_FRAGMENT_LEN,
+        ) as u64;
 
         // Position jitter: ±20bp to avoid exact positional duplicates.
         let jitter = rng.gen_range(-20i64..=20);
@@ -780,7 +824,7 @@ impl<'a> SynthReadGenerator<'a> {
     ///
     /// `seq` is in haplotype orientation and should carry a few bases past the
     /// read's 3' end so deletion errors have real sequence to fall back on.
-    /// The read is `min(read_length, seq.len())` bases long.
+    /// The read is `min(rl, seq.len())` bases long.
     ///
     /// `read_num`: 1 or 2 (controls which quality distribution is sampled).
     /// `is_reverse`: when true the read comes off the reverse strand — `seq`
@@ -789,11 +833,12 @@ impl<'a> SynthReadGenerator<'a> {
     fn generate_read_from_seq(
         &self,
         seq: &[u8],
+        rl: usize,
         read_num: u8,
         is_reverse: bool,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
-        let rl = self.read_length.min(seq.len());
+        let rl = rl.min(seq.len());
         let mut template = seq.to_vec();
         if is_reverse {
             // Sequencing order: the reverse mate reads the other strand,
@@ -818,10 +863,8 @@ impl<'a> SynthReadGenerator<'a> {
         name: &str,
         rng: &mut StdRng,
     ) -> Option<ReadPair> {
-        let rl = self.read_length as u64;
-        if frag_len < rl {
-            return None;
-        }
+        let rl = self.mate_length(frag_len)?;
+        let rl_bases = rl as usize;
 
         let right_hap_start = hap_frag_start + frag_len - rl;
 
@@ -830,15 +873,13 @@ impl<'a> SynthReadGenerator<'a> {
         // For the reverse mate that end is to the left of `right_hap_start`.
         let slack = if self.indel_error_rate > 0.0 { INDEL_SLACK } else { 0 };
         let right_slack = slack.min(right_hap_start as usize);
-        let left_seq = haplotype.get_sequence(hap_frag_start, self.read_length + slack);
+        let left_seq = haplotype.get_sequence(hap_frag_start, rl_bases + slack);
         let right_seq = haplotype.get_sequence(
             right_hap_start - right_slack as u64,
-            right_slack + self.read_length,
+            right_slack + rl_bases,
         );
 
-        if left_seq.len() < self.read_length
-            || right_seq.len() < right_slack + self.read_length
-        {
+        if left_seq.len() < rl_bases || right_seq.len() < right_slack + rl_bases {
             return None;
         }
 
@@ -850,11 +891,16 @@ impl<'a> SynthReadGenerator<'a> {
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
 
         // Forward mate (left end of the fragment).
-        let (fwd_seq, fwd_qual) = self.generate_read_from_seq(left_seq, fwd_num, false, rng);
+        let (mut fwd_seq, mut fwd_qual) =
+            self.generate_read_from_seq(left_seq, rl_bases, fwd_num, false, rng);
 
         // Reverse mate (right end): generated in sequencing order, so it
         // already comes back in FASTQ orientation.
-        let (rev_seq, rev_qual) = self.generate_read_from_seq(right_seq, rev_num, true, rng);
+        let (mut rev_seq, mut rev_qual) =
+            self.generate_read_from_seq(right_seq, rl_bases, rev_num, true, rng);
+
+        self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
+        self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
 
         let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
             (rev_seq, rev_qual, fwd_seq, fwd_qual)
@@ -887,6 +933,22 @@ impl<'a> SynthReadGenerator<'a> {
             chrom,
         })
     }
+}
+
+/// The start of the TruSeq adapter, R1's and R2's alike. A library trimmed
+/// before alignment loses any read end that spells a prefix of it: measured
+/// on the HG001 and HG002 30x BAMs, 99.3-100% of 147-150 bp reads are
+/// followed by exactly the bases they lost, and no 151 bp read ends in A
+/// (docs/superpowers/plans/2026-09-28-read-length.md).
+const ADAPTER_START: &[u8] = b"AGATCGGAAGAGC";
+
+/// The longest end of `seq` that equals a prefix of `ADAPTER_START`: what
+/// the trimmer cut from a read ending there. 0 when none does.
+pub(crate) fn adapter_suffix_len(seq: &[u8]) -> usize {
+    (1..=ADAPTER_START.len().min(seq.len()))
+        .rev()
+        .find(|&k| seq[seq.len() - k..] == ADAPTER_START[..k])
+        .unwrap_or(0)
 }
 
 /// Rate at which an original pair is replaced (or, for depth copies, repeated)
@@ -1735,6 +1797,205 @@ mod tests {
         assert!(fwd > 0 && rev > 0, "orientation split {} fwd / {} rev of 100", fwd, rev);
     }
 
+    // ── Read length: cycles, short fragments and adapter trimming ───────
+
+    /// `mock_gen_over` at Q93 (no sequencing errors), for a library whose
+    /// reads were adapter-trimmed.
+    fn trimming_gen_over(seq: Vec<u8>, cycles: usize) -> SynthReadGenerator<'static> {
+        mock_gen_over(seq, cycles, 93, 93).with_adapter_trim(true)
+    }
+
+    #[test]
+    fn test_adapter_suffix_is_the_longest_read_end_that_spells_the_adapter_start() {
+        assert_eq!(adapter_suffix_len(b"CCCCT"), 0);
+        assert_eq!(adapter_suffix_len(b"CCCCA"), 1);
+        assert_eq!(adapter_suffix_len(b"CCCAG"), 2);
+        assert_eq!(adapter_suffix_len(b"CCAGA"), 3, "AGA, not just its last A");
+        assert_eq!(adapter_suffix_len(b"CAGAT"), 4);
+        assert_eq!(adapter_suffix_len(b"CCAGT"), 0);
+        assert_eq!(adapter_suffix_len(b"GA"), 1);
+        assert_eq!(adapter_suffix_len(b"TTAGATCGGAAGAGC"), 13);
+        assert_eq!(adapter_suffix_len(b"AGATCGGAAGAGCA"), 1, "only a prefix of the adapter counts");
+        assert_eq!(adapter_suffix_len(b""), 0);
+    }
+
+    #[test]
+    fn test_min_fragment_is_one_base_in_a_trimmed_library_and_one_read_otherwise() {
+        let gen = mock_gen_over(vec![b'A'; 1_000], 151, 30, 30);
+        assert_eq!(gen.min_fragment_len(), 151);
+        assert_eq!(gen.with_adapter_trim(true).min_fragment_len(), 1);
+    }
+
+    #[test]
+    fn test_a_fragment_shorter_than_the_cycles_gives_reads_as_long_as_the_fragment() {
+        let mut seq = scrambled_seq(20_000, 21);
+        // The 100 bp fragment ends ...CA: its reads were cut at the adapter
+        // itself, so that A stays.
+        seq[5_098] = b'C';
+        seq[5_099] = b'A';
+        let gen = trimming_gen_over(seq.clone(), 151);
+        let mut rng = StdRng::seed_from_u64(5);
+        for frag_len in [60u64, 100, 150] {
+            let pair = gen
+                .generate_read_pair("chr1", 5_000, frag_len, &HashMap::new(), "p", &mut rng)
+                .expect("a short fragment is sequenced");
+            let fragment = seq[5_000..5_000 + frag_len as usize].to_vec();
+            let mut fragment_rc = fragment.clone();
+            reverse_complement(&mut fragment_rc);
+            let mut got = [pair.seq1.clone(), pair.seq2.clone()];
+            got.sort();
+            let mut want = [fragment, fragment_rc];
+            want.sort();
+            assert_eq!(got, want, "a {} bp fragment is read whole from each end", frag_len);
+            assert_eq!((pair.qual1.len(), pair.qual2.len()), (frag_len as usize, frag_len as usize));
+            assert_eq!(
+                (pair.ref_start, pair.ref_end, pair.insert_size),
+                (5_000, 5_000 + frag_len, frag_len as i64)
+            );
+        }
+        let untrimmed = mock_gen_over(seq, 151, 93, 93);
+        assert!(
+            untrimmed
+                .generate_read_pair("chr1", 5_000, 100, &HashMap::new(), "p", &mut rng)
+                .is_none(),
+            "an untrimmed library has no fragment shorter than a read"
+        );
+    }
+
+    #[test]
+    fn test_a_read_loses_the_adapter_start_its_3_prime_end_spells() {
+        let (s, frag_len, cycles) = (5_000usize, 400usize, 151usize);
+        let e = s + frag_len;
+        let mut seq = scrambled_seq(20_000, 22);
+        // The forward read [s, s + 151) ends ...CA: it loses its A.
+        seq[s + 149] = b'C';
+        seq[s + 150] = b'A';
+        // The reverse read is [e - 151, e) reverse-complemented, so its 3'
+        // end is seq[e - 148..e - 152] backwards, complemented: ...CAGA, and
+        // it loses AGA.
+        seq[e - 151] = b'T';
+        seq[e - 150] = b'C';
+        seq[e - 149] = b'T';
+        seq[e - 148] = b'G';
+        let fwd = seq[s..s + 150].to_vec();
+        let mut rev = seq[e - 151..e].to_vec();
+        reverse_complement(&mut rev);
+        rev.truncate(148);
+
+        let gen = trimming_gen_over(seq.clone(), cycles);
+        let mut rng = StdRng::seed_from_u64(6);
+        let (mut f1r2, mut f2r1) = (0usize, 0usize);
+        for _ in 0..20 {
+            let pair = gen
+                .generate_read_pair("chr1", s as u64, frag_len as u64, &HashMap::new(), "p", &mut rng)
+                .unwrap();
+            if pair.seq1 == fwd {
+                assert_eq!(pair.seq2, rev);
+                f1r2 += 1;
+            } else {
+                assert_eq!((&pair.seq1, &pair.seq2), (&rev, &fwd));
+                f2r1 += 1;
+            }
+            assert_eq!((pair.qual1.len(), pair.qual2.len()), (pair.seq1.len(), pair.seq2.len()));
+        }
+        assert!(f1r2 > 0 && f2r1 > 0, "orientation split {} / {}", f1r2, f2r1);
+
+        // A fragment exactly one read long: nothing past it was read, so its
+        // reads are trimmed the same way. [8000, 8151) forward ends ...CA;
+        // reverse-complemented it ends ...TG.
+        seq[8_149] = b'C';
+        seq[8_150] = b'A';
+        seq[8_000] = b'C';
+        seq[8_001] = b'A';
+        let gen = trimming_gen_over(seq.clone(), cycles);
+        let pair = gen
+            .generate_read_pair("chr1", 8_000, 151, &HashMap::new(), "p", &mut rng)
+            .unwrap();
+        let mut whole_rc = seq[8_000..8_151].to_vec();
+        reverse_complement(&mut whole_rc);
+        let mut got = [pair.seq1.clone(), pair.seq2.clone()];
+        got.sort();
+        let mut want = [seq[8_000..8_150].to_vec(), whole_rc];
+        want.sort();
+        assert_eq!(got, want);
+
+        let untrimmed = mock_gen_over(seq, cycles, 93, 93);
+        let pair = untrimmed
+            .generate_read_pair("chr1", s as u64, frag_len as u64, &HashMap::new(), "p", &mut rng)
+            .unwrap();
+        assert_eq!((pair.seq1.len(), pair.seq2.len()), (151, 151), "no trimming in an untrimmed library");
+    }
+
+    #[test]
+    fn test_haplotype_pairs_are_sequenced_and_trimmed_the_same_way() {
+        let (s, frag_len) = (1_000usize, 400usize);
+        let e = s + frag_len;
+        let mut hap_seq = scrambled_seq(4_000, 23);
+        hap_seq[s + 149] = b'C'; // the forward read ends ...CA
+        hap_seq[s + 150] = b'A';
+        // The reverse read, [e - 151, e) reverse-complemented, ends ...TGC:
+        // no adapter start ends in GC but the whole 13-mer, whose third-last
+        // base is A.
+        hap_seq[e - 151] = b'G';
+        hap_seq[e - 150] = b'C';
+        hap_seq[e - 149] = b'A';
+        let hap = VariantHaplotype::from_segments(vec![HaplotypeSegment {
+            sequence: hap_seq.clone(),
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: 0,
+                ref_end: 4_000,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        }]);
+        let fwd = hap_seq[s..s + 150].to_vec();
+        let mut rev = hap_seq[e - 151..e].to_vec();
+        reverse_complement(&mut rev);
+
+        let gen = mock_gen_over(vec![b'A'; 1_000], 151, 93, 93).with_adapter_trim(true);
+        let mut rng = StdRng::seed_from_u64(8);
+        for _ in 0..10 {
+            let pair = gen
+                .generate_haplotype_read_pair(&hap, s as u64, frag_len as u64, "h", &mut rng)
+                .unwrap();
+            let mut got = [pair.seq1.clone(), pair.seq2.clone()];
+            got.sort();
+            let mut want = [fwd.clone(), rev.clone()];
+            want.sort();
+            assert_eq!(got, want);
+            assert_eq!((pair.ref_start, pair.ref_end), (s as u64, e as u64));
+        }
+
+        // Indel errors on (at Q93 none happen) fetch bases past each read's
+        // 3' end; a short fragment's reads must still stop at the fragment.
+        let gen = mock_gen_over_with_indels(vec![b'A'; 1_000], 151, 93, 93, 1.0).with_adapter_trim(true);
+        let pair = gen.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).unwrap();
+        let fragment = hap_seq[2_000..2_090].to_vec();
+        assert_eq!((pair.seq1.len(), pair.seq2.len()), (90, 90));
+        assert!(pair.seq1 == fragment || pair.seq2 == fragment, "a short fragment is read whole");
+        assert_eq!((pair.ref_start, pair.ref_end, pair.insert_size), (2_000, 2_090, 90));
+
+        let untrimmed = mock_gen_over(vec![b'A'; 1_000], 151, 93, 93);
+        assert!(untrimmed.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).is_none());
+    }
+
+    #[test]
+    fn test_depth_copies_draw_fragments_shorter_than_a_read_only_in_a_trimmed_library() {
+        let seq = scrambled_seq(20_000, 24);
+        let short = FragmentDist::from_stats(100.0, 0.0);
+        let original = mock_read_pair("o", vec![b'!' + 93; 151], vec![b'!' + 93; 151], 5_000);
+        let mut rng = StdRng::seed_from_u64(9);
+        let pair = trimming_gen_over(seq.clone(), 151)
+            .generate_depth_pair("chr1", &original, &HashMap::new(), "d", &short, &mut rng)
+            .unwrap();
+        assert_eq!((pair.insert_size, pair.seq1.len(), pair.seq2.len()), (100, 100, 100));
+        let pair = mock_gen_over(seq, 151, 93, 93)
+            .generate_depth_pair("chr1", &original, &HashMap::new(), "d", &short, &mut rng)
+            .unwrap();
+        assert_eq!(pair.insert_size, 151, "an untrimmed library clamps the fragment up to one read");
+    }
+
     // ── Sequencing-order generation of the reverse mate (L1, L17) ───────
 
     /// Quality that starts at Q30 and, once it drops to Q10, never recovers.
@@ -1807,7 +2068,7 @@ mod tests {
         let no_alleles = HashMap::new();
         let mut rng = StdRng::seed_from_u64(17);
 
-        let (read_seq, _qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, &mut rng);
+        let (read_seq, _qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, rl, &mut rng);
 
         assert_eq!(read_seq.len(), rl, "a synthetic read came out short");
         let n_count = read_seq.iter().filter(|&&b| b == b'N').count();
@@ -1847,7 +2108,7 @@ mod tests {
         let no_alleles = HashMap::new();
         let mut rng = StdRng::seed_from_u64(3);
 
-        let (read_seq, read_qual) = gen.generate_read("chr1", 500, &no_alleles, 1, false, &mut rng);
+        let (read_seq, read_qual) = gen.generate_read("chr1", 500, &no_alleles, 1, false, rl, &mut rng);
 
         let n_cycles: Vec<usize> = (0..rl).filter(|&i| read_seq[i] == b'N').collect();
         assert_eq!(n_cycles.len(), 20, "expected the reference `N` run inside the read");
@@ -1875,7 +2136,7 @@ mod tests {
         let no_alleles = HashMap::new();
         let mut rng = StdRng::seed_from_u64(17);
 
-        let (read_seq, read_qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, &mut rng);
+        let (read_seq, read_qual) = gen.generate_read("chr1", ref_start, &no_alleles, 1, true, rl, &mut rng);
 
         assert!(read_seq[..overhang].iter().all(|&b| b == b'N'), "expected padding at the 5' end");
         for (c, &q) in read_qual[..overhang].iter().enumerate() {
@@ -1897,7 +2158,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(11);
 
         let (read_seq, read_qual) =
-            gen.generate_read("chr1", ref_start, &no_alleles, 1, false, &mut rng);
+            gen.generate_read("chr1", ref_start, &no_alleles, 1, false, rl, &mut rng);
 
         assert_eq!(read_seq.len(), rl, "a synthetic read came out short");
         assert!(read_seq[rl - short_by..].iter().all(|&b| b == b'N'), "expected a padded 3' tail");
@@ -1938,7 +2199,7 @@ mod tests {
         for s in 0..40u64 {
             let mut rng = StdRng::seed_from_u64(s);
             let (read_seq, read_qual) =
-                gen.generate_read("chr1", ref_start, &no_alleles, 1, false, &mut rng);
+                gen.generate_read("chr1", ref_start, &no_alleles, 1, false, rl, &mut rng);
             assert_eq!(read_seq[n_cycle], b'N', "seed {}: the reference `N` should land at cycle {}", s, n_cycle);
 
             // Only a read that entered the `N` in the Q37 mode can separate
@@ -1978,7 +2239,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(99);
         let seq = b"acgtacgtac".to_vec();
 
-        let (read_seq, _qual) = gen.generate_read_from_seq(&seq, 1, true, &mut rng);
+        let (read_seq, _qual) = gen.generate_read_from_seq(&seq, rl, 1, true, &mut rng);
 
         // Hand-computed revcomp (not via `reverse_complement`, so the test
         // doesn't just check the function against itself): "acgtacgtac"

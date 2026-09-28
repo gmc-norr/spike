@@ -964,7 +964,7 @@ fn tile_haplotype_reads(
     } else {
         300.0
     };
-    let read_length = synth_gen.read_length() as u64;
+    let min_frag = synth_gen.min_fragment_len();
     let breakpoints = haplotype.breakpoints();
 
     let plan = compute_tiling_count(haplotype, coverage, vaf, mean_frag, breakpoint_only);
@@ -1000,7 +1000,7 @@ fn tile_haplotype_reads(
         // Sample fragment length from empirical distribution.
         let frag_len = pool
             .frag_dist
-            .sample_in_range(rng, read_length as i64, crate::stats::MAX_FRAGMENT_LEN) as u64;
+            .sample_in_range(rng, min_frag, crate::stats::MAX_FRAGMENT_LEN) as u64;
 
         if frag_len > hap_len {
             continue;
@@ -1986,6 +1986,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_tiling_draws_fragments_shorter_than_a_read_only_in_a_trimmed_library() {
+        let hap = make_haplotype(vec![HaplotypeSegment {
+            sequence: (0..4_000usize).map(|i| b"ACGT"[i % 4]).collect(),
+            origin: Some(SegmentOrigin {
+                chrom: "chr1".to_string(),
+                ref_start: 1_000,
+                ref_end: 5_000,
+                is_reverse: false,
+            }),
+            hap_offset: 0,
+        }]);
+        let pool = ReadPool { pairs: vec![], frag_dist: FragmentDist::from_stats(100.0, 0.0) };
+        let mut rng = StdRng::seed_from_u64(11);
+
+        let trimmed = mock_synth_gen_at_q(151, 93).with_adapter_trim(true);
+        let pairs = tile_haplotype_reads(&hap, None, &trimmed, &pool, 30.0, 0.5, false, "sv", &mut rng).0;
+        assert!(!pairs.is_empty());
+        assert!(
+            pairs.iter().all(|p| p.insert_size == 100 && p.seq1.len() == 100 && p.seq2.len() == 100),
+            "a trimmed library's 100 bp fragments give 100 bp reads"
+        );
+
+        let untrimmed = mock_synth_gen_at_q(151, 93);
+        let pairs = tile_haplotype_reads(&hap, None, &untrimmed, &pool, 30.0, 0.5, false, "sv", &mut rng).0;
+        assert!(!pairs.is_empty());
+        assert!(pairs.iter().all(|p| p.insert_size == 151), "an untrimmed library clamps up to one read");
+    }
+
+    #[test]
+    fn test_the_donor_fragment_model_starts_at_one_base_in_a_trimmed_library() {
+        let mut config = make_config();
+        assert_eq!(config.min_fragment_len(), 150);
+        config.adapter_trimmed = true;
+        assert_eq!(config.min_fragment_len(), 1);
+    }
+
     // ── Full tandem DUP tiling tests ─────────────────────────────────────
 
     fn tandem_dup_haplotype(dup_start: u64, dup_end: u64, flank: u64) -> VariantHaplotype {
@@ -2161,6 +2198,7 @@ mod tests {
             gvcf_path: None,
             indel_error_rate: 0.0,
             dup_model: "full".to_string(),
+            adapter_trimmed: false,
         }
     }
 
