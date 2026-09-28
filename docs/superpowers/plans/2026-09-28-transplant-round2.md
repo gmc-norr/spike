@@ -183,3 +183,50 @@ any MAPQ, as round 1.
 - Non-tandem insertions of 50 bp and up
 - `--edit-model origin`
 - Callers
+
+## Pilot (2026-09-28): STOPPED by its own check
+
+Run with `d867cd6` (`2d68cb2`, plus a fix: the first try crashed sorting an SV
+and a record with the same span, before anything was spiked), spike master
+`fe15a46` (md5 `0302a168`); raw output in the session scratchpad,
+`transplant2/pilot/`. 10 events per set in SNV, INS20-49 and DUP50-299.
+
+**Pools after every filter** (`pools.tsv`): each group has >= 100 in each
+set. DUP50-299 has 174 / 220 / 107, which confirms the plan's unrun
+prediction. The small groups are within 1% of the plan's counts; the SV
+neighbour filter removes the rest.
+
+**The check stops the run:** B1 passes two of the pilot's metrics.
+
+| Group | Metric | B1 median d | c 25th..75th | normal median d |
+|---|---|---|---|---|
+| SNV | A | -0.217 (fails, as it must) | -0.050..0.035 | 0.007 |
+| INS20-49 | A | 0.000 (**passes**) | -0.042..0.133 | -0.008 |
+| INS20-49 | E | -0.106 (fails, as it must) | -0.030..0.120 | -0.008 |
+| DUP50-299 | J | 0.000 (**passes**) | -0.095..0.000 | 0.000 |
+
+B2 fails DUP J on spread (width 0.417 against 1.5 x 0.244). spike refused 1
+B2 duplication (RF8).
+
+**Why, from the pilot's own rows (seen, not judged):**
+
+- **INS20-49, A.** bwa-mem2 writes few 20-49 bp insertions as an exact I; it
+  clips instead (RF11). Per event the exact carriers are 0 to 17 reads, with
+  0 in 7 of 20 real events. At 10 events, halving a count that small does
+  not move the median. E, which counts any form, sees B1.
+- **DUP50-299, J.** J looks at the edges of one copy. When the copy lies
+  inside a longer tandem array, the reads show the change at the array's
+  edges, or nowhere, so J is about 0 in the real sample too. Array length
+  over copy length, with real J, for the 20 transplanted events:
+  - 1.00-1.05 (the copy is unique DNA): J 0.38-1.12 (7 events);
+  - 1.14-1.46: 0.00-0.24 (6 events);
+  - 1.47-5.46: 0.00-0.03 (7 events).
+- Over the whole pools, copies in unique DNA (array < 1.10 x copy) number 61
+  forward, 65 reverse and 35 shared.
+
+Also seen, not judged: reverse INS20-49 E, fake minus real median +0.165.
+Twice the real HG002 site showed 0 exact carriers where spike's reads show
+6 and 10 (chr10:124378145, chr19:19863596). That is RF15's direction, on
+10 events.
+
+The full run is not started.
