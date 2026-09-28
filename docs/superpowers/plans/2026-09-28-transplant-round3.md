@@ -161,3 +161,72 @@ It can come back with calls trusted around structural variants.
 - Deeper data from the same libraries.
 - The seed-2 replant from the dig. It changed spike's copy choice too, so it is
   not pure read noise.
+
+## Result (2026-09-28): 5 of 16 supported, 0 refuted, 11 inconclusive
+
+Run with `e58738d` on round 2b's reads (no spike run), 16 processes, 3m43s,
+exit 0, last line `round3: done`. Raw output is in the session scratchpad,
+`round3/run/`: `checks.txt`, `evidence3.tsv`, `judge3.tsv` and `verdicts3.tsv`.
+
+**Stop checks: all three passed.**
+1. All 5,284 all-reads values equal round 2b's `evidence.tsv`.
+2. Split-half over binomial noise on 400 real SNV measurements is 1.2165,
+   inside 0.8-1.25 but near the top.
+3. 0 events lie outside their run's `events.bed`.
+
+**Verdicts** (`verdicts3.tsv`), with round 2b's in brackets:
+
+| Group | Forward | Reverse |
+|---|---|---|
+| SNV | supported (supported) | supported (supported) |
+| DEL 1-4 | inconclusive (supported) | inconclusive (supported) |
+| DEL 5-19 | supported (supported) | supported (supported) |
+| DEL 20-49 | inconclusive (supported) | inconclusive (supported) |
+| INS 1-4 | inconclusive (supported) | inconclusive (supported) |
+| INS 5-19 | inconclusive (supported) | supported (supported) |
+| INS 20-49 | inconclusive (inconclusive) | inconclusive (inconclusive) |
+| DUP 50-299 | inconclusive (supported) | inconclusive (**refuted**) |
+
+**No group is refuted.** No normal arm failed any metric. Every inconclusive
+has one of two causes.
+
+1. **A broken control that did not clearly fail.** Under the rule, B1 is
+   *unsure*, not *fail*, on:
+   - E of DEL1-4, DEL20-49, INS1-4 and INS20-49;
+   - A of DEL20-49.
+
+   B1's rho there is 1.89-2.72, with intervals that cross 2.25. Scaled by
+   noise, this rule tells a half dose from a full one less sharply than round
+   2's median rule did.
+2. **spike's own result is unsure.** Its interval crosses 2.25:
+
+   | Group, metric | Direction | rho (interval) |
+   |---|---|---|
+   | INS1-4 A | forward | 1.75 (1.21-2.49) |
+   | INS5-19 A | forward | 1.65 (1.00-2.52) |
+   | INS20-49 A | forward | 2.35 (1.68-3.33) |
+   | INS20-49 A | reverse | 2.26 (1.50-3.31) |
+   | DUP50-299 J | forward | 2.12 (1.30-3.57) |
+   | DUP50-299 J | reverse | 2.81 (1.50-5.06) |
+
+**DUP50-299 reverse is no longer refuted, and not cleared either.** With each
+site's own noise measured, rho is 2.81, and its interval of 1.50-5.06 holds
+2.25. B1 (6.32) and B2 (22.42) fail J clearly. The limit is the 33 shared
+duplications, which the plan named as the risk ("unsure").
+
+Seen, not judged:
+- **R_f** is spike-vs-real mismatch over counting noise at its own sites. It
+  is 0.81-1.71 across every group and direction: DUP 1.29 forward and 1.71
+  reverse, INS20-49 A 1.18 and 1.13. So spike's mismatch is mostly counting
+  noise, with the most left over at reverse duplications.
+- **R_c** is real-vs-real over counting noise at shared sites. It is still below
+  1 for DUP J (0.61), INS20-49 A (0.50) and INS1-4 A (0.69), across a range of
+  0.50-1.47. So the look after round 2b was right that two real samples agree
+  better than counting noise there, even with the noise measured from the reads
+  themselves.
+  - Two independent samples should not do that, and this round does not
+    explain it.
+  - It is what pushes rho up in those groups, more than R_f is.
+- The calibration's 1.22 likely comes from both mates of a short fragment
+  covering the SNV and both being counted. The split keeps mates together, and
+  a binomial on reads does not. This is an inference, not measured.
