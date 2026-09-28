@@ -204,3 +204,23 @@ what was claimed, what the claim actually rested on, and which gate would have c
   the evidence was quoted without its command. **Rule for this repo: a claim about what a file
   holds names the file and the command beside the number, and a zero's cause is measured
   before it is written down.**
+
+## 2026-09-28 -- transplant round 2's counts: HG002's truth table stopped at chr9
+
+- **What almost went into the plan.** HG001 seemed to have 2.6x as many "only
+  me" het SNVs as HG002 (629,901 against 237,930), with indels the same way.
+- **What it rested on.** A table of HG002's truth records that held chr1-chr9
+  only. `bcftools norm` stopped at a REF mismatch at chr9:70701801; its
+  stderr went to `/dev/null`. `set -e` did stop the script, but the call was
+  piped through `tail -5`, which showed only `time`'s lines. The script's last
+  line ("common region: ...") was missing, and that went unnoticed.
+- **How it was caught.** The two directions should be about the same size.
+  They were not, so the cause was looked for before anything was written
+  down. A cross-tab of one chr20 window showed no HG002 SNVs at all. With
+  `-c x` (drop mismatching records, 1 dropped) and a kept log, the counts are
+  397,275 against 413,723.
+- **Which gate would have caught it earlier.** Gate D question 2, and this
+  file's 2026-09-25 entry, whose rule was not followed. **Rule for this repo:
+  never send a measurement tool's stderr to `/dev/null`, and never read a
+  measurement script's run through `tail`. Check its exit status, and check
+  that its last line is there.**
