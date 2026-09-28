@@ -224,3 +224,23 @@ what was claimed, what the claim actually rested on, and which gate would have c
   never send a measurement tool's stderr to `/dev/null`, and never read a
   measurement script's run through `tail`. Check its exit status, and check
   that its last line is there.**
+
+## 2026-09-28 -- a Python mutation run that tested the previous mutant
+
+- **What almost went into a result.** In round 2b's mutation run, `UNIQUE_MAX = 1.10 -> 1.11`
+  "survived". That would have meant the test could not tell the threshold, and the
+  test would have been changed.
+- **What it rested on.** A stale `.pyc` file. Python trusts a cached `.pyc` when the
+  source's size and mtime (in whole seconds) match it. The mutation runner wrote each
+  mutant straight over the last one and ran pytest in about 0.1 s. So a mutant of the
+  same length, written in the same second, ran the previous mutant's code.
+- **How it was caught.** The fixture was checked by hand: its array ratios were 1.00,
+  5.00, 1.10 and 1.09, so 1.11 had to keep the 1.10 case. With `__pycache__` cleared
+  before each run and `python -B`, it went red. All 48 of the day's mutants were
+  rerun that way, and all are red.
+- **Not re-verified:** round 1's Python mutation counts (`evidence.py` 11,
+  `transplant.py` 12 + 4). Their runner is not in the repo.
+- **Which gate would have caught it earlier.** Gate D question 2, turned on the
+  checker itself. **Rule for this repo: a Python mutation runner clears
+  `__pycache__` and runs `python -B` for every mutant. A mutant that survives is
+  checked for a stale cache before the test is blamed.**
