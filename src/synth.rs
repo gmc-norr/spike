@@ -209,6 +209,15 @@ impl QualityProfile {
     /// These are in FASTQ orientation (matching the quality scores) and are ~99%
     /// correct, so they faithfully represent the base the sequencer was reading.
     pub fn from_read_pairs(pairs: &[ReadPair], read_length: usize) -> Self {
+        if crate::extract::one_thread() {
+            // One pass into one set of bins: on one thread, chunks joined
+            // together only copy every value once more.
+            let mut bins = ProfileBins::new(read_length);
+            for pair in pairs {
+                bins.add(pair, read_length);
+            }
+            return Self::from_bins(bins, pairs.len(), read_length);
+        }
         Self::from_read_pairs_in_chunks(pairs, read_length, PROFILE_CHUNK)
     }
 
@@ -225,7 +234,10 @@ impl QualityProfile {
                 }
                 bins
             })
-            .reduce(|| ProfileBins::new(read_length), ProfileBins::joined);
+            // Not `reduce`: its fold starts from an empty identity and copies
+            // the first chunk into it.
+            .reduce_with(ProfileBins::joined)
+            .unwrap_or_else(|| ProfileBins::new(read_length));
         Self::from_bins(bins, pairs.len(), read_length)
     }
 
@@ -968,12 +980,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_quality_profile_is_the_same_learned_in_chunks_on_many_threads() {
-        // The profile may be learned chunk by chunk on several threads; its
-        // bins must be exactly the ones a single pass over every pair fills.
-        let rl = 12;
-        let pairs: Vec<ReadPair> = (0..500u64)
+    /// 500 pairs of length `rl` whose qualities and bases vary by pair and
+    /// cycle, so every kind of bin gets values in many orders.
+    fn varied_pairs(rl: usize) -> Vec<ReadPair> {
+        (0..500u64)
             .map(|i| {
                 let q1: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 7 + c * 13) % 41) as u8).collect();
                 let q2: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 11 + c * 5) % 41) as u8).collect();
@@ -982,7 +992,30 @@ mod tests {
                 p.seq2 = (0..rl).map(|c| b"TGCA"[(i as usize * 3 + c) % 4]).collect();
                 p
             })
-            .collect();
+            .collect()
+    }
+
+    fn on_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(f)
+    }
+
+    #[test]
+    fn test_quality_profile_on_one_thread_is_the_one_learned_in_chunks() {
+        // On one thread the profile is learned in one pass; it must be the
+        // profile learned in chunks of 7 on four threads.
+        let rl = 12;
+        let pairs = varied_pairs(rl);
+        let one = on_threads(1, || QualityProfile::from_read_pairs(&pairs, rl));
+        let split = on_threads(4, || QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
+        assert!(one == split, "the one-thread profile differs from the one learned in chunks");
+    }
+
+    #[test]
+    fn test_quality_profile_is_the_same_learned_in_chunks_on_many_threads() {
+        // The profile may be learned chunk by chunk on several threads; its
+        // bins must be exactly the ones a single pass over every pair fills.
+        let rl = 12;
+        let pairs = varied_pairs(rl);
         // The reference: every pair into one set of bins, in order, with no
         // chunk or join in the way.
         let mut one_pass = ProfileBins::new(rl);
@@ -990,11 +1023,7 @@ mod tests {
             one_pass.add(pair, rl);
         }
         let whole = QualityProfile::from_bins(one_pass, pairs.len(), rl);
-        let split = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(|| QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
+        let split = on_threads(4, || QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
         assert!(whole == split, "a profile learned in chunks of 7 differs from one learned in one pass");
         // Sampling takes a position in a bin, so the exact reads depend on
         // every bin being sorted, not just on what it holds.
