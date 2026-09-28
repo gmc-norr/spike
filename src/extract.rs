@@ -197,18 +197,11 @@ struct Pass1 {
     tally: UnusableQualTally,
 }
 
-/// One chunk's share of [`Pass1`]: its usable records in file order.
-#[derive(Default)]
-struct Pass1Chunk {
-    records: Vec<(bool, String, PartialRead)>,
-    max_abs_tlen: u64,
-    tally: UnusableQualTally,
-}
-
 /// Pass 1 of [`extract_read_pairs_bam`] over `[start, end)`, read in
-/// `n_chunks` chunks on the thread pool (see [`fold_bam_region`]). The chunks'
-/// records are put in the maps in chunk order, which is file order, so a name
-/// seen twice keeps the same record one query would.
+/// `n_chunks` chunks on the thread pool (see [`fold_bam_region`]). Each chunk
+/// fills its own maps; they are merged into the first chunk's in chunk order,
+/// which is file order, so a name seen twice keeps the same record one query
+/// would, and one chunk is not copied.
 fn pass1_bam(
     bam_path: &str,
     chrom: &str,
@@ -222,8 +215,8 @@ fn pass1_bam(
         (chrom, start, end),
         n_chunks,
         &format!("failed to open BAM: {}", bam_path),
-        Pass1Chunk::default,
-        |chunk: &mut Pass1Chunk, record| {
+        Pass1::default,
+        |pass1: &mut Pass1, record| {
             let flags = record.flags();
 
             if !passes_filters_bam(&flags, min_mapq, record) {
@@ -240,30 +233,33 @@ fn pass1_bam(
                 Some(n) => String::from_utf8_lossy(n.as_ref()).into_owned(),
                 None => return Ok(()),
             };
-            let Some(partial) = parse_partial_from_bam_record(record, &flags, &name, &mut chunk.tally)
+            let Some(partial) = parse_partial_from_bam_record(record, &flags, &name, &mut pass1.tally)
             else {
                 return Ok(());
             };
-            chunk.max_abs_tlen = chunk.max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
-            chunk.records.push((flags.is_first_segment(), name, partial));
-            Ok(())
-        },
-    )?;
-
-    let mut pass1 = Pass1::default();
-    for chunk in chunks {
-        pass1.max_abs_tlen = pass1.max_abs_tlen.max(chunk.max_abs_tlen);
-        pass1.tally.missing.extend(chunk.tally.missing);
-        pass1.tally.out_of_range.extend(chunk.tally.out_of_range);
-        for (first, name, partial) in chunk.records {
-            if first {
+            pass1.max_abs_tlen = pass1.max_abs_tlen.max(partial.tlen.unsigned_abs() as u64);
+            if flags.is_first_segment() {
                 pass1.read1.insert(name, partial);
                 pass1.read1_count += 1;
             } else {
                 pass1.read2.insert(name, partial);
                 pass1.read2_count += 1;
             }
-        }
+            Ok(())
+        },
+    )?;
+
+    let mut chunks = chunks.into_iter();
+    let mut pass1 = chunks.next().unwrap_or_default();
+    for chunk in chunks {
+        pass1.max_abs_tlen = pass1.max_abs_tlen.max(chunk.max_abs_tlen);
+        pass1.tally.missing.extend(chunk.tally.missing);
+        pass1.tally.out_of_range.extend(chunk.tally.out_of_range);
+        // A later chunk's record of a name replaces an earlier chunk's.
+        pass1.read1.extend(chunk.read1);
+        pass1.read2.extend(chunk.read2);
+        pass1.read1_count += chunk.read1_count;
+        pass1.read2_count += chunk.read2_count;
     }
     Ok(pass1)
 }
@@ -1366,6 +1362,21 @@ mod tests {
         assert_eq!(one_query.tally.missing.len(), kept.iter().filter(|r| !r.4).count());
         assert!(!one_query.tally.missing.is_empty(), "no unusable-quality record in the fixture");
         assert!(one_query.read1_count > one_query.read1.len(), "no name is seen twice");
+        // A name whose read 1 is seen twice keeps the later one, which file
+        // order puts last (`pos` is 0-based).
+        let mut read1_starts: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
+        for r in kept.iter().filter(|r| r.0 && r.4) {
+            read1_starts.entry(r.1.as_str()).or_default().push(r.2);
+        }
+        let doubled: Vec<(&str, usize)> = read1_starts
+            .iter()
+            .filter(|(_, starts)| starts.len() > 1)
+            .map(|(name, starts)| (*name, *starts.iter().max().unwrap()))
+            .collect();
+        assert!(!doubled.is_empty());
+        for (name, latest) in &doubled {
+            assert_eq!(one_query.read1[*name].pos, *latest as u64 - 1, "{}", name);
+        }
         let chunked = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
