@@ -667,8 +667,10 @@ fn count_alleles_bam_in(
         },
     )?;
 
-    let mut allele_counts: HashMap<u64, [u32; 4]> = HashMap::new();
-    for chunk in per_chunk {
+    // Summed into the first chunk's counts, so one chunk is not copied.
+    let mut chunks = per_chunk.into_iter();
+    let mut allele_counts: HashMap<u64, [u32; 4]> = chunks.next().unwrap_or_default();
+    for chunk in chunks {
         for (pos, counts) in chunk {
             let total = allele_counts.entry(pos).or_insert([0; 4]);
             for (t, c) in total.iter_mut().zip(counts) {
@@ -1091,8 +1093,11 @@ fn collect_snp_alleles_bam_in(
         },
     )?;
 
-    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = HashMap::new();
-    for chunk in per_chunk {
+    // Later chunks' alleles go after the first chunk's, so one chunk is not
+    // copied.
+    let mut chunks = per_chunk.into_iter();
+    let mut read_alleles: HashMap<String, Vec<(u64, u8)>> = chunks.next().unwrap_or_default();
+    for chunk in chunks {
         for (name, alleles) in chunk {
             read_alleles.entry(name).or_default().extend(alleles);
         }
