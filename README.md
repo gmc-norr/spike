@@ -1300,15 +1300,20 @@ The `--indel-error-rate` specifies the fraction of sequencing errors that are in
 
 ### Run time
 
-spike itself runs on one thread. `--threads` sets only the threads `align.sh` and `merge.sh` give the aligner and samtools. Measured on the 35x HG002 BAM with `--seed 1 --allow-resistant`, as wall time and peak memory from `/usr/bin/time`:
+`--threads` (default 4) sets spike's own threads as well as the ones `align.sh` and `merge.sh` give the aligner and samtools. spike splits only the work that draws no random numbers (reading regions of the BAM, the quality profile, `origin`'s look-alike reads and removal chances, writing R1 and R2), so a given `--seed` gives the same files at any thread count. Tiling reads, phasing and drawing which reads to remove stay on one thread.
 
-| Event | `clean` | `--edit-model origin` |
-| --- | --- | --- |
-| `del:chr20:7119236-7120236` (1 kb) | 0.4 s, 188 MB | 0.6 s, 188 MB |
-| `del:chr20:14550000-17550000` (3 Mb) | 19.1 s, 1230 MB | 51.2 s, 1819 MB |
-| `dup:chr20:14550000-17550000` (3 Mb) | 37.5 s, 1483 MB | 67.9 s, 2124 MB |
+Measured on the 35x HG002 BAM with `--seed 1 --allow-resistant`, one run at a time on a 72-core machine: wall time and peak memory from `/usr/bin/time`, the mean of three runs at 1 and 8 threads and one run at 4 and 16.
 
-The four 3 Mb runs ran side by side, one core each, on a 72-core machine.
+| Event | Model | 1 thread | 4 (default) | 8 | 16 | Peak memory at 1 / 4 / 8 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `del:chr20:7119236-7120236` (1 kb) | clean | 0.48 s | 0.48 s | 0.47 s | 0.47 s | 189 / 189 / 189 MB |
+| | origin | 0.63 s | 0.75 s | 0.74 s | 0.82 s | 188 / 222 / 338 MB |
+| `del:chr20:14550000-17550000` (3 Mb) | clean | 18.9 s | 9.1 s | 7.7 s | 7.0 s | 1230 / 1428 / 1714 MB |
+| | origin | 49.2 s | 23.7 s | 18.5 s | 16.3 s | 1819 / 1908 / 2168 MB |
+| `dup:chr20:14550000-17550000` (3 Mb) | clean | 36.8 s | 25.2 s | 23.7 s | 23.0 s | 1483 / 1702 / 1971 MB |
+| | origin | 66.6 s | 39.4 s | 34.4 s | 31.4 s | 2126 / 2215 / 2500 MB |
+
+A small event under `origin` takes slightly longer on more than one thread than on one.
 
 ## Output files
 

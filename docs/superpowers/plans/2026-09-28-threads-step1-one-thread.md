@@ -83,3 +83,40 @@ since one run each cannot tell 5% from noise.
      peak memory; `--threads 8` as fast as the first attempt or faster.
 
 If a gate fails, the branch is not offered for merge; the result says why.
+
+## Result (2026-09-28): SUPPORTED -- all four gates pass
+
+Built as planned (`241d921`..`ee48ace`, binary md5 `0302a168`; master
+`cb756ec` binary `fd4ad3f5`). Raw output: session scratchpad
+`idc/final2.out`, from `idc/chain2.sh` and `idc/timing2.sh`.
+
+1. **Byte-identical: PASS.** All 15 sets match `idc/ref.sig` at `--threads`
+   1, 4 and 16, logs included. The control (`c1`, `o1` at `--seed 2`, one
+   thread) compares as different.
+2. **Tests: PASS.** 627 pass, 1 ignored. Every one-thread or one-chunk path
+   (1-9) runs in a test and was shown red under at least one mutation of
+   it, 25 mutations in all. One census mutation (counting the editable
+   reads as resistant) first passed both census tests, because every second
+   name was editable and the counts split evenly; with every third name
+   editable it fails. That weakness predates this attempt.
+3. **Clippy: PASS.** 12 bin / 14 test, master 12 / 14 (both measured).
+4. **Speed: PASS.** Means of three rounds:
+
+   | Event | Model | master | t1 | t1 vs master (allowed) | t8 | t8 vs master |
+   |---|---|---|---|---|---|---|
+   | del 1 kb | clean | 0.43 s | 0.48 s | +0.05 s (0.20 s) | 0.47 s | +9% |
+   | del 1 kb | origin | 0.57 s | 0.63 s | +0.06 s (0.20 s) | 0.74 s | +29% |
+   | del 3 Mb | clean | 18.21 s | 18.92 s | +3.9% (5%) | 7.68 s | -57.8% |
+   | del 3 Mb | origin | 47.19 s | 49.20 s | +4.3% (5%) | **18.54 s** | **-60.7%** |
+   | dup 3 Mb | clean | 35.44 s | 36.79 s | +3.8% (5%) | 23.69 s | -33.2% |
+   | dup 3 Mb | origin | 63.87 s | 66.57 s | +4.2% (5%) | **34.36 s** | **-46.2%** |
+
+   - Peak memory at one thread now equals master's (1230, 1819, 1483 and
+     2126 MB on the 3 Mb runs; the first attempt added 15-34%).
+   - The prediction was off: `--threads 1` is 3.8-4.3% slower than master,
+     not within 3%. Every one of the twelve 3 Mb pairs has the branch
+     slower. Where the rest goes was not measured; the pool-only commit
+     alone was 0.5 s slower in three runs, inside master's spread then.
+   - Not gated, reported: the 1 kb origin event is 0.16-0.25 s slower on
+     4, 8 and 16 threads than on master, and uses 222-513 MB instead of
+     188 MB.
