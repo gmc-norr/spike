@@ -115,7 +115,9 @@ fn count_resistant_with(
 ) -> Result<Census> {
     let mut census = Census::default();
     for (chrom, start, end) in spans {
-        if crate::extract::is_cram(alignment_path) {
+        let n_chunks = chunks(*start, *end);
+        // A CRAM, or a span read in one chunk, is one sequential query.
+        if crate::extract::is_cram(alignment_path) || n_chunks <= 1 {
             // MAPQ 0: the census counts the reads the pool's MAPQ filter left out.
             crate::validate::for_each_alignment(
                 alignment_path,
@@ -136,7 +138,7 @@ fn count_resistant_with(
         let per_chunk = crate::extract::fold_bam_region(
             alignment_path,
             (chrom, *start, *end),
-            chunks(*start, *end),
+            n_chunks,
             "failed to open BAM for a read scan",
             Census::default,
             |chunk: &mut Census, record| {
@@ -616,7 +618,9 @@ mod tests {
             .collect();
         let bam = write_pairs_bam(&dir, &pairs);
         let spans = [("chrA".to_string(), 100u64, 2_900u64)];
-        let editable: HashSet<String> = names.iter().step_by(2).cloned().collect();
+        // Every third name: with every second the counted reads split evenly,
+        // and counting the editable reads as resistant gave the same total.
+        let editable: HashSet<String> = names.iter().step_by(3).cloned().collect();
         let mut expected = Census::default();
         for &(name, start, _, extra) in &pairs {
             if extra & 0x600 != 0 {
@@ -630,7 +634,7 @@ mod tests {
                 }
             }
         }
-        assert!(expected.resistant > 0 && expected.resistant < expected.counted);
+        assert!(expected.resistant > 0 && 2 * expected.resistant != expected.counted);
         assert_eq!(count_resistant_in(&bam, "", &spans, &editable, 1).unwrap(), expected);
         let chunked = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
