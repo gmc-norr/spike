@@ -186,3 +186,67 @@ fails, and **needs a look** if K2 fails with K1 passing.
   2.6%.
 - Illumina-style names for synthetic reads (needed for the hospital FASTQ, and
   a separate change).
+
+## Result (2026-09-28): needs a look -- K0 and K1 pass, K2 fails one of its two parts
+
+Code `858f13f`, release binary md5 `918e92fc`. Raw output is in the session
+scratchpad, `readlen/`.
+
+**K0: pass.**
+- All tests pass (640).
+- 27 mutants, all red. Two of them, in `main`'s wiring, first survived: the
+  wiring was moved into `synth_generator` and `finish_donor_pool(config)`, and
+  their tests were written first.
+- The trimming verdict on each head scan:
+
+  | BAM | Full-length reads ending in A | Verdict |
+  |---|---|---|
+  | HG001 30x | 16 of 29,421 | trimmed, 151 |
+  | HG002 30x | 16 of 31,295 | trimmed, 151 |
+  | `hg002_novaseq_chr20.bam` | 14,906 of 50,000 | not trimmed, 151 |
+
+**K1: pass,** on round 2b's forward normal runs (3 runs, 752 windows, 315,414
+synthetic reads against 3,528,680 recipient reads):
+
+- a. Length shares, synthetic against recipient:
+
+  | Length | Synthetic | Recipient |
+  |---|---|---|
+  | 151 | 0.6129 | 0.6120 |
+  | 150 | 0.2643 | 0.2640 |
+  | 149 | 0.0679 | 0.0683 |
+  | 148 | 0.0216 | 0.0218 |
+  | under 148 | 0.0333 | 0.0339 |
+
+  The largest gap is 0.08 points.
+- b. 0 of 193,303 synthetic 151-bp reads end in A.
+- c. Pairs with a fragment under 151: 0.0296 synthetic against 0.0296
+  recipient.
+- d. 7,332 of 7,520 (0.975) synthetic reads under 140 bp are exactly their
+  fragment's length.
+
+**K2: the round 2b rerun** ran with the same events and the same 8 refusals,
+in 38m41s, exit 0. round3.py's checks 1-3 passed (calibration 1.2165).
+
+- **b, round 3's rule: pass.** No normal arm fails. INS1-4 goes from
+  inconclusive to supported in both directions; every other group keeps its
+  round 3 verdict.
+- **a, round 2b's rule: fail.** Forward DUP50-299 goes from supported to
+  refuted, on spread. d's width is 0.4231, against at most 1.5 x 0.2333 =
+  0.350; it was 0.3270. Its median d is 0.0221, inside c's middle half.
+  - Also, though not a K2a criterion: reverse INS20-49 goes from inconclusive
+    to refuted.
+  - Reverse DUP50-299 stays refuted, with a narrower width: 0.4821 before,
+    0.4282 now.
+
+Seen, not judged: R_f (round 3's mismatch over counting noise) went up in 17
+of 28 group-direction-metrics and down in 11.
+- It rose in all six of DUP J and INS20-49 A and E:
+  - DUP J +0.24 and +0.54;
+  - INS20-49 A +0.12 and +0.27;
+  - INS20-49 E +0.37 and +0.40.
+- Forward SNV A, whose reads touch no junction, moved +0.36. That gives the
+  scale of a new random draw's effect alone. The new binary also draws
+  different random numbers than the old one.
+- This round cannot tell whether duplications and 20-49 bp insertions got
+  worse, or only drew differently.
