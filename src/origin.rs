@@ -337,11 +337,28 @@ impl OriginSite {
     /// The fragments with a placement inside the footprint, in name order,
     /// each one's records in the order the site holds them.
     ///
-    /// The records are grouped by a stable sort of their indices on the
-    /// thread pool: over a 3 Mb event's 1.29 million records a `BTreeMap`
-    /// took about a second, and a site asks for its fragments six times.
+    /// On more than one thread the records are grouped by a stable sort of
+    /// their indices on the pool: over a 3 Mb event's 1.29 million records a
+    /// `BTreeMap` took about a second, and a site asks for its fragments six
+    /// times. On one thread they go into that one map.
     pub fn fragments(&self) -> Vec<Fragment<'_>> {
+        let in_footprint = |f: &Fragment<'_>| {
+            f.mates
+                .iter()
+                .any(|m| m.placements.iter().any(|p| self.footprint.holds(&p.span)))
+        };
         let records = &self.records;
+        if crate::extract::one_thread() {
+            let mut by_name: BTreeMap<&str, Vec<&OriginRecord>> = BTreeMap::new();
+            for r in records {
+                by_name.entry(r.name.as_str()).or_default().push(r);
+            }
+            return by_name
+                .into_iter()
+                .map(|(name, mates)| Fragment { name, mates })
+                .filter(in_footprint)
+                .collect();
+        }
         let mut order: Vec<usize> = (0..records.len()).collect();
         order.par_sort_by(|&a, &b| records[a].name.cmp(&records[b].name));
         let groups: Vec<&[usize]> = order.chunk_by(|&a, &b| records[a].name == records[b].name).collect();
@@ -351,11 +368,7 @@ impl OriginSite {
                 name: records[group[0]].name.as_str(),
                 mates: group.iter().map(|&i| &records[i]).collect(),
             })
-            .filter(|f| {
-                f.mates
-                    .iter()
-                    .any(|m| m.placements.iter().any(|p| self.footprint.holds(&p.span)))
-            })
+            .filter(in_footprint)
             .collect()
     }
 
@@ -497,14 +510,17 @@ impl OriginSite {
     /// member has one, and members that disagree get none. A fragment the
     /// aligner put only at a look-alike has no call, so its rate is `vaf`.
     ///
-    /// The family calls are one pass in fragment order; each fragment's
-    /// chance is then worked out on the thread pool, kept in that order.
+    /// The family calls are one pass in fragment order; on more than one
+    /// thread each fragment's chance is then worked out on the pool, kept in
+    /// that order.
     pub fn removal_chances(&self, read_copy: &HashMap<String, bool>, vaf: f64) -> Vec<Chance> {
-        let fragments: Vec<Fragment<'_>> = self
-            .fragments()
-            .into_par_iter()
-            .filter(|f| f.removable(&self.footprint))
-            .collect();
+        let one_thread = crate::extract::one_thread();
+        let removable = |f: &Fragment<'_>| f.removable(&self.footprint);
+        let fragments: Vec<Fragment<'_>> = if one_thread {
+            self.fragments().into_iter().filter(removable).collect()
+        } else {
+            self.fragments().into_par_iter().filter(removable).collect()
+        };
         let mut family_copy: BTreeMap<Vec<FivePrime>, Option<bool>> = BTreeMap::new();
         for f in &fragments {
             if let Some(&copy) = read_copy.get(f.name) {
@@ -518,23 +534,25 @@ impl OriginSite {
                     .or_insert(Some(copy));
             }
         }
-        fragments
-            .into_par_iter()
-            .filter_map(|f| {
-                let family = f.family();
-                let copy = if f.at_spot(&self.footprint) {
-                    family_copy.get(&family).copied().flatten()
-                } else {
-                    None
-                };
-                let chance = f.chance(&self.footprint) * copy_rate(copy, vaf);
-                (chance > 0.0).then(|| Chance {
-                    name: f.name.to_string(),
-                    family,
-                    chance,
-                })
+        let chance_of = |f: Fragment<'_>| {
+            let family = f.family();
+            let copy = if f.at_spot(&self.footprint) {
+                family_copy.get(&family).copied().flatten()
+            } else {
+                None
+            };
+            let chance = f.chance(&self.footprint) * copy_rate(copy, vaf);
+            (chance > 0.0).then(|| Chance {
+                name: f.name.to_string(),
+                family,
+                chance,
             })
-            .collect()
+        };
+        if one_thread {
+            fragments.into_iter().filter_map(chance_of).collect()
+        } else {
+            fragments.into_par_iter().filter_map(chance_of).collect()
+        }
     }
 }
 
@@ -726,6 +744,10 @@ impl Source {
         span: &Span,
         n_chunks: usize,
     ) -> Result<Option<Vec<OriginRecord>>> {
+        // One chunk is `scan`'s own query, with no second reader and no copy.
+        if n_chunks <= 1 {
+            return self.scan(span);
+        }
         let Source::Bam(bam) = self else {
             return self.scan(span);
         };
@@ -746,7 +768,8 @@ impl Source {
                 Ok(())
             },
         )?;
-        Ok(Some(chunks.concat()))
+        // Moved, not cloned as `concat` would.
+        Ok(Some(chunks.into_iter().flatten().collect()))
     }
 }
 
@@ -862,8 +885,16 @@ pub fn gather(
     let mut records = spot;
     let mut skipped: Vec<&str> = Vec::new();
     let mut empty: Vec<&Span> = Vec::new();
-    for (region, found) in lookalikes.iter().zip(scan_regions(bam_path, ref_path, &lookalikes)?) {
-        let Some(found) = found else {
+    // Each region's records in region order. On one thread the reader above
+    // reads each region as the loop gets to it; on more, batches on the pool.
+    let found_in_order: Box<dyn Iterator<Item = Result<Option<Vec<OriginRecord>>>> + '_> =
+        if crate::extract::one_thread() {
+            Box::new(lookalikes.iter().map(|region| source.scan(region)))
+        } else {
+            Box::new(scan_regions(bam_path, ref_path, &lookalikes)?.into_iter().map(Ok))
+        };
+    for (region, found) in lookalikes.iter().zip(found_in_order) {
+        let Some(found) = found? else {
             skipped.push(region.chrom.as_str());
             continue;
         };
@@ -1551,6 +1582,32 @@ mod tests {
     }
 
     #[test]
+    fn test_gather_on_one_thread_is_gather_on_four() {
+        // On one thread `gather` reads the look-alike regions with its own
+        // reader, one after another; on four, in batches with a reader each.
+        // Both must collect the same records in the same order, and skip or
+        // flag the same regions.
+        let dir = scratch("gather_threads");
+        let cases = [
+            (twin_bam(&dir), Span::new("chrT", 20_000, 25_000)),
+            (lost_contig_bam(&dir), Span::new("chrT", 20_000, 25_000)),
+            (empty_lookalike_bam(&dir), Span::new("chrT", 20_500, 25_000)),
+        ];
+        for (bam, footprint) in &cases {
+            let one = on_threads(1, || gather(bam, "", footprint, 100, &bases_pool()).unwrap());
+            let four = on_threads(4, || gather(bam, "", footprint, 100, &bases_pool()).unwrap());
+            assert!(!one.lookalikes.is_empty(), "{}: no look-alike to read", bam);
+            assert_eq!(one.lookalikes, four.lookalikes, "{}", bam);
+            assert_eq!(one.records, four.records, "{}", bam);
+        }
+        // The twin's look-alikes add records beyond the spot's own.
+        let spot = Source::open(&cases[0].0, "").unwrap().scan(&cases[0].1).unwrap().unwrap();
+        let one = on_threads(1, || gather(&cases[0].0, "", &cases[0].1, 100, &bases_pool()).unwrap());
+        assert!(one.records.len() > spot.len(), "{} records, {} at the spot", one.records.len(), spot.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_fragments_are_what_one_map_over_the_records_gives() {
         // fragments() may group on the thread pool; it must give what one
         // BTreeMap over the records in order gives: names sorted, each name's
@@ -1572,12 +1629,18 @@ mod tests {
             .collect();
         assert!(expected.iter().any(|(_, mates)| mates.len() > 2), "no name repeats");
         assert!(expected.len() < 6007, "the footprint filter drops nothing");
-        let fragments = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| site.fragments());
-        let got: Grouped = fragments
-            .iter()
-            .map(|f| (f.name, f.mates.iter().map(|&m| m as *const _).collect()))
-            .collect();
-        assert!(got == expected, "fragments() differs from one map over the records");
+        for threads in [1, 4] {
+            let fragments = on_threads(threads, || site.fragments());
+            let got: Grouped = fragments
+                .iter()
+                .map(|f| (f.name, f.mates.iter().map(|&m| m as *const _).collect()))
+                .collect();
+            assert!(got == expected, "fragments() on {} thread(s) differs from one map over the records", threads);
+        }
+    }
+
+    fn on_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(f)
     }
 
     /// `removal_chances` as it was before it ran on the thread pool: the
@@ -1628,12 +1691,10 @@ mod tests {
             (0..5_000u64).filter(|i| i % 3 < 2).map(|i| (format!("q{:05}", i), i % 3 == 0)).collect();
         let one_thread = removal_chances_one_thread(&site, &read_copy, 0.3);
         assert!(one_thread.len() > 1_000 && one_thread.len() < 5_000, "{} chances", one_thread.len());
-        let many = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(|| site.removal_chances(&read_copy, 0.3));
-        assert!(many == one_thread, "removal_chances on 4 threads differs from one pass");
+        for threads in [1, 4] {
+            let got = on_threads(threads, || site.removal_chances(&read_copy, 0.3));
+            assert!(got == one_thread, "removal_chances on {} thread(s) differs from one pass", threads);
+        }
     }
 
     #[test]
@@ -1659,6 +1720,8 @@ mod tests {
             .unwrap()
             .install(|| Source::open(&bam, "").unwrap().scan_in_chunks(&bam, &footprint, 4).unwrap().unwrap());
         assert_eq!(chunked, one_query);
+        // One chunk is the one query itself.
+        assert_eq!(Source::open(&bam, "").unwrap().scan_in_chunks(&bam, &footprint, 1).unwrap().unwrap(), one_query);
         let missing = Span::new("chr15_KI270852v1_alt", 6_900, 7_450);
         assert!(source.scan_in_chunks(&bam, &missing, 5).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
