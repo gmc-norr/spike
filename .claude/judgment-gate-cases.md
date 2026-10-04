@@ -286,3 +286,10 @@ what was claimed, what the claim actually rested on, and which gate would have c
 - **What it rested on.** Every test writes to one captured log, which is never cleared. That test counts its warning there and expects 1. `test_gather_on_one_thread_is_gather_on_four` ran `gather` on the same fixture and the same span, so it logged the same text. Which of the two ran first was up to the scheduler, and the five new tests changed the order.
 - **Measured.** Master 0 runs in 30; the branch 5 in 30, each `left: 2, right: 1`. After giving the second test its own span (20,400), 0 runs in 60.
 - **What would have caught it earlier.** A test that counts lines in the shared capture must match a text no other test can log. Rerunning a red test until it passes is not a fix; run the suite many times and read the failure message.
+
+## 2026-10-04 validate base depth: "50-150 bp deletions move" was a guess about the aligner
+
+- **Claimed.** The plan for review finding 5 said the deletions whose `coverage_ratio` the fix moves are "short structural ones, of about 50-150 bp". The reasoning was that a read crosses a deletion with a `D` whenever the deletion is shorter than the read.
+- **What it rested on.** Read length alone, not how bwa-mem2 writes a gap. On the hospital BAM, the reads crossed a 60 bp deletion with a `D` in 3 of 5 cases, and 68-116 bp deletions in 0 cases. The reads at 100-116 bp were soft-clipped at the junction instead.
+- **What caught it.** V3's locked control: samtools `-J` (which counts deletions) had to differ from the new value at 6 of 8 deletions. It differed at 0, so V3 was inconclusive, not a pass.
+- **What would have caught it earlier.** Gate A step 5. Before a plan says which events a change touches, count how the aligner actually represents those events (here, `D` in the CIGAR against clips), on a few real reads.
