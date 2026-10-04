@@ -146,4 +146,8 @@ Probe `scripts/carried/probe.py` at the commit before this one. Output: `scratch
 
 Both sites already show another allele in this sample's reads.
 
-**The baseline.** spike's pileup SNP rule gives the same answers as the new rule on SNVs, except the one K2a site. So it would have been enough for SNVs, but it cannot see indels.
+**The baseline.** spike's pileup SNP rule, compared site by site on the SNVs, gives the same answer as the new rule on all but 2 of 1,900 sites:
+- the K2a site above (new: refuse, baseline: pass);
+- one K2c site that the new rule leaves unchecked (fewer than 10 reads span bases `s-1` to `e`) and the baseline passes.
+
+So it would have been enough for SNVs, but it cannot see indels.
