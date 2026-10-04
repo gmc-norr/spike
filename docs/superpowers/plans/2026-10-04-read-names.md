@@ -240,3 +240,21 @@ No new log so far has a line containing `read name` (case-insensitive).
 - **Supported:** both checks pass on H and N, with every control firing and the sanity check holding.
 - **Refuted:** new warns, or new's optical count does not rise by 1, while the controls fire.
 - **Inconclusive:** any control or sanity check fails.
+
+### K1b result (2026-10-04): supported
+
+Both inputs ran with no shift. Every spike run exited 0, and so did every Picard run. Log: `scratchpad/names/k1b.log`.
+
+| | H old | H new | N old | N new |
+|---|---|---|---|---|
+| `sim.bam` alone: log lines containing `read name` | 1 (`expected to contain an integer`) | **0** | 1 (`expected to contain an integer`) | **0** |
+| with the copied pair: `READ_PAIR_DUPLICATES` | 0 -> 1 | 0 -> 1 | 0 -> 1 | 0 -> 1 |
+| with the copied pair: `READ_PAIR_OPTICAL_DUPLICATES` | 0 -> **0** | 0 -> **1** | 0 -> **0** | 0 -> **1** |
+
+The copied pairs were:
+- H: `ev0001_hap_000175` (old), and `SPIKE_ev0001_hap_000175:45:227NC2LT1:2:1265:9538:12252` copied as `SPIKE_ev0001_hap_000175x:...` (new);
+- N: `ev0001_hap_000044` (old), and `SPIKE_ev0001_hap_000044:46:HV3C3DSXX:2:2219:27166:13336` (new).
+
+On both inputs the old names make Picard warn, and Picard cannot place an old-named read on the flowcell. With the new names Picard prints no name warning, reads the tile and x/y, and finds the optical duplicate. Every control fired, and the sanity check held.
+
+**K1-Picard: supported.** With K0, K1 (FastQC and the mark) and K2, the read-names change is **supported**.
