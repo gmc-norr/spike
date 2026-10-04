@@ -1329,6 +1329,24 @@ A small event under `origin` takes slightly longer on more than one thread than 
 | `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- then kept, chimeric and suppressed reads, pairs dropped for unusable quality, **Resistant reads** and **Depth fold**), the pairs dropped in total, read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
+| `fastq_removed_reads.txt` | The originals spike removed and does not write back: `replaced_reads.txt` minus the pairs in R1/R2. `fastq.sh` removes exactly these from the raw FASTQ |
+| `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair (see [Full FASTQ](#full-fastq)) |
+
+### Full FASTQ
+
+A pipeline that starts from raw FASTQ, such as nf-core/raredisease, needs the whole sample as a FASTQ pair. `fastq.sh` builds it from the sample's own raw FASTQ:
+
+```bash
+bash output/fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz [THREADS]
+```
+
+- **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
+- **It then adds spike's own reads** (`SPIKE_...`) at the end of each file. Their headers take the raw file's style, copied from its first record: for example ` 1:N:0:ACGTACGT+TGCATGCA` after the name, or `/1`.
+- **A read is matched by name:** its header's first word, without `@` and a trailing `/1` or `/2`. That is the name the aligner gave it in the BAM spike was run on.
+- **It stops, and leaves no output,** when either mate holds fewer of the listed originals than the list names. That means the raw FASTQ is not the full FASTQ of that BAM's run. A sample sequenced on several lanes is concatenated first (`cat` joins gzip files).
+- It needs no `align.sh` or `sim.bam`. It uses `pigz` when installed, and `gzip` otherwise.
+
+The checks are in `docs/superpowers/plans/2026-10-04-full-fastq.md`.
 
 ### Read names
 

@@ -857,6 +857,15 @@ fn main() -> Result<()> {
     // Write merge script.
     write_merge_script(&args.output, &args.bam, &args.reference, args.threads, &args.samtools)?;
 
+    // Write the list and the script that build the full FASTQ from the raw one.
+    let fastq_removed = write_fastq_route(&args.output, &replaced_names, &all_output_pairs, args.threads)?;
+    log::info!(
+        "Originals to remove from the raw FASTQ: {} read pairs (fastq_removed_reads.txt); the {} \
+         spike kept stay as the raw reads they are",
+        fastq_removed,
+        replaced_names.len() - fastq_removed,
+    );
+
     // Write README.md.
     let cmdline = std::env::args().collect::<Vec<_>>().join(" ");
     write_readme(
@@ -880,7 +889,9 @@ fn main() -> Result<()> {
     log::info!("Total read pairs: {}", all_output_pairs.len());
     log::info!("README: {}/README.md", args.output);
     log::info!(
-        "Next steps: bash {}/align.sh  →  bash {}/merge.sh",
+        "Next steps: bash {}/align.sh  →  bash {}/merge.sh; or, for a full FASTQ: bash {}/fastq.sh \
+         RAW_R1 RAW_R2 OUT_R1 OUT_R2",
+        args.output,
         args.output,
         args.output
     );
@@ -1807,6 +1818,177 @@ fn write_replaced_reads(output_dir: &str, names: &BTreeSet<String>) -> Result<()
     Ok(())
 }
 
+/// The originals spike removed and does not write back: `replaced` minus the
+/// names of the pairs in R1/R2 (`written`, spike's own reads and the
+/// originals it kept unchanged). `fastq.sh` drops exactly these from the raw
+/// FASTQ; the originals spike kept stay there as the raw reads they were.
+fn fastq_removed_names(replaced: &BTreeSet<String>, written: &[ReadPair]) -> BTreeSet<String> {
+    let written: std::collections::HashSet<&str> = written.iter().map(|p| p.name.as_str()).collect();
+    replaced.iter().filter(|name| !written.contains(name.as_str())).cloned().collect()
+}
+
+/// Write fastq_removed_reads.txt (`fastq_removed_names`, one name per line,
+/// sorted) and fastq.sh; returns how many names the list holds.
+fn write_fastq_route(
+    output_dir: &str,
+    replaced: &BTreeSet<String>,
+    written: &[ReadPair],
+    threads: usize,
+) -> Result<usize> {
+    use std::io::Write as IoWrite;
+    let removed = fastq_removed_names(replaced, written);
+    let path = Path::new(output_dir).join("fastq_removed_reads.txt");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    for name in &removed {
+        writeln!(f, "{}", name)?;
+    }
+    f.flush()?;
+    write_fastq_script(output_dir, threads)?;
+    Ok(removed.len())
+}
+
+/// Write fastq.sh: the sample's raw FASTQ pair with the originals spike
+/// removed taken out and spike's own reads added (see the README).
+fn write_fastq_script(output_dir: &str, threads: usize) -> Result<()> {
+    let script_file = Path::new(output_dir).join("fastq.sh");
+    // Paths reach awk through the environment only: `awk -v` would turn a
+    // backslash in a path into an escape, and the program text is fixed.
+    let script = r#"#!/bin/bash
+set -euo pipefail
+# Build the full spiked FASTQ pair from the sample's raw FASTQ pair.
+#
+# Pipelines such as raredisease start from raw FASTQ. This keeps every raw read
+# exactly as it is -- bases, qualities, order and header -- except the
+# originals spike removed and did not write back (fastq_removed_reads.txt), and
+# adds spike's own reads (named SPIKE_..., from R1.fq.gz/R2.fq.gz) at the end,
+# with the header style of the raw file's first record.
+#
+# Usage: bash fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 [THREADS]
+#
+# RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, concatenated:
+# `cat` joins gzip files) from the run whose BAM spike was given. A read is
+# matched by name: its header's first word without `@` and a trailing /1 or
+# /2, the name the aligner gave it in the BAM.
+if [ $# -lt 4 ]; then
+    echo "Usage: bash fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 [THREADS]" >&2
+    exit 2
+fi
+RAW=("$1" "$2")
+OUT=("$3" "$4")
+THREADS="${5:-@THREADS@}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+for f in fastq_removed_reads.txt R1.fq.gz R2.fq.gz; do
+    if [ ! -f "$DIR/$f" ]; then
+        echo "Error: $DIR/$f not found. Re-run spike." >&2
+        exit 1
+    fi
+done
+
+if command -v pigz > /dev/null; then
+    ZIP=(pigz -p "$THREADS")
+    UNZIP=(pigz -dc)
+else
+    ZIP=(gzip)
+    UNZIP=(gzip -dc)
+fi
+
+TMP="$(mktemp -d)"
+# A run that does not finish leaves no output behind.
+trap 'rc=$?; rm -rf "$TMP"; if [ "$rc" -ne 0 ]; then rm -f "${OUT[@]}"; fi' EXIT
+
+fail() {
+    echo "Error: $1" >&2
+    echo "RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, concatenated), from the run whose BAM spike was given." >&2
+    exit 1
+}
+
+# The raw records, but the removed originals; and the raw header style.
+KEEP_RAW=$(cat <<'AWK'
+BEGIN {
+    list = ENVIRON["SPIKE_REMOVED"]
+    while ((getline name < list) > 0) removed[name] = 1
+    close(list)
+}
+NR % 4 == 1 {
+    if (NR == 1) {
+        space = index($0, " ")
+        if (space) style = substr($0, space)
+        else if ($0 ~ /\/[12]$/) style = "/" ENVIRON["SPIKE_MATE"]
+        else style = ""
+        printf "%s", style > ENVIRON["SPIKE_STYLE"]
+        close(ENVIRON["SPIKE_STYLE"])
+    }
+    name = $1
+    sub(/^@/, "", name)
+    sub(/\/[12]$/, "", name)
+    skip = (name in removed)
+    dropped += skip
+}
+!skip
+END { print dropped + 0 > ENVIRON["SPIKE_COUNT"] }
+AWK
+)
+
+# spike's own reads (SPIKE_...), in the raw header style.
+ADD_SPIKE=$(cat <<'AWK'
+BEGIN {
+    file = ENVIRON["SPIKE_STYLE"]
+    if ((getline style < file) <= 0) style = ""
+    close(file)
+}
+NR % 4 == 1 {
+    name = substr($0, 2)
+    sub(/\/[12]$/, "", name)
+    mine = (name ~ /^SPIKE_/)
+    if (mine) {
+        added++
+        print "@" name style
+        next
+    }
+}
+mine
+END { print added + 0 > ENVIRON["SPIKE_COUNT"] }
+AWK
+)
+
+WANT=$(wc -l < "$DIR/fastq_removed_reads.txt")
+for MATE in 1 2; do
+    : > "$TMP/style$MATE"
+    echo "R$MATE: ${RAW[$((MATE - 1))]} -> ${OUT[$((MATE - 1))]}"
+    {
+        "${UNZIP[@]}" "${RAW[$((MATE - 1))]}" \
+            | SPIKE_REMOVED="$DIR/fastq_removed_reads.txt" SPIKE_MATE="$MATE" \
+              SPIKE_STYLE="$TMP/style$MATE" SPIKE_COUNT="$TMP/dropped$MATE" awk "$KEEP_RAW"
+        "${UNZIP[@]}" "$DIR/R$MATE.fq.gz" \
+            | SPIKE_STYLE="$TMP/style$MATE" SPIKE_COUNT="$TMP/added$MATE" awk "$ADD_SPIKE"
+    } | "${ZIP[@]}" > "${OUT[$((MATE - 1))]}"
+    DROPPED=$(cat "$TMP/dropped$MATE")
+    if [ "$DROPPED" -ne "$WANT" ]; then
+        fail "R$MATE: found $DROPPED of the $WANT originals listed in $DIR/fastq_removed_reads.txt."
+    fi
+done
+
+ADDED1=$(cat "$TMP/added1")
+ADDED2=$(cat "$TMP/added2")
+if [ "$ADDED1" -ne "$ADDED2" ]; then
+    fail "spike's R1.fq.gz and R2.fq.gz hold $ADDED1 and $ADDED2 of its own reads; they must pair up."
+fi
+echo "Done: removed $WANT original pairs, added $ADDED1 of spike's pairs."
+"#
+    .replace("@THREADS@", &threads.to_string());
+
+    std::fs::write(&script_file, script)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    Ok(())
+}
+
 /// Write merge.sh: merges sim.bam with the original BAM, replacing the reads spike took.
 ///
 /// After running align.sh to produce sim.bam, run merge.sh to produce merged.bam,
@@ -2229,6 +2411,8 @@ fn write_readme(
     writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took out of the BAM, plus any pair dropped for unusable quality; `merge.sh` removes exactly these |")?;
     writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions ± {}bp flank) |", flank)?;
     writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
+    writeln!(md, "| `fastq_removed_reads.txt` | The originals spike removed and does not write back (`replaced_reads.txt` minus the pairs in R1/R2); `fastq.sh` removes exactly these from the raw FASTQ |")?;
+    writeln!(md, "| `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair: every raw read but the removed ones, unchanged, then spike's own reads |")?;
     writeln!(md)?;
     writeln!(md, "## Workflow")?;
     writeln!(md)?;
@@ -2241,6 +2425,10 @@ fn write_readme(
     writeln!(md)?;
     writeln!(md, "# Step 2b: produce a full modified BAM (original + spiked reads)")?;
     writeln!(md, "bash merge.sh  # produces merged.bam")?;
+    writeln!(md)?;
+    writeln!(md, "# Or: a full FASTQ pair for a pipeline that starts from raw FASTQ")?;
+    writeln!(md, "#   (needs no align.sh; RAW_R1/RAW_R2 = the sample's raw FASTQ, every lane)")?;
+    writeln!(md, "bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz")?;
     writeln!(md, "```")?;
 
     let readme_path = Path::new(output_dir).join("README.md");
@@ -2595,6 +2783,149 @@ mod tests {
             "merge.sh must not drop originals by BED region:\n{}",
             script
         );
+    }
+
+    fn names(list: &[&str]) -> BTreeSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_fastq_removed_names_are_the_replaced_originals_spike_does_not_write_back() {
+        let written = vec![donor_pair("b", 100), donor_pair("SPIKE_ev0001_hap_000000", 200)];
+        assert_eq!(fastq_removed_names(&names(&["a", "b", "c"]), &written), names(&["a", "c"]));
+    }
+
+    #[test]
+    fn test_the_fastq_route_writes_the_removed_list_and_the_script() {
+        let dir = scratch_dir("fastq_route");
+        let written = vec![donor_pair("b", 100)];
+        let n = write_fastq_route(dir.to_str().unwrap(), &names(&["a", "b", "c"]), &written, 4).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(std::fs::read_to_string(dir.join("fastq_removed_reads.txt")).unwrap(), "a\nc\n");
+        let script = std::fs::read_to_string(dir.join("fastq.sh")).unwrap();
+        assert!(script.contains("fastq_removed_reads.txt"), "{script}");
+    }
+
+    fn gz_write(path: &std::path::Path, text: &str) {
+        use std::io::Write as _;
+        let mut gz =
+            flate2::write::GzEncoder::new(std::fs::File::create(path).unwrap(), flate2::Compression::fast());
+        gz.write_all(text.as_bytes()).unwrap();
+        gz.finish().unwrap();
+    }
+
+    fn gz_read(path: &std::path::Path) -> String {
+        use std::io::Read as _;
+        let mut text = String::new();
+        flate2::read::MultiGzDecoder::new(std::fs::File::open(path).unwrap())
+            .read_to_string(&mut text)
+            .unwrap();
+        text
+    }
+
+    fn fq(header: &str, seq: &str) -> String {
+        format!("{}\n{}\n+\n{}\n", header, seq, "I".repeat(seq.len()))
+    }
+
+    /// The raw FASTQ header of `name` for `mate`, in bcl-convert style
+    /// (`comment`) or with a `/1` suffix (`slash`).
+    fn raw_header(name: &str, mate: u8, style: &str) -> String {
+        match style {
+            "comment" => format!("@{} {}:N:0:ACGT+TGCA", name, mate),
+            _ => format!("@{}/{}", name, mate),
+        }
+    }
+
+    const RAW_NAMES: [&str; 4] = ["M:1:FC:2:1101:10:10", "M:1:FC:2:1101:20:20", "M:1:FC:2:1101:30:30", "M:1:FC:2:1101:40:40"];
+    const SPIKE_READS: [(&str, &str); 2] =
+        [("SPIKE_ev0001_hap_000000:1:FC:2:1101:5:5", "GGGG"), ("SPIKE_ev0001_hap_000001:1:FC:2:1102:6:6", "TTTT")];
+
+    /// A spike output directory `dir` with fastq.sh, fastq_removed_reads.txt
+    /// (`RAW_NAMES[1]`) and spike's R1/R2: the original `RAW_NAMES[2]` it kept,
+    /// in its BAM form (`CCCC`), then its own two reads. Next to it, a raw pair
+    /// `raw` of the four originals (`AAAA`) with `style` headers.
+    fn fastq_fixture(dir: &std::path::Path, raw: [&std::path::Path; 2], style: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        write_fastq_script(dir.to_str().unwrap(), 2).unwrap();
+        std::fs::write(dir.join("fastq_removed_reads.txt"), format!("{}\n", RAW_NAMES[1])).unwrap();
+        for mate in [1u8, 2] {
+            let raw_text: String = RAW_NAMES.iter().map(|n| fq(&raw_header(n, mate, style), "AAAA")).collect();
+            gz_write(raw[mate as usize - 1], &raw_text);
+            let mut spike_text = fq(&format!("@{}/{}", RAW_NAMES[2], mate), "CCCC");
+            for (name, seq) in SPIKE_READS {
+                spike_text += &fq(&format!("@{}/{}", name, mate), seq);
+            }
+            gz_write(&dir.join(format!("R{}.fq.gz", mate)), &spike_text);
+        }
+    }
+
+    /// What fastq.sh must write for `mate`: the raw records but the removed
+    /// one, unchanged and in order, then spike's own two in the raw style.
+    fn fastq_expected(mate: u8, style: &str) -> String {
+        let mut text: String = [0, 2, 3].iter().map(|&i| fq(&raw_header(RAW_NAMES[i], mate, style), "AAAA")).collect();
+        for (name, seq) in SPIKE_READS {
+            text += &fq(&raw_header(name, mate, style), seq);
+        }
+        text
+    }
+
+    fn run_fastq_script(dir: &std::path::Path, cwd: &std::path::Path, args: [&std::path::Path; 4]) -> std::process::Output {
+        std::process::Command::new("bash").arg(dir.join("fastq.sh")).args(args).current_dir(cwd).output().unwrap()
+    }
+
+    fn fastq_paths(dir: &std::path::Path, stem: &str) -> [std::path::PathBuf; 4] {
+        ["raw_R1.fq.gz", "raw_R2.fq.gz", "out_R1.fq.gz", "out_R2.fq.gz"].map(|f| dir.join(format!("{stem}{f}")))
+    }
+
+    #[test]
+    fn test_fastq_script_drops_the_removed_originals_and_appends_spike_s_reads_in_the_raw_style() {
+        for style in ["comment", "slash"] {
+            let dir = scratch_dir(&format!("fastq_script_{style}"));
+            let [r1, r2, o1, o2] = fastq_paths(&dir, "");
+            fastq_fixture(&dir, [&r1, &r2], style);
+            let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+            assert!(out.status.success(), "{style}: {}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(gz_read(&o1), fastq_expected(1, style), "{style} R1");
+            assert_eq!(gz_read(&o2), fastq_expected(2, style), "{style} R2");
+        }
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_a_raw_fastq_without_every_removed_original() {
+        let dir = scratch_dir("fastq_script_missing");
+        let [r1, r2, o1, o2] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        std::fs::write(dir.join("fastq_removed_reads.txt"), format!("{}\nM:1:FC:2:1101:99:99\n", RAW_NAMES[1])).unwrap();
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("full raw FASTQ"), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(!o1.exists() && !o2.exists(), "a refused run leaves no output");
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_spike_mates_that_do_not_pair_up() {
+        let dir = scratch_dir("fastq_script_unpaired");
+        let [r1, r2, o1, o2] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        gz_write(&dir.join("R2.fq.gz"), &fq(&format!("@{}/2", SPIKE_READS[0].0), SPIKE_READS[0].1));
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+        assert!(!out.status.success());
+        assert!(!o1.exists() && !o2.exists(), "a refused run leaves no output");
+    }
+
+    #[test]
+    fn test_fastq_script_survives_shell_and_awk_metacharacters_in_paths() {
+        let base = scratch_dir("fastq_script_hostile");
+        let _ = std::fs::remove_file(base.join("pwned"));
+        let hostile = format!("{HOSTILE_NAME}\\n");
+        let dir = base.join(&hostile);
+        let [r1, r2, o1, o2] = fastq_paths(&dir, &hostile);
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        let out = run_fastq_script(&dir, &base, [&r1, &r2, &o1, &o2]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(!base.join("pwned").exists(), "fastq.sh ran the backtick in a path as a command");
+        assert_eq!(gz_read(&o1), fastq_expected(1, "comment"));
+        assert_eq!(gz_read(&o2), fastq_expected(2, "comment"));
     }
 
     /// A stub "samtools" for exercising merge.sh's own shell logic (the
