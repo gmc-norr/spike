@@ -213,7 +213,8 @@ struct Args {
     /// Which original reads an event replaces. "clean" (default): only the
     /// donor pool's pairs (both mates at --min-mapq or above, a proper pair,
     /// no duplicate, secondary, supplementary or QC-fail flag) inside the
-    /// event's footprint. "origin" (experimental): every primary read at the
+    /// event's footprint, and the duplicates of those it removes. "origin"
+    /// (experimental): every primary read at the
     /// event and at its look-alikes, each removed by its chance of having
     /// come from the edited copy, read from its MAPQ and its XA tag. It
     /// needs the aligner's XA tags (bwa-mem and bwa-mem2 write them).

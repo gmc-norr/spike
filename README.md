@@ -77,7 +77,7 @@ needs:
   `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
   and stub aligner and put them on the script's PATH, so a *real* `samtools`,
   aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `611 passed; 2 failed; 1 ignored`, the
+  with all of them off PATH the suite is `667 passed; 2 failed; 1 ignored`, the
   two failures being the bcftools tests above.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
@@ -126,7 +126,7 @@ spike \
 
 # Output: output/R1.fq.gz, output/R2.fq.gz, output/truth.vcf, output/align.sh,
 #         output/events.bed, output/replaced_reads.txt, output/merge.sh,
-#         output/README.md
+#         output/fastq_removed_reads.txt, output/fastq.sh, output/README.md
 ```
 
 ## Usage examples
@@ -444,7 +444,7 @@ bash output/merge.sh /moved/original.bam ref.fa 8 # Override paths/threads (stil
 
 The originals to replace are named, not located. spike writes every read name it extracted to `replaced_reads.txt`, and `merge.sh` drops exactly those records (`samtools view -N`, so samtools >= 1.13 is required) before merging `sim.bam` in. Removing by name rather than by event region matters in both directions:
 
-- Records inside the event regions that spike never extracted — PCR duplicates, non-proper pairs, reads below `--min-mapq`, reads whose mate was filtered — are **kept**. Removing by region deleted them without putting anything back, which cost real depth.
+- Records inside the event regions that spike never extracted — duplicates of the pairs it kept, non-proper pairs, reads below `--min-mapq`, reads whose mate was filtered — are **kept**. Removing by region deleted them without putting anything back, which cost real depth.
 - **Duplicates of a pair spike removed are removed with it.** A duplicate is another read of the same molecule, so it goes where that molecule goes. spike never takes a duplicate as donor material. After the run, it reads the event windows again (± 1,500 bp) and lists every duplicate pair that shares both 5' ends with a pair it removed. Left behind, they would do no harm in `merged.bam`, where they keep their flag. But a pipeline that marks duplicates again from scratch, as one starting from the [full FASTQ](#full-fastq) does, finds nothing for them to copy and counts one per family as a read of the old allele. Measured before this fix: 3.4% of the reads at spiked hom SNVs, against 0.17% at real ones, and 2-3 reads inside hom deletions (`docs/superpowers/plans/2026-10-04-duplicates.md`). Duplicates of a pair spike kept stay, with their flag.
 - Mates that lie outside the event regions but whose pair spike did extract are **removed**, because `sim.bam` carries their replacement. Removing by region left them in, so they appeared twice.
 - Pairs spike extracted but could not use — a mate with no stored base qualities, see [Missing or unusable donor base qualities](#missing-or-unusable-donor-base-qualities) — are **removed without replacement**. That costs depth; left in, they would dilute the realised VAF of every event they overlap.
@@ -455,7 +455,7 @@ Records spike extracted and then suppressed (the deleted copy of a heterozygous 
 
 Under `--edit-model origin`, `replaced_reads.txt` also names every read `origin` removed, so `merge.sh` can remove records `clean` keeps: reads below `--min-mapq`, and reads at a look-alike elsewhere in the genome. Duplicates of a removed pair go under either model. See [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental).
 
-The records kept because spike never extracted them (PCR duplicates, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
+The records kept because spike never extracted them (duplicates of the pairs it kept, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
 
 `align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
 
@@ -494,7 +494,7 @@ That is the review's `lowmap` probe, half of whose pairs are at MAPQ 0: a deleti
 It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, and spike stops if none of the first 100,000 records of the BAM carries one. A spot whose MAPQ 0 reads lack `XA` is normal: under bwa-mem's `-h 5` rule their hits number more than 5, so each gets a chance of 1/6. At `chr20:7117236-7121236` in the 35x HG002 BAM, 822 reads are MAPQ 0 and 1 carries `XA`, yet the file's first 100,000 records hold 15,255 with it.
 
 **What changes in the output:**
-- **`replaced_reads.txt` also names every read `origin` removed**, so `merge.sh` takes them out of the whole BAM, including reads `clean` never touches. Measured on `del:chr20:14530000-14531000` over a 100 kb slice of the 35x HG002 BAM (chr20:14,500,000-14,600,000): `origin` lists 41 names more than `clean`, 82 records. 76 of them are duplicates of a removed pair; 6 are not proper pairs, 3 of those below MAPQ 20.
+- **`replaced_reads.txt` also names every read `origin` removed**, so `merge.sh` takes them out of the whole BAM, including reads `clean` never touches. Measured on `del:chr20:14530000-14531000` over a 100 kb slice of the 35x HG002 BAM (chr20:14,500,000-14,600,000), again on 2026-10-04 after `clean` began removing duplicates too: `origin` lists 2,748 names and `clean` 2,736. 25 are `origin`'s alone: 24 duplicates, and 1 pair that is not proper and is below MAPQ 20. 13 are `clean`'s alone, all duplicates. Both models remove the duplicates of the pairs they remove, and they remove different pairs: each of `clean`'s 13 goes with a pair only `clean` removed, and 23 of `origin`'s 24 with a pair only `origin` removed. On the same slice the binary from just before that change listed 48 names more under `origin` (96 records), 47 of them duplicates. The figure here before, from master 55b95c4, was 41 names and 82 records, 76 of them duplicates.
 - **The new reads are scaled by the origin depth.** Around each point, that is the summed chance of every read `origin` may remove, turned into fragment depth. The log prints it beside the pool's depth, e.g. `origin depth at chr20:7119235: 33.7x (the donor pool's there: 8.5x)`. With no origin depth at any breakpoint, spike stops (see [What spike refuses](#what-spike-refuses)).
 - **The census means something else.** `SIM_RESIST` counts a read as editable when it is in the donor pool or in a pair `origin` may remove, and `SIM_DEPTH_FOLD` compares origin depths. Their thresholds (warn above 0.10, refuse above 0.5, warn above a 1.5-fold) were set for `clean` and are not yet checked for `origin`. The warnings, the refusal, the run README and a `##spike_edit_model=origin` header line in `truth.vcf` all say so. `spike validate` does not read that line, so its `resistant` and `depth_fold` rows use the same two thresholds under either model.
 
@@ -1307,14 +1307,16 @@ Measured on the 35x HG002 BAM with `--seed 1 --allow-resistant`, one run at a ti
 
 | Event | Model | 1 thread | 4 (default) | 8 | 16 | Peak memory at 1 / 4 / 8 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `del:chr20:7119236-7120236` (1 kb) | clean | 0.48 s | 0.48 s | 0.47 s | 0.47 s | 189 / 189 / 189 MB |
+| `del:chr20:7119236-7120236` (1 kb) | clean | 0.55 s | 0.57 s | 0.56 s | 0.56 s | 194 / 194 / 194 MB |
 | | origin | 0.63 s | 0.75 s | 0.74 s | 0.82 s | 188 / 222 / 338 MB |
-| `del:chr20:14550000-17550000` (3 Mb) | clean | 18.9 s | 9.1 s | 7.7 s | 7.0 s | 1230 / 1428 / 1714 MB |
+| `del:chr20:14550000-17550000` (3 Mb) | clean | 24.0 s | 12.5 s | 10.7 s | 9.9 s | 1231 / 1380 / 1711 MB |
 | | origin | 49.2 s | 23.7 s | 18.5 s | 16.3 s | 1819 / 1908 / 2168 MB |
-| `dup:chr20:14550000-17550000` (3 Mb) | clean | 36.8 s | 25.2 s | 23.7 s | 23.0 s | 1483 / 1702 / 1971 MB |
+| `dup:chr20:14550000-17550000` (3 Mb) | clean | 44.3 s | 29.8 s | 28.2 s | 26.5 s | 1493 / 1787 / 2028 MB |
 | | origin | 66.6 s | 39.4 s | 34.4 s | 31.4 s | 2126 / 2215 / 2500 MB |
 
 A small event under `origin` takes slightly longer on more than one thread than on one.
+
+The `clean` rows were measured again on 2026-10-04, after `clean` began reading each event's windows a second time to find the duplicates of the pairs it removes. The binary from just before that change, run alternately with the new one, took 19.2 s and 38.5 s at one thread on the 3 Mb deletion and duplication, and 10.1 s and 26.8 s at four. So the second read costs 5-6 s at one thread on a 3 Mb event, 2.5-3 s at four, and under 0.1 s on the 1 kb one. Peak memory moved by under 5% either way. The `origin` rows are from the earlier measurement; `origin` does not take this step.
 
 ## Output files
 
@@ -1471,6 +1473,9 @@ Options:
       --align
           Automatically run alignment after FASTQ generation
 
+      --raw-fastq <RAW_R1> <RAW_R2>
+          The sample's raw FASTQ pair (every lane concatenated), from the run whose BAM --bam is. At the end spike runs fastq.sh on it, writing the full spiked pair to <output>/spiked_R1.fastq.gz and spiked_R2.fastq.gz
+
       --indel-error-rate <INDEL_ERROR_RATE>
           Indel error rate per base in synthetic reads (fraction of total error that is indel rather than substitution). Default 0.0 means substitution-only. Typical Illumina: 0.0 to 0.05
           
@@ -1495,7 +1500,7 @@ Options:
           [default: full]
 
       --edit-model <EDIT_MODEL>
-          Which original reads an event replaces. "clean" (default): only the donor pool's pairs (both mates at --min-mapq or above, a proper pair, no duplicate, secondary, supplementary or QC-fail flag) inside the event's footprint. "origin" (experimental): every primary read at the event and at its look-alikes, each removed by its chance of having come from the edited copy, read from its MAPQ and its XA tag. It needs the aligner's XA tags (bwa-mem and bwa-mem2 write them)
+          Which original reads an event replaces. "clean" (default): only the donor pool's pairs (both mates at --min-mapq or above, a proper pair, no duplicate, secondary, supplementary or QC-fail flag) inside the event's footprint, and the duplicates of those it removes. "origin" (experimental): every primary read at the event and at its look-alikes, each removed by its chance of having come from the edited copy, read from its MAPQ and its XA tag. It needs the aligner's XA tags (bwa-mem and bwa-mem2 write them)
           
           [default: clean]
 
@@ -1564,7 +1569,8 @@ main.rs          CLI, event parsing, orchestration
 types.rs         Core types: SimEvent, ReadPair, ReadPool, SimConfig
 haplotype.rs     Variant haplotype construction (segment-based)
 simulate.rs      Read suppression + synthetic read tiling
-origin.rs        --edit-model origin: each read's chance of coming from the edited copy, look-alikes, origin depth
+origin.rs        --edit-model origin: each read's chance of coming from the edited copy, look-alikes, origin depth;
+                 under either model, the duplicates of a removed pair
 census.rs        Reads spike cannot edit (SIM_RESIST) and the warn/refuse thresholds and messages
 synth.rs         Quality-profiled synthetic read generation
 extract.rs       BAM/CRAM read pair extraction
@@ -1575,7 +1581,8 @@ vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND/SNP/indel)
 truth.rs         Truth VCF output
 fastq.rs         Gzipped paired FASTQ writer
 reference.rs     Indexed FASTA reading + in-memory sequence store
-bam_stats.rs     BAM/CRAM read length, adapter trimming and single-end check
+bam_stats.rs     BAM/CRAM read length, adapter trimming, read-name shape and single-end check
+read_name.rs     spike's read names: SPIKE_ in the shape of the input's names
 validate.rs      `spike validate` subcommand: automated spike-in quality checks
 ```
 
