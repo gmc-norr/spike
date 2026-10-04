@@ -148,3 +148,66 @@ All paths are arguments, so no local path goes into the repo.
 - raredisease, fastp and DeepVariant themselves;
 - a real full FASTQ, which also holds the cross-chromosome pairs above;
 - `--edit-model origin`.
+
+## Fix: a duplicate shares its kept copy's fate (plan, 2026-10-04)
+
+The user picked option 1: fix the default (`--edit-model clean`), then re-run the check above as the after-test.
+
+**Gate A.**
+1. **Principle.** A duplicate is another read of the same molecule, so it goes wherever that molecule goes.
+2. **What would kill it.** The re-run still shows the leak (K1 below).
+3. **Tried before?** Nothing here refuted it. `--edit-model origin` already removes duplicates of a removed pair. README "Editing hard spots" measured 76 such duplicates among the 82 records origin adds to the list.
+4. **Simplest version.** Once the run's removal list is final, read the event windows again, group the reads into duplicate families, and add the duplicates of every removed kept pair to the list. Pools, tiling, written reads and the random draws are untouched.
+5. **What must be true of the inputs.**
+   - The BAM is duplicate-marked. The hospital BAM is (Picard 3.3.0 `@PG`). An unmarked BAM has no flagged duplicate, so nothing is added.
+   - A family key of the two mates' unclipped 5' ends with their strands (`origin`'s `five_prime` and `Fragment::family`) matches Picard's sets. Not verified; K1 and K2 measure it.
+   - A removed pair's mates lie within its extraction window ± `MAX_FRAGMENT_LEN` (1,500 bp). Not verified; the log counts removed pairs whose two mates were not both seen.
+
+**Design (locked).**
+- **`origin::duplicates_of(records, removed)`.**
+  - Group primary, non-QC-fail records by name. A fragment counts only when both its mates are there.
+  - A family is removed when one of its fragments with no duplicate flag is in `removed`.
+  - Return the names of the fragments in removed families whose mates both carry the duplicate flag.
+- **`origin::removed_duplicates(bam, reference, spans, removed)`.** Read every span with origin's BAM/CRAM reader and keep only duplicate records and records named in `removed`. Return `duplicates_of` of them, plus how many names in `removed` had fewer than two mates in the spans.
+- **`main`, clean mode only.**
+  - `removed` = `fastq_removed_names(replaced_names, all_output_pairs)`, the originals removed and not written back.
+  - The spans are each event's extraction windows (`extraction_bounds`; a fusion has two), widened by `MAX_FRAGMENT_LEN` on both sides.
+  - The names returned are added to `replaced_names` before `replaced_reads.txt` and `fastq_removed_reads.txt` are written. So `merge.sh` and `fastq.sh` both drop them.
+  - One log line gives the count, and the incomplete count.
+- **`--edit-model origin` is not changed.**
+- **Docs:** README (output rows, the paragraph on `replaced_reads.txt`, the origin paragraph that names this difference), the run README rows, and the `merge.sh` comment.
+
+**Tests, written first and seen red:**
+- a duplicate of a removed pair is returned;
+- a duplicate of a kept pair is not;
+- a duplicate one base off, or on the other strand, is not;
+- a removed pair seen through one mate matches nothing, and is counted;
+- `removed_duplicates` on a fixture BAM;
+- the scan spans are the extraction windows widened by 1,500 bp (a near-0 window is clipped; a fusion gives two).
+
+**Mutation checks (each must turn a test red):**
+1. strand left out of the key;
+2. any family returned, removed or not;
+3. a fragment with one mate used;
+4. the duplicate flag not required on the returned fragment;
+5. no widening of the scan spans.
+
+**Checks (locked before running).** Run `scripts/duplicates/run.sh` again with the new binary into a fresh directory. The same seeds give the same 43 events and the same stand-in.
+- **K1: the leak is gone.**
+  - **Pass:** D says "does not matter".
+  - **Pass:** at most 3 source-duplicate reads remain among the old-allele reads at the 20 hom SNVs plus the reads wholly inside the 3 hom deletions. Before the fix: 23 + 8 = 31. The allowance of 3 (about 10%) is for families whose kept pair Picard and the key above disagree on.
+  - **Pass:** C1, C2 and C3 pass again.
+- **K2: only duplicates are added, and the right ones** (old run `scratchpad/dups/run/spike/out` against the new):
+  - `R1.fq.gz` and `R2.fq.gz` decompress byte-identical. `truth.vcf` and `sim.bam`'s records (`samtools view`) are identical too.
+  - `replaced_reads.txt` new = old plus added names, with at least 1 added, and `fastq_removed_reads.txt` new = old plus the same names.
+  - An independent Python checker reads the source BAM over the same spans with its own key: the sorted (chrom, unclipped 5' end, strand) of both mates.
+    - **Pass:** 100% of added names are duplicate pairs whose family's kept pair is in the old `fastq_removed_reads.txt`.
+    - **Pass:** at least 99% of such duplicate pairs (both mates inside the spans) are added.
+- **K3: origin is unchanged.** Old and new binaries, `--edit-model origin`, the same 43 events and seed. `replaced_reads.txt`, `fastq_removed_reads.txt`, `R1.fq.gz`, `R2.fq.gz` (decompressed) and `truth.vcf` must be byte-identical.
+
+**Outcomes.**
+- **Supported:** K1, K2 and K3 pass. Merge on the user's word.
+- **K1 fails while K2 passes:** the leak has another source; look before anything else.
+- **K2 or K3 fails:** the code is wrong; fix it with a test first.
+
+**Reported:** how many duplicate pairs were added; the het alt share; the duplicate share near the sites; Picard's `PERCENT_DUPLICATION`; spike's wall time, old against new.
