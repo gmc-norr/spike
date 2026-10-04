@@ -82,3 +82,42 @@ Reads, their order and the random stream are unchanged: the count reads position
 **R (reported).** From K1-K3: the share of runs with `SIM_ALT_FRAGS=0` per AF and event type.
 
 No speed check. The count is one comparison per pair.
+
+## Result (2026-10-04): supported
+
+Code `c938eb8`. Binaries: new release `d260eda7`, new debug `07b0d6fe`; master `6c39e54` release `8fc328b8`. Scratch: `scratchpad/lap/` (`k/k.tsv`, `k.log`, `mutate.py`, `probe/`).
+
+**Tests.** 715 pass (10 new), 0 fail, 1 ignored. clippy gives 16 lines, the same as master.
+- **Mutation.** The runner first checks that the unmutated suite (715) is green. It then catches **5 of 5** mutants:
+  - 1 (flank base dropped) reddens the SNV and pure-deletion tests;
+  - 2 (rule on reads) reddens the straddling-fragment test;
+  - 3 (every boundary a junction) reddens the tandem-DUP test;
+  - 4 (every pair counted) reddens the counting test;
+  - 5 (prefix not trimmed) reddens the small-variant evidence test.
+- **Two code changes the plan did not name.**
+  - `generate_haplotype_read_pair` now returns the pair and its `PairSpans` together. Its 14 test callers take the pair alone. A separate wrapper would have been dead code outside the tests.
+  - `test_truth_records_the_resistant_fraction` now expects `SIM_REQ_VAF=...;SIM_ALT_FRAGS=.;SIM_RESIST=...`. The new field sits between them, as the plan places it.
+
+**The locator could go red.** Its first smoke run, on 2 sites, placed 0 pairs: spike's mates are named `.../1` and `.../2`, and the locator had not stripped that. The fix was made before the full run.
+
+**K1: PASS.** 100 of 100 runs equal, largest difference 0, every pair placed. All 44 runs with `SIM_ALT_FRAGS=0` have 0 from the locator and 0 ALT 21-mers, and spike warned in exactly those 44.
+
+**K2: PASS.** 40 of 40 equal. **K3: PASS.** 40 of 40 equal. No run was refused under either binary.
+
+**P: PASS.** The reviewer's `low_fraction` gives `SIM_VAF=0.014;SIM_REQ_VAF=0.001;SIM_ALT_FRAGS=0`, and logs the warning. The probe's own ALT read count is 0. Every other probe result is unchanged, apart from temp paths.
+
+**B: PASS.** In 100 of 100 K1 runs, the reads, `replaced_reads.txt`, `fastq_removed_reads.txt` and the stripped `truth.vcf` are identical to master's. The same holds in all 180 runs, the deletions included.
+
+**R (reported).** Events with `SIM_ALT_FRAGS=0`, out of 20 at each AF:
+
+| event | 0.001 | 0.01 | 0.02 | 0.05 | 0.1 |
+|---|---|---|---|---|---|
+| SNV | 16 | 14 | 12 | 2 | 0 |
+| 4 bp deletion | | | 12 | 3 | |
+| 1 kb deletion | | | 6 | 1 | |
+
+The table in the plan's header counted reads holding the ALT 21-mer (10 bases each side), and gave 15 and 13 at 0.01 and 0.02. This rule asks for one base each side, so it counts a few more. At chr20:4335028, AF 0.01, one pair shows the SNV under this rule, but has no full 21-mer.
+
+**An interruption.** A second session, left running after a disconnect, ran part of K. That run was discarded, and all 180 runs above are one fresh run in this session.
+
+**What this means.** `truth.vcf` now says what the reads show, beside what spike aimed for. Below about 5% at 30x, most small events have no read that shows them, and they are now marked `SIM_ALT_FRAGS=0` with a warning instead of looking planted. The reads themselves do not change.

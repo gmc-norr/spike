@@ -1413,8 +1413,9 @@ The truth VCF contains one record per simulated event with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
-- `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split
+- `SIM_VAF` in the INFO field with the allele fraction that was **simulated** -- the fraction of the depth the fragments spike planted actually make up. On an **additive** event (a fusion, or a DUP under `--dup-model junction`) that is the *junction* evidence: the fraction the fragments across the breakpoint make up. A junction DUP also plants interior depth copies, and those are scaled by `SIM_REQ_VAF`, not by the capped fraction, so a capped one's interior dosage is above its `SIM_VAF`: at `af=0.99` the junction gets the 0.950 recorded while every interior copy is drawn at the uncapped 0.99. The default `--dup-model full` tiles the whole tandem haplotype and has no such split. It is set by how many fragments spike plants, not counted from where they land; `SIM_ALT_FRAGS` says how many show the event
 - `SIM_REQ_VAF` with the fraction that was **requested** (`af=`, or `--allele-fraction`). The two differ exactly where a mechanism moved the count off the request: the additive 0.95 cap puts `SIM_VAF` below `SIM_REQ_VAF`, the two-fragment floor puts it above. Rounding the count to a whole fragment does not: `SIM_VAF` is the request unless one of those two applied
+- `SIM_ALT_FRAGS` with how many of the read pairs spike planted **show** the event. For a small variant, that is pairs with a read over its changed bases and one base on each side. For a structural event, it is pairs whose fragment spans one of its junctions, as a split read or a discordant pair. A junction DUP's interior depth copies are not counted. At a low fraction it is often 0, and spike warns: the event is listed, but no read shows it, as can happen to a real variant that rare. spike does not draw again until one does, because that would make low fractions look easier to find than they are. See [Low fractions: the reads may not show the event](#low-fractions-the-reads-may-not-show-the-event)
 - `SIM_RESIST` with the share of the reads over the event that spike **could not edit**: primary, mapped, non-duplicate, non-QC-fail reads at any MAPQ whose pair is not in the event's donor pool (below `--min-mapq`, not a proper pair, a mate unmapped or failing a filter). They stay in `merged.bam` as they were, so the event realised is weaker than requested by about this share. The reads counted are those over the span a DEL, DUP or INV changes, the two bases around an insertion point, a small variant's REF, and the two bases around each fusion cut. `spike validate` reports it as the advisory `resistant` row. Above 0.5 spike refuses the event unless given `--allow-resistant` (RF8), so in a truth VCF written since then a value above 0.5 means that flag was used. Under `--edit-model origin` a read in a pair `origin` may remove counts as editable too. See [Reads spike cannot edit](#reads-spike-cannot-edit)
 - `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. Under `--edit-model origin` both depths are origin depths. `spike validate` reports it as the advisory `depth_fold` row. See [One depth for the whole event](#one-depth-for-the-whole-event)
 - Under `--edit-model origin` only, a header line `##spike_edit_model=origin (experimental).` followed by a note that the `SIM_RESIST` and `SIM_DEPTH_FOLD` thresholds were set for `clean` and are not yet checked for `origin`
@@ -2010,10 +2011,13 @@ the fraction the two fragments make up, `SIM_REQ_VAF` the request.
 
 ```
 WARN spike::simulate] coverage 3.8x at VAF 0.030 asks for 1 tiled fragment(s); spike
-emits the 2 it needs to plant the event at all, so the realized allele fraction is
-above the 0.030 requested; the truth VCF records the realized fraction as SIM_VAF and
-the 0.030 requested as SIM_REQ_VAF
+emits 2 anyway, so the realized allele fraction is above the 0.030 requested; the truth
+VCF records the realized fraction as SIM_VAF and the 0.030 requested as SIM_REQ_VAF.
+Those fragments land anywhere on the haplotype and may not show the event;
+SIM_ALT_FRAGS says how many do
 ```
+
+The two fragments are placed like any others, across a haplotype of about 4 kb, so they often miss a small event altogether. `SIM_ALT_FRAGS` then reads 0, and spike warns (next section).
 
 That run's truth record reads `SIM_VAF=0.058;SIM_REQ_VAF=0.030`: two fragments
 of the library's mean 400 bp, over 3.8x coverage across the haplotype's 3,600
@@ -2021,6 +2025,35 @@ usable start positions, are 5.8% of the depth there, not the 3.0% asked for.
 Feeding that record back through `--vcf` asks for 0.058, gets the same two fragments and
 writes `SIM_VAF=0.058` again, with no warning -- the request a thin region can
 actually be spiked at.
+
+### Low fractions: the reads may not show the event
+
+`SIM_VAF` comes from how many fragments spike plants. Where they land is a draw, so at a low fraction they can all miss the event. `SIM_ALT_FRAGS` counts the ones that show it. When it is 0, spike warns:
+
+```
+WARN spike::simulate] event chr1:5000-5001: none of the 2 read pair(s) spike planted
+shows it (requested AF 0.001), so no caller can find it in these reads. truth.vcf
+still lists it, with SIM_ALT_FRAGS=0; a real variant this rare can go unseen at this
+depth too.
+```
+
+A real variant that rare often has no reads either, so spike does not draw again until one shows it. Redrawing would make low fractions look easier to find than they are. When you score a caller, decide what to do with `SIM_ALT_FRAGS=0` events: count them as misses, or leave them out. A caller cannot be expected to find what no read shows.
+
+Measured on the hospital's HG002 30x BAM (`scripts/low_af/locate.py`, 2026-10-04): 20 random chr20 sites, clean mode, `--seed 1`.
+
+| Event | AF | Pairs planted (mean) | Pairs showing it (mean) | Events no pair shows |
+|---|---|---|---|---|
+| SNV | 0.001 | 2.0 | 0.20 | 16 of 20 |
+| SNV | 0.01 | 4.3 | 0.30 | 14 of 20 |
+| SNV | 0.02 | 8.8 | 0.50 | 12 of 20 |
+| SNV | 0.05 | 22.1 | 2.25 | 2 of 20 |
+| SNV | 0.1 | 44.0 | 4.15 | 0 of 20 |
+| 4 bp deletion | 0.02 | 8.8 | 0.45 | 12 of 20 |
+| 4 bp deletion | 0.05 | 22.1 | 1.35 | 3 of 20 |
+| 1 kb deletion | 0.02 | 8.8 | 1.15 | 6 of 20 |
+| 1 kb deletion | 0.05 | 22.1 | 2.25 | 1 of 20 |
+
+In all 180 runs, `SIM_ALT_FRAGS` equals an independent count. That count places every read in the FASTQ back on the event's haplotype by sequence alone.
 
 ### Missing or unusable donor base qualities
 
