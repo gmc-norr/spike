@@ -271,3 +271,34 @@ The user picked option 1: rename, and say plainly which FASTQ is which.
 - No `spiked_` file is written.
 - The last log line and the run README name the `S1_` files.
 - `--fastq-prefix a/b` and `--fastq-prefix S1` without `--into-fastq` each exit non-zero before any work.
+
+### `--into-fastq` and `--fastq-prefix` result (2026-10-04): supported
+
+**Setup.**
+- spike `91f8fbab`, from code commits `73a1c4f` and `86aab7b`.
+- 674 tests. 11 of 11 mutants are caught, with the unmutated suite checked green first.
+- Logs: `scratchpad/dups/{h.log,h2.log}`. `h2.log` is the run on the final binary; every number below is from it.
+
+**Found on the way, fixed.**
+- **A flaky test.** `origin::tests::test_gather_warns_when_a_lookalike_region_holds_no_read` counts its warning in the log every test shares, and another test logged the same text: 5 of 30 suite runs failed, against 0 of 30 on master. That test now has its own span, and 0 of 60 runs fail. The case file has it.
+- **An empty folder after a refusal.** The first run of H4 showed that `--fastq-prefix a/b` was refused with no work done, but only after the output folder had been made. The empty folder was left behind. Both checks now run before the folder is made (`86aab7b`).
+
+**H1: passes.**
+- spike exits 0 with `--into-fastq`.
+- `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz` are identical to the duplicates after-check's, decompressed.
+- `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt`, `fastq_removed_reads.txt` and `truth.vcf` are identical too.
+- **Control:** the same comparison of `spiked_R1.fastq.gz` against the raw stand-in R1 says "differs".
+
+**H2: passes.** `--raw-fastq` exits 2 with no output folder and no `Extracting` line. clap says `error: unexpected argument '--raw-fastq' found` and `tip: a similar argument exists: '--into-fastq'`.
+
+**H3: passes.**
+- The last log line is `The whole sample, spiked -- the pair for a pipeline that starts from FASTQ: out/spiked_R1.fastq.gz and out/spiked_R2.fastq.gz`.
+- The run README's R1/R2 row says "spike's reads around the events only, not the whole sample (100513 pairs)". Its `spiked_` row says "The whole sample, spiked ... Written at the end of this run".
+- The README's `--help` copy equals `spike --help`.
+
+**H4: passes.**
+- With `--fastq-prefix S1`, `S1_R1.fastq.gz` and `S1_R2.fastq.gz` are identical to the after-check's `spiked_` pair, and no `spiked_` file is written. The last line and the run README name the `S1_` files.
+- `--fastq-prefix a/b` exits 1 (`--fastq-prefix "a/b" is not a plain name; ...`), as does `..`.
+- `--fastq-prefix S1` without `--into-fastq` exits 2 (`the following required arguments were not provided: --into-fastq <RAW_R1> <RAW_R2>`).
+- A missing raw file exits 1.
+- In each refusal there is no output folder and no `Extracting` line.
