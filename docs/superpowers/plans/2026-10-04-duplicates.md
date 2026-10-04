@@ -88,3 +88,63 @@ All paths are arguments, so no local path goes into the repo.
 - fastp;
 - DeepVariant (its read filters are copied, not run);
 - `--edit-model origin`, which already gives a duplicate its original's fate (`src/origin.rs` `test_a_duplicate_shares_its_originals_fate`).
+
+## Result (2026-10-04): supported. The gap matters.
+
+**Setup.**
+- spike `8ae6e449`, scripts at code commit `3c462dc`.
+- The scripts have 24 tests, and 23 of 23 mutants are caught. The first round caught 19; four tests were added or fixed to catch the other four:
+  - a site near a call or an N;
+  - a deletion over a low-MAPQ stretch;
+  - the margin boundary, which floats had hidden.
+- The run took 4 min wall, with an 18 GB maximum resident size.
+- Logs: `scratchpad/dups/{go.log,go.err,run/}`.
+
+**The run.**
+- spike took all 43 events (no fallback) and exited 0.
+- `replaced_reads.txt` holds 100,938 pairs, and `fastq_removed_reads.txt` holds 13,920.
+- `fastq.sh`: `removed 13920 original pairs, added 13495 of spike's pairs`.
+- `truth.vcf` has 43 records.
+
+**D: matters.**
+- `R_spk` = 23/676 = **0.0340**, over the 20 spiked hom SNVs in the spiked BAM.
+- `R_real` = 81/47,597 = **0.0017**, over 1,435 real hom SNVs in the baseline BAM.
+- `R_spk − R_real` = **0.0323**, above the locked 0.02.
+- `L` = 23/23 = **1.00**: every old-allele read at a spiked hom SNV carried the duplicate flag in the source BAM.
+  - The split is 23 source duplicates, 0 not taken, 0 in `replaced_reads.txt`, 0 `SPIKE_`.
+  - Per site, 0-3 old-allele reads; 14 of the 20 sites have at least one.
+
+**Controls: all pass.**
+- **C1:** 100 of 100 sets with the kept pair removed have a member that is no longer flagged duplicate, against 0 of 100 untouched sets.
+- **C2:**
+  - `R_real` is 0.0017.
+  - At +1 bp, the `ref` share is 47,234/47,245 = 0.9998, over 1,421 sites.
+- **C3:** 20 of 20 spiked hom SNVs and all 1,435 real ones have ≥ 15 reads.
+
+**Reported, not judged:**
+- **The BAM route has no leak.** At hom SNVs it reads 7/660 = 0.0106 old allele.
+  - All 7 are reads spike cannot take: pairs whose mate maps to another chromosome (chr2, chr6, chr8, chr15, chrM).
+  - The stand-in FASTQ lacks them, because they have no mate in its window. So the FASTQ route above shows 0 of them.
+  - A real full FASTQ holds them, so there the hom share would be about 1 point higher on top of the leak. This is the `SIM_RESIST` share, not duplicates.
+- **Het SNVs:** spiked alt share 314/678 = 0.4631, against real 40,113/80,802 = 0.4964 over 2,438 sites.
+- **Duplicates within 300 bp of the 40 spiked SNVs:** 60/6,897 = 0.0087 in the spiked BAM, against 253/7,025 = 0.0360 in the baseline. The spiked regions lose about three quarters of their duplicates.
+- **Hom deletions:** counted reads wholly inside each one.
+
+  | Deletion | Spiked | of which source duplicates | Baseline |
+  |---|---|---|---|
+  | chr20:10856999-10857298 | 2 | 2 | 34 |
+  | chr20:11012916-11013215 | 3 | 3 | 38 |
+  | chr20:12334123-12334422 | 3 | 3 | 37 |
+
+- **Picard `PERCENT_DUPLICATION`:** spiked 0.040578, baseline 0.041689.
+
+**What it means.**
+- After raredisease's own duplicate marking, a spiked hom SNV reads about 3.4% old allele where real hom SNVs read 0.17%.
+- A spiked hom deletion keeps 2-3 reads inside where a real one keeps none.
+- Every such read is a source duplicate that spike left in the FASTQ after removing the copy Picard had kept.
+- The likely fix is the simplest one: spike takes duplicates too, and each one gets its kept copy's fate. `--edit-model origin` does this already. It is not built yet; that waits for the user's word.
+
+**Not run here:**
+- raredisease, fastp and DeepVariant themselves;
+- a real full FASTQ, which also holds the cross-chromosome pairs above;
+- `--edit-model origin`.

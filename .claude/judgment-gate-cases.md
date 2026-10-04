@@ -272,3 +272,10 @@ what was claimed, what the claim actually rested on, and which gate would have c
   it really writes. A text read from bytecode or a path recalled from memory is a
   prediction. Also: a check that gives the same answer in every cell, old and new,
   is checked for a broken path before anything is concluded from it.
+
+## 2026-10-04 duplicates: a mutation runner scored 23 of 23 while the unmutated suite was red
+
+- **Claimed.** All 23 mutants of `scripts/duplicates` are caught.
+- **What it rested on.** One newly added test failed on the unmutated code: its N-flank window was 500 bp too wide. With `-x`, every mutant "failed" on that one test.
+- **What caught it.** Reading the per-mutant lines. Each showed the same `1 failed, 16 passed`, and the suite on its own was red.
+- **What would have caught it earlier.** The runner runs the unmutated suite first and refuses to score unless it is green. Also report which test each mutant reddens, not only that something did.
