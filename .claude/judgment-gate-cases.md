@@ -244,3 +244,31 @@ what was claimed, what the claim actually rested on, and which gate would have c
   checker itself. **Rule for this repo: a Python mutation runner clears
   `__pycache__` and runs `python -B` for every mutant. A mutant that survives is
   checked for a stale cache before the test is blamed.**
+
+## 2026-10-04 -- read names: a control keyed on a warning text read from a jar, and a wrong output path
+
+- **What almost went into a result.** Two parts of K1 in the read-names plan
+  (`docs/superpowers/plans/2026-10-04-read-names.md`):
+  - "Picard's control never fires, so the Picard check is no control";
+  - "FastQC drops its per-tile module with the new names too", a fail.
+- **What they rested on.**
+  - The Picard control grepped for `did not match read name`. That text was read with
+    `javap` from `ReadNameParser.class` and never seen in a run. Picard 3.3.0
+    MarkDuplicates prints another message for spike's old names, from
+    `AbstractOpticalDuplicateFinderCommandLineProgram`: `... was expected to contain an
+    integer and did not`. Old did print it, once per run.
+  - The FastQC check opened `R1.fq_fastqc/fastqc_data.txt`. FastQC writes
+    `R1_fastqc/`, so the check read nothing and said "absent" for old and new alike.
+- **How they were caught.** The FastQC result was the same in all four cells, so the
+  output folder was listed: the file the check opened did not exist. The silent
+  Picard control led to grepping the old log for any `WARNING` line, which turned up
+  the other message.
+- **The outcome.** FastQC was rerun under the same rule and passes. Picard stays
+  inconclusive under the locked rule. The evidence found afterwards is recorded as
+  such.
+- **Which gate would have caught it earlier.** Gate D question 2, before locking:
+  **run every control once on a tiny known-bad input and copy the tool's actual
+  output into the plan.** That means the warning a tool really prints, and the path
+  it really writes. A text read from bytecode or a path recalled from memory is a
+  prediction. Also: a check that gives the same answer in every cell, old and new,
+  is checked for a broken path before anything is concluded from it.
