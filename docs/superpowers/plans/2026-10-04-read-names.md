@@ -137,3 +137,71 @@ Both are built with a separate `CARGO_TARGET_DIR`, and both are md5'd. Runs use 
 - **K2 fails:** the learner has a bug. Fix it with a test first, then rerun K2.
 
 **Not run here:** the full raredisease pipeline, which needs the hospital. Also GATK's mitochondrial steps (RevertSam, SamToFastq, MergeBamAlignment): they pair mates by name, and old and new names are both unique, so they cannot tell old from new.
+
+## Result (2026-10-04)
+
+**Verdict.**
+- K0 passes, and so does K2.
+- K1:
+  - **FastQC: passes**, and its control works;
+  - **the mark: passes**;
+  - **Picard: inconclusive by the locked rule.** The control did not fire, because the plan locked the wrong warning text. Evidence found afterwards is below. It points one way, but it is not the locked result.
+
+**Setup:**
+- binaries: old `918e92fc` (master `3684f74`, the same md5 as the read-length binary) and new `b558405f` (`03debe6`);
+- Picard jar: `63ed3f5d`.
+
+Every run exited 0. `spike validate` exited 1 for both binaries on K0b's `sim.bam`, and its output is what K0 compares. K0b needed no shift.
+
+**K0: only the names change. Passes.** Old and new, record by record:
+
+|  | K0a (700 events) | K0b (DEL, INS, DUP junction) |
+|---|---|---|
+| R1 / R2 records | 1,667,537 each | 7,193 each |
+| spike's reads (renamed as the plan says) | 146,837 | 457 (4 of them `_dup_depth_`) |
+| bad names, or changed bases or qualities | 0 | 0 |
+| truth.vcf, events.bed, replaced_reads.txt, merge.sh | identical | identical |
+| sim.bam records (11 SAM fields, names mapped) | 3,338,735, 0 differ | 14,425, 0 differ |
+| `spike validate` stdout | | identical; `del_planted` 8 PASS, `ins_planted` 20 PASS |
+
+The learned shape for the hospital BAM is `45:227NC2LT1:2`, with 247 tiles, x 1000-52208 and y 1016-29759. An example name is `SPIKE_ev0001_hap_000000:45:227NC2LT1:2:2218:22853:29387`.
+
+The name checker was tested against bad names: a wrong middle, an unseen tile, x out of range, no tail, and the old name. It rejected each one.
+
+**K2: the shape is learned right. Passes.** spike's log equals `shape.awk` over the same 50,000 records on all three inputs (classes, middle, the full tile list, and the x and y ranges):
+
+| input | 7-part / 5-part / other | middle | tiles | x | y |
+|---|---|---|---|---|---|
+| hospital NovaSeq X | 50,000 / 0 / 0 | `45:227NC2LT1:2` | 247 | 1000-52208 | 1016-29759 |
+| `hg002_novaseq_chr20.bam` (NovaSeq 6000) | 50,000 / 0 / 0 | `46:HV3C3DSXX:2` | 936 | 1027-32922 | 1000-37043 |
+| `HG002.GRCh38.chr20.bwamem2.bam` (HiSeq 2500) | 50,000 / 0 / 0 | `93:H2YHMBCXX:2` | 64 | 1043-21291 | 2058-101292 |
+
+The HiSeq BAM mixes several runs. Its first read is `D00360:96:H2YLYBCXX:...`, but the most common middle is `93:H2YHMBCXX:2`.
+
+`shape.awk` gave the unit tests' answers on their six cases. The judge failed when given mismatched sides: the hospital awk against the NovaSeq log, and one tile dropped.
+
+**K1: the tools read the names.**
+
+| | K0a old | K0a new | K0b old | K0b new |
+|---|---|---|---|---|
+| Picard exit | 0 | 0 | 0 | 0 |
+| locked text `did not match read name` | no | no | no | no |
+| any `WARNING` line | 1 | **0** | 1 | **0** |
+| optical / duplicate / examined pairs | 0 / 29 / 1,667,537 | 0 / 29 / 1,667,537 | 0 / 0 / 7,193 | 0 / 0 / 7,193 |
+| FastQC `>>Per tile sequence quality` | **absent** (10 modules) | **present** (11) | **absent** (10) | **present** (11) |
+
+- **Picard: inconclusive by the locked rule.** New never prints the locked text, but old doesn't either, so the control does not fire.
+
+  The text was read from `ReadNameParser.class`. Picard 3.3.0 MarkDuplicates prints a different message for these names, from `AbstractOpticalDuplicateFinderCommandLineProgram`: `A field field parsed out of a read name was expected to contain an integer and did not. Read name: ev0291_hap_000133.`
+
+  **Found after looking (not locked):**
+  - old prints that message once in each run, and new prints no warning of any kind.
+  - A diagnostic in `scratchpad/names/diag` copied one of spike's pairs in K0b's `sim.bam` under a second name, with the same tile and x/y. Picard called that pair an **optical** duplicate with the new names (1), and could not with the old (0). So Picard reads the new names' positions.
+- **FastQC: passes, and the control works.** With the old names, FastQC 0.12.1 drops the per-tile quality module for the whole file. With the new names it keeps it.
+
+  The first K1 run reported FastQC as failing in all four cells. That was a bug in `k1.py`, which looked in `R1.fq_fastqc/` instead of FastQC's `R1_fastqc/`, so it never found the report. The rule was not changed; with the path fixed, K1 was rerun in full. The first log is kept as `k1-pathbug.log`.
+- **The mark: passes.** The number of distinct `SPIKE_` names in new `sim.bam` equals the number of `ev` names in old: 146,837 in K0a and 457 in K0b. All other names are the same set: 1,520,700 and 6,736.
+
+**Left as it is.** `spike validate`'s expected column still reads `>=1 ev0001 read carrying`. That is only the row's label: the prefix it matches is now `SPIKE_ev0001_hap_`, and the rows found the reads.
+
+**Not run:** the full raredisease pipeline. Also how often spike's reads land in a duplicate set in a merged whole-genome BAM, which is when Picard reads their names.
