@@ -135,6 +135,8 @@ Code `92b45ee`. Binaries: new release `5a157245`, new debug `44b32f10`, master r
 
 **G4: PASS.** Best of 3, alternating, 8 threads: old 2.45 s (2.45, 2.48, 2.52), new 3.18 s (3.18, 3.24, 3.19). That is 1.30 times, under 1.5.
 
+**A number in the plan was wrong.** It gave the stand-in as 478,809 pairs. That is F1's output count. The raw stand-in holds 478,815 pairs: the new script's `Done` line and G3(a)'s count both say so. No check depended on it.
+
 **Seen, not judged.**
 - Each mate's `pigz` now gets half of THREADS, because both mates are compressed at once.
 - The output is now one gzip member for the raw records, plus one for spike's reads. Decompressed, it is the same.
