@@ -35,3 +35,17 @@
 **I3.** `spike --indel-error-rate nan` and `2` (with valid other arguments) exit 1 within 5 s, print the message, and do not create the `-o` folder.
 
 **I4.** The README's `--help` copy equals `spike --help`.
+
+## Result (2026-10-04): supported
+
+Code `1c28700`. Binaries: new release `3caf18a7`, new debug `245c9fef`, master release `91f8fbab`. Scratch: `scratchpad/indel/`.
+
+**Tests.** 697 pass (1 new), 0 fail, 1 ignored. The mutation runner checks the unmutated test is green first, then catches **4 of 4** mutants. clippy gives the same warnings as master.
+
+**I1: PASS.** In the reviewer's script (the scratch copy), `indel_rate_NaN`, `indel_rate_2.0` and `indel_rate_-0.5` each exit 1 with `wrote_truth` false. The messages end `got NaN`, `got 2` and `got -0.5`. Every other result is as in the carried-allele result.
+
+**I2: PASS.** With `--indel-error-rate 0.05`, the new and master binaries gave identical `truth.vcf`, `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt` and `fastq_removed_reads.txt`. Control: that `R1.fq.gz` differs from the carried-allele G3 run's (same events at rate 0), so the flag was in effect.
+
+**I3: PASS.** `--indel-error-rate nan` and `2` exit 1 in 0.01 s and 0.00 s, and create no `-o` folder. `nan`'s message: `Error: --indel-error-rate must be in [0.0, 1.0]: it is the fraction of sequencing errors that are indels; got NaN`.
+
+**I4: PASS.** The README's `--help` copy equals `spike --help`. The first regeneration doubled the help's opening line, and the comparison caught it before the commit.
