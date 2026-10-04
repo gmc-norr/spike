@@ -243,3 +243,31 @@ The user picked option 1: rename, and say plainly which FASTQ is which.
 **Outcomes.**
 - **Supported:** H1, H2 and H3 pass. Merge on the user's word.
 - **Otherwise:** fix it, with a test first.
+
+### Addendum, before any code: `--fastq-prefix` (locked)
+
+**Asked.** The user, mid-plan: the output FASTQ files must take a prefix, because they will run many samples and need to tell the output files apart.
+
+**Design.**
+- **The option.** `--fastq-prefix NAME`, default `spiked`. The whole-sample pair is `<output>/NAME_R1.fastq.gz` and `<output>/NAME_R2.fastq.gz`, so the default keeps today's names.
+- **The folder** is `-o`'s. NAME is a plain file name: empty, `.`, `..` and anything holding `/` are refused before any work, with a message naming `--fastq-prefix`.
+- **It needs `--into-fastq`.** Given alone, it is refused before any work: there would be nothing to name.
+- **Everywhere the plan above names `spiked_R1.fastq.gz`, the run uses the prefixed names:**
+  - the run README's row and workflow line;
+  - the last log line;
+  - `--into-fastq`'s help (`<output>/<--fastq-prefix>_R1.fastq.gz`).
+- `R1.fq.gz`/`R2.fq.gz` and every other output keep their names. `-o` already separates runs.
+
+**Tests, written first and seen red:**
+- the default is `spiked`;
+- `--fastq-prefix S1` names `S1_R1.fastq.gz`/`S1_R2.fastq.gz` in the output folder;
+- `a/b`, `..`, `.` and an empty name are refused;
+- `--fastq-prefix` without `--into-fastq` is refused;
+- the run README and the last log line carry the prefixed names.
+
+**Check H4 (locked), added to H.** H1's command plus `--fastq-prefix S1`, into a fresh output folder.
+- spike exits 0.
+- `S1_R1.fastq.gz` and `S1_R2.fastq.gz` decompress byte-identical to the after-check's `spiked_` pair.
+- No `spiked_` file is written.
+- The last log line and the run README name the `S1_` files.
+- `--fastq-prefix a/b` and `--fastq-prefix S1` without `--into-fastq` each exit non-zero before any work.
