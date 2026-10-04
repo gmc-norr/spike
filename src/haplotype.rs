@@ -24,6 +24,50 @@ pub struct SegmentOrigin {
     pub is_reverse: bool, // true for reverse-complemented segments (INV)
 }
 
+/// Where a planted pair shows its event, in haplotype coordinates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Evidence {
+    /// A small variant's changed ALT bases `[start, end)`; a pure deletion
+    /// has `start == end`, the join. A read shows them when it covers them
+    /// and one base on each side, the span the carried-allele check uses.
+    Bases { start: u64, end: u64 },
+    /// A structural event's junctions. A pair shows one when its fragment
+    /// covers the base on each side: a split read or a discordant pair.
+    Junctions(Vec<u64>),
+}
+
+impl Evidence {
+    /// Whether the pair at `spans` shows the event.
+    pub fn shown_by(&self, spans: &crate::synth::PairSpans) -> bool {
+        // `[s, e)` covers bases `a` through `b` when `s <= a` and `e > b`.
+        let covers = |(s, e): (u64, u64), a: u64, b: u64| s <= a && e > b;
+        match self {
+            Evidence::Bases { start, end } => spans
+                .mates
+                .iter()
+                .any(|&read| *start > 0 && covers(read, start - 1, *end)),
+            Evidence::Junctions(junctions) => junctions
+                .iter()
+                .any(|&j| j > 0 && covers(spans.fragment, j - 1, j)),
+        }
+    }
+}
+
+/// Whether the reference runs straight on from segment `a` into segment `b`:
+/// both from the same chromosome and strand, and `b` starting where `a` ends.
+fn continues(a: &HaplotypeSegment, b: &HaplotypeSegment) -> bool {
+    match (&a.origin, &b.origin) {
+        (Some(x), Some(y)) if x.chrom == y.chrom && x.is_reverse == y.is_reverse => {
+            if x.is_reverse {
+                y.ref_end == x.ref_start
+            } else {
+                x.ref_end == y.ref_start
+            }
+        }
+        _ => false,
+    }
+}
+
 /// A segment of the variant haplotype.
 #[derive(Debug, Clone)]
 pub struct HaplotypeSegment {
@@ -528,6 +572,18 @@ impl VariantHaplotype {
             bps.push(seg.hap_offset + seg.sequence.len() as u64);
         }
         bps
+    }
+
+    /// The breakpoints where the reference does not simply continue: one side
+    /// is novel sequence, or the chromosome or strand changes, or the two
+    /// sides' reference positions do not meet. A tandem DUP's flanks run
+    /// straight into its copies, so only its copy-to-copy boundary is one.
+    pub fn junctions(&self) -> Vec<u64> {
+        self.segments
+            .windows(2)
+            .filter(|pair| !continues(&pair[0], &pair[1]))
+            .map(|pair| pair[1].hap_offset)
+            .collect()
     }
 
     /// Get the reference chrom of the first segment (for ReadPair.chrom).
@@ -1443,5 +1499,68 @@ mod tests {
         assert_eq!(hap.segments[0].sequence.len(), 100);
         assert_eq!(ref_pos(&hap, 0), ("chrEnd".to_string(), 9999));
         assert_eq!(ref_pos(&hap, 99), ("chrEnd".to_string(), 9900));
+    }
+
+    #[test]
+    fn test_a_tandem_dups_only_junction_is_between_its_copies() {
+        // Its left flank runs straight into copy 1, and copy 2 into its right
+        // flank; only copy 1 -> copy 2 jumps back.
+        let hap = mock_tandem_dup(1000, 2000, 500);
+        assert_eq!(hap.segments.len(), 4);
+        assert_eq!(hap.junctions(), vec![hap.segments[2].hap_offset]);
+    }
+
+    #[test]
+    fn test_a_deletion_has_one_junction_an_inversion_two_and_an_insertion_two() {
+        let del = mock_segments_deletion(1000, 2000, 500);
+        assert_eq!(del.junctions(), vec![del.segments[1].hap_offset]);
+        let inv = mock_segments_inversion(1000, 2000, 500);
+        assert_eq!(inv.junctions(), vec![inv.segments[1].hap_offset, inv.segments[2].hap_offset]);
+        let ins = mock_segments_insertion(1000, b"ACGTACGT", 500);
+        assert_eq!(ins.junctions(), vec![ins.segments[1].hap_offset, ins.segments[2].hap_offset]);
+    }
+
+    use crate::synth::PairSpans;
+
+    /// A pair over `fragment` whose two mates cover `mates`.
+    fn spans(fragment: (u64, u64), mates: [(u64, u64); 2]) -> PairSpans {
+        PairSpans { fragment, mates }
+    }
+
+    #[test]
+    fn test_a_read_shows_a_snv_only_with_a_base_on_each_side() {
+        let snv = Evidence::Bases { start: 100, end: 101 };
+        let far = (300, 450);
+        // A read ending on the SNV, or starting on it, lacks a side.
+        assert!(!snv.shown_by(&spans((0, 450), [(0, 101), far])));
+        assert!(!snv.shown_by(&spans((100, 450), [(100, 250), far])));
+        assert!(snv.shown_by(&spans((0, 450), [(0, 102), far])));
+        assert!(snv.shown_by(&spans((99, 450), [(99, 249), far])));
+        // Either mate will do; the fragment alone will not.
+        assert!(snv.shown_by(&spans((0, 450), [far, (0, 102)])));
+        assert!(!snv.shown_by(&spans((0, 450), [(0, 90), (300, 450)])));
+    }
+
+    #[test]
+    fn test_a_read_shows_a_pure_deletion_only_across_its_join() {
+        let join = Evidence::Bases { start: 100, end: 100 };
+        let far = (300, 450);
+        assert!(!join.shown_by(&spans((0, 450), [(0, 100), far])));
+        assert!(!join.shown_by(&spans((100, 450), [(100, 250), far])));
+        assert!(join.shown_by(&spans((0, 450), [(0, 101), far])));
+        assert!(join.shown_by(&spans((99, 450), [(99, 249), far])));
+    }
+
+    #[test]
+    fn test_a_fragment_shows_a_junction_even_when_neither_read_crosses_it() {
+        let junction = Evidence::Junctions(vec![1000]);
+        assert!(junction.shown_by(&spans((800, 1200), [(800, 950), (1050, 1200)])));
+        // A fragment that ends at the junction, or starts there, is all one side.
+        assert!(!junction.shown_by(&spans((600, 1000), [(600, 750), (850, 1000)])));
+        assert!(!junction.shown_by(&spans((1000, 1400), [(1000, 1150), (1250, 1400)])));
+        assert!(junction.shown_by(&spans((999, 1400), [(999, 1150), (1250, 1400)])));
+        // Any one junction will do.
+        let two = Evidence::Junctions(vec![1000, 3000]);
+        assert!(two.shown_by(&spans((2800, 3200), [(2800, 2950), (3050, 3200)])));
     }
 }

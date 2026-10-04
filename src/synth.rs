@@ -871,6 +871,7 @@ impl<'a> SynthReadGenerator<'a> {
     /// `hap_frag_start`, the reverse mate at `hap_frag_start + frag_len - rl`
     /// and is reverse-complemented for FR orientation. Reference coordinates
     /// for the ReadPair are mapped back from the haplotype via `hap_to_ref`.
+    /// Also returns where the pair lies on the haplotype ([`PairSpans`]).
     pub fn generate_haplotype_read_pair(
         &self,
         haplotype: &VariantHaplotype,
@@ -878,7 +879,7 @@ impl<'a> SynthReadGenerator<'a> {
         frag_len: u64,
         name: &str,
         rng: &mut StdRng,
-    ) -> Option<ReadPair> {
+    ) -> Option<(ReadPair, PairSpans)> {
         let rl = self.mate_length(frag_len)?;
         let rl_bases = rl as usize;
 
@@ -918,6 +919,17 @@ impl<'a> SynthReadGenerator<'a> {
         self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
         self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
 
+        // Each mate's 3' end was trimmed on its own, so each covers its own
+        // length from its end of the fragment.
+        let frag_end = hap_frag_start + frag_len;
+        let spans = PairSpans {
+            fragment: (hap_frag_start, frag_end),
+            mates: [
+                (hap_frag_start, hap_frag_start + fwd_seq.len() as u64),
+                (frag_end - rev_seq.len() as u64, frag_end),
+            ],
+        };
+
         let (seq1, qual1, seq2, qual2) = if r1_is_reverse {
             (rev_seq, rev_qual, fwd_seq, fwd_qual)
         } else {
@@ -937,18 +949,30 @@ impl<'a> SynthReadGenerator<'a> {
         let ref_start = left_ref.min(right_ref);
         let ref_end = left_ref.max(right_ref) + 1; // exclusive
 
-        Some(ReadPair {
-            name: name.to_string(),
-            seq1,
-            qual1,
-            seq2,
-            qual2,
-            ref_start,
-            ref_end,
-            insert_size: frag_len as i64,
-            chrom,
-        })
+        Some((
+            ReadPair {
+                name: name.to_string(),
+                seq1,
+                qual1,
+                seq2,
+                qual2,
+                ref_start,
+                ref_end,
+                insert_size: frag_len as i64,
+                chrom,
+            },
+            spans,
+        ))
     }
+}
+
+/// Where a planted pair lies on its haplotype, each `[start, end)`: the
+/// fragment, and the bases each mate covers by its final length, the forward
+/// mate first. A read with an indel error covers a base more or less.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairSpans {
+    pub fragment: (u64, u64),
+    pub mates: [(u64, u64); 2],
 }
 
 /// The start of the TruSeq adapter, R1's and R2's alike. A library trimmed
@@ -1445,7 +1469,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         // R1 spans [400..550] → crosses boundary at 500 → produces split-read evidence
-        let result = gen.generate_haplotype_read_pair(&hap, 400, 450, "test", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 400, 450, "test", &mut rng).map(|(pair, _)| pair);
         assert!(
             result.is_some(),
             "R1 crossing boundary should produce a split-read pair"
@@ -1460,17 +1484,17 @@ mod tests {
 
         // Fragment at hap_start=200, frag_len=450 → R1=[200..350], R2=[500..650]
         // R1 in seg0, R2 in seg1 → discordant pair
-        let result = gen.generate_haplotype_read_pair(&hap, 200, 450, "test", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 200, 450, "test", &mut rng).map(|(pair, _)| pair);
         assert!(
             result.is_some(),
             "R1 in seg0, R2 in seg1 should produce discordant pair"
         );
 
         // Fragment crossing boundary → split-read evidence
-        let result = gen.generate_haplotype_read_pair(&hap, 250, 450, "test2", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 250, 450, "test2", &mut rng).map(|(pair, _)| pair);
         assert!(result.is_some(), "Boundary-crossing pair should succeed");
 
-        let result = gen.generate_haplotype_read_pair(&hap, 210, 450, "test3", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 210, 450, "test3", &mut rng).map(|(pair, _)| pair);
         assert!(result.is_some(), "Discordant pair spanning deletion");
     }
 
@@ -1481,11 +1505,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         // Both arms entirely in left segment
-        let result = gen.generate_haplotype_read_pair(&hap, 0, 400, "left", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 0, 400, "left", &mut rng).map(|(pair, _)| pair);
         assert!(result.is_some(), "Both arms in left segment should work");
 
         // Both arms entirely in right segment
-        let result = gen.generate_haplotype_read_pair(&hap, 500, 400, "right", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 500, 400, "right", &mut rng).map(|(pair, _)| pair);
         assert!(result.is_some(), "Both arms in right segment should work");
     }
 
@@ -1501,7 +1525,7 @@ mod tests {
         // Discordant placement: R1 in seg0, R2 in seg1
         // hap_start=200, frag_len=450 → R1=[200..350], R2=[500..650]
         let pair = gen
-            .generate_haplotype_read_pair(&hap, 200, 450, "disc", &mut rng)
+            .generate_haplotype_read_pair(&hap, 200, 450, "disc", &mut rng).map(|(pair, _)| pair)
             .expect("Discordant pair should be generated");
 
         // R1 maps to ref: 0 + 200 = 200
@@ -1565,7 +1589,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         // R1 [250..400) crosses the left->alt/right boundary — should succeed
-        let result = gen.generate_haplotype_read_pair(&hap, 250, 300, "sv", &mut rng);
+        let result = gen.generate_haplotype_read_pair(&hap, 250, 300, "sv", &mut rng).map(|(pair, _)| pair);
         assert!(
             result.is_some(),
             "boundary-crossing reads should be allowed for split-read evidence"
@@ -1595,7 +1619,7 @@ mod tests {
 
         // R1 = hap [2800,2950) inside the insertion; R2 ends at hap 3199 = ref 2199.
         let pair = gen
-            .generate_haplotype_read_pair(&hap, 2800, 400, "ins", &mut rng)
+            .generate_haplotype_read_pair(&hap, 2800, 400, "ins", &mut rng).map(|(pair, _)| pair)
             .expect("a pair with one read in the insertion is real evidence");
 
         // R1's start maps to the nearest reference base: hap 3000 = ref 2000.
@@ -1788,7 +1812,7 @@ mod tests {
             let hap_start = 100 + i * 17;
             let frag_len = 400u64;
             let pair = gen
-                .generate_haplotype_read_pair(&hap, hap_start, frag_len, "h", &mut rng)
+                .generate_haplotype_read_pair(&hap, hap_start, frag_len, "h", &mut rng).map(|(pair, _)| pair)
                 .unwrap();
             let (s, e) = (hap_start as usize, (hap_start + frag_len) as usize);
             let left = hap_seq[s..s + rl].to_vec();
@@ -1973,7 +1997,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(8);
         for _ in 0..10 {
             let pair = gen
-                .generate_haplotype_read_pair(&hap, s as u64, frag_len as u64, "h", &mut rng)
+                .generate_haplotype_read_pair(&hap, s as u64, frag_len as u64, "h", &mut rng).map(|(pair, _)| pair)
                 .unwrap();
             let mut got = [pair.seq1.clone(), pair.seq2.clone()];
             got.sort();
@@ -1986,14 +2010,14 @@ mod tests {
         // Indel errors on (at Q93 none happen) fetch bases past each read's
         // 3' end; a short fragment's reads must still stop at the fragment.
         let gen = mock_gen_over_with_indels(vec![b'A'; 1_000], 151, 93, 93, 1.0).with_adapter_trim(true);
-        let pair = gen.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).unwrap();
+        let pair = gen.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).map(|(pair, _)| pair).unwrap();
         let fragment = hap_seq[2_000..2_090].to_vec();
         assert_eq!((pair.seq1.len(), pair.seq2.len()), (90, 90));
         assert!(pair.seq1 == fragment || pair.seq2 == fragment, "a short fragment is read whole");
         assert_eq!((pair.ref_start, pair.ref_end, pair.insert_size), (2_000, 2_090, 90));
 
         let untrimmed = mock_gen_over(vec![b'A'; 1_000], 151, 93, 93);
-        assert!(untrimmed.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).is_none());
+        assert!(untrimmed.generate_haplotype_read_pair(&hap, 2_000, 90, "h", &mut rng).map(|(pair, _)| pair).is_none());
     }
 
     #[test]
@@ -2054,7 +2078,7 @@ mod tests {
         let mut padded = 0usize;
         for i in 0..200u64 {
             let pair = gen
-                .generate_haplotype_read_pair(&hap, 500 + i * 7, 400, "h", &mut rng)
+                .generate_haplotype_read_pair(&hap, 500 + i * 7, 400, "h", &mut rng).map(|(pair, _)| pair)
                 .unwrap();
             for seq in [&pair.seq1, &pair.seq2] {
                 assert_eq!(seq.len(), rl, "a synthetic read came out short");

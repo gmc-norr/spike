@@ -262,6 +262,9 @@ pub struct SplicedOutput {
     /// additive cap or the two-fragment floor moved it off the requested VAF;
     /// `None` when the request stands. The truth VCF records it as `SIM_VAF`.
     pub adjusted_vaf: Option<f64>,
+    /// How many of this event's tiled pairs show it (`haplotype::Evidence`).
+    /// The truth VCF records it as `SIM_ALT_FRAGS`.
+    pub alt_fragments: usize,
     /// Breakpoint sides of this event that the donor pool has no reads over,
     /// `chrom:pos`, deduplicated and in haplotype order. Empty for an event
     /// whose every side is covered. A single-locus event is kept when at

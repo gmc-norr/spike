@@ -643,6 +643,7 @@ fn main() -> Result<()> {
     // Per event, in the same order: how far the donor's depth departs from
     // the one depth its fragments are scaled by (CR2): SIM_DEPTH_FOLD.
     let mut depth_folds: Vec<Option<f64>> = Vec::with_capacity(events.len());
+    let mut alt_frags: Vec<Option<usize>> = Vec::with_capacity(events.len());
 
     let mut event_stats: Vec<EventStat> = Vec::new();
     // M14: pairs whose stored quality is unusable never reach a pool, so they
@@ -819,6 +820,7 @@ fn main() -> Result<()> {
         adjusted_afs.push(output.adjusted_vaf);
         resistant.push(Some(event_census.fraction()));
         depth_folds.push(Some(output.depth_fold.fold));
+        alt_frags.push(Some(output.alt_fragments));
         event_outputs.push(output);
 
         if let Some(site) = site {
@@ -908,6 +910,7 @@ fn main() -> Result<()> {
         &adjusted_afs,
         &resistant,
         &depth_folds,
+        &alt_frags,
         config.allele_fraction, // default AF for events without per-event override
         &truth_path.to_string_lossy(),
         &args.reference,

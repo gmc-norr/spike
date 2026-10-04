@@ -63,14 +63,16 @@ fn with_bnd_base(alt: &str, base: &str) -> String {
 /// fraction off the request, `None` when the request stands. `SIM_VAF` is
 /// what was simulated, so it is `v` where there is one and the request
 /// everywhere else. `resistant` holds each event's `SIM_RESIST`, the share
-/// of the reads over it spike could not edit (CR4), and `depth_folds` its
-/// `SIM_DEPTH_FOLD` (CR2); `None` writes `.` in either.
+/// of the reads over it spike could not edit (CR4), `depth_folds` its
+/// `SIM_DEPTH_FOLD` (CR2), and `alt_frags` its `SIM_ALT_FRAGS`, how many of
+/// its planted pairs show it; `None` writes `.` in any of them.
 #[allow(clippy::too_many_arguments)]
 pub fn write_truth_vcf(
     events: &[SimEvent],
     adjusted_afs: &[Option<f64>],
     resistant: &[Option<f64>],
     depth_folds: &[Option<f64>],
+    alt_frags: &[Option<usize>],
     default_af: f64,
     output_path: &str,
     ref_path: &str,
@@ -99,6 +101,11 @@ pub fn write_truth_vcf(
         depth_folds.len(),
         events.len(),
         "write_truth_vcf: one depth fold per event, in the same order",
+    );
+    assert_eq!(
+        alt_frags.len(),
+        events.len(),
+        "write_truth_vcf: one planted-pair count per event, in the same order",
     );
 
     let mut f = std::fs::File::create(output_path)
@@ -132,9 +139,10 @@ pub fn write_truth_vcf(
     writeln!(
         f,
         "##INFO=<ID=SIM_VAF,Number=1,Type=Float,Description=\"Allele fraction that was \
-         simulated: the fraction of the depth the fragments spike planted make up. Below \
-         SIM_REQ_VAF where the additive 0.95 cap applied and above it where the \
-         two-fragment floor did. On an additive event (a fusion or a DUP under \
+         simulated: the fraction of the depth the fragments spike planted make up, as set by \
+         their number, not counted from where they landed (SIM_ALT_FRAGS says how many show \
+         the event). Below SIM_REQ_VAF where the additive 0.95 cap applied and above it where \
+         the two-fragment floor did. On an additive event (a fusion or a DUP under \
          --dup-model junction) it is the junction evidence -- the fraction the fragments \
          across the breakpoint make up; a junction DUP also plants interior depth copies \
          at SIM_REQ_VAF so a capped one's interior dosage is above this\">"
@@ -143,6 +151,15 @@ pub fn write_truth_vcf(
         f,
         "##INFO=<ID=SIM_REQ_VAF,Number=1,Type=Float,Description=\"Allele fraction requested \
          for this event; SIM_VAF is the fraction that was simulated\">"
+    )?;
+    writeln!(
+        f,
+        "##INFO=<ID=SIM_ALT_FRAGS,Number=1,Type=Integer,Description=\"Read pairs spike planted \
+         that show this event: for a small variant, pairs with a read over its changed bases and \
+         one base on each side; for a structural event, pairs whose fragment spans one of its \
+         junctions (a split read or a discordant pair). At low depth or fraction it can be 0: \
+         the event is listed but no read shows it, as can happen to a real variant. A junction \
+         DUP's interior depth copies are not counted\">"
     )?;
     writeln!(
         f,
@@ -221,6 +238,10 @@ pub fn write_truth_vcf(
             Some(f) => format!("{:.2}", f),
             None => ".".to_string(),
         };
+        let shown = match alt_frags.get(i).copied().flatten() {
+            Some(n) => n.to_string(),
+            None => ".".to_string(),
+        };
 
         match event {
             SimEvent::Deletion {
@@ -243,13 +264,14 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *del_start,
                     format!(
-                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
+                        "sim_del_{}\t{}\t<DEL>\t999\tPASS\tSVTYPE=DEL;END={};SVLEN=-{};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={};SIM_EXONS={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *del_start),
                         del_end,
                         sv_len,
                         event_af,
                         requested_af,
+                        shown,
                         resist,
                         fold,
                         gene,
@@ -281,13 +303,14 @@ pub fn write_truth_vcf(
                         chrom.clone(),
                         pos,
                         format!(
-                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
+                            "{}\t{}\t{}\t999\tPASS\tSVTYPE=BND;MATEID={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                             id,
                             base,
                             with_bnd_base(&alt, &base),
                             mate,
                             event_af,
                             requested_af,
+                            shown,
                             resist,
                             fold,
                             gene,
@@ -308,13 +331,14 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *dup_start,
                     format!(
-                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
+                        "sim_dup_{}\t{}\t<DUP>\t999\tPASS\tSVTYPE=DUP;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *dup_start),
                         dup_end,
                         sv_len,
                         event_af,
                         requested_af,
+                        shown,
                         resist,
                         fold,
                         gene,
@@ -334,13 +358,14 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *inv_start,
                     format!(
-                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
+                        "sim_inv_{}\t{}\t<INV>\t999\tPASS\tSVTYPE=INV;END={};SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         base_at(chrom, *inv_start),
                         inv_end,
                         sv_len,
                         event_af,
                         requested_af,
+                        shown,
                         resist,
                         fold,
                         gene,
@@ -374,13 +399,14 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     *pos,
                     format!(
-                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
+                        "sim_ins_{}\t{}\t{}\t999\tPASS\tSVTYPE=INS;SVLEN={};SIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         anchor,
                         alt,
                         ins_len,
                         event_af,
                         requested_af,
+                        shown,
                         resist,
                         fold,
                         gene,
@@ -401,12 +427,13 @@ pub fn write_truth_vcf(
                     chrom.clone(),
                     pos + 1,
                     format!(
-                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
+                        "sim_var_{}\t{}\t{}\t999\tPASS\tSIM_VAF={:.3};SIM_REQ_VAF={:.3};SIM_ALT_FRAGS={};SIM_RESIST={};SIM_DEPTH_FOLD={};SIM_GENE={}\tGT\t{}",
                         i + 1,
                         String::from_utf8_lossy(ref_allele),
                         String::from_utf8_lossy(alt_allele),
                         event_af,
                         requested_af,
+                        shown,
                         resist,
                         fold,
                         gene,
@@ -544,7 +571,7 @@ mod tests {
             del("chr1", 2, 5),
         ];
         let path = std::env::temp_dir().join(format!("spike_truth_sorted_{}.vcf", std::process::id()));
-        write_truth_vcf(&events, &[None; 4], &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
+        write_truth_vcf(&events, &[None; 4], &[None; 4], &[None; 4], &[None; 4], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -633,7 +660,7 @@ mod tests {
             .join(format!("spike_truth_ins_{}_{}.vcf", std::process::id(), tag));
         // One entry per event, as `write_truth_vcf` now asserts: this helper
         // builds exactly one.
-        write_truth_vcf(&events, &[None], &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
+        write_truth_vcf(&events, &[None], &[None], &[None], &[None], 0.5, path.to_str().unwrap(), "ref.fa", &reference, &contigs, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -706,6 +733,7 @@ mod tests {
             adjusted,
             resistant,
             depth_folds,
+            &[None],
             0.5,
             path.to_str().unwrap(),
             "ref.fa",
@@ -740,7 +768,7 @@ mod tests {
             let path = std::env::temp_dir()
                 .join(format!("spike_truth_model_{}_{}.vcf", std::process::id(), origin));
             write_truth_vcf(
-                &events, &[None], &[Some(0.2)], &[Some(1.8)], 0.5, path.to_str().unwrap(), "ref.fa",
+                &events, &[None], &[Some(0.2)], &[Some(1.8)], &[None], 0.5, path.to_str().unwrap(), "ref.fa",
                 &reference, &contigs, origin,
             )
             .unwrap();
@@ -837,8 +865,8 @@ mod tests {
         // edit goes beside the fractions it did simulate.
         let info = only_info(&af_truth_text_with("resist", 1.0, &[None], &[Some(0.5)], &[None]));
         assert!(
-            info.contains("SIM_REQ_VAF=1.000;SIM_RESIST=0.500;"),
-            "SIM_RESIST must follow SIM_REQ_VAF, got {}",
+            info.contains("SIM_REQ_VAF=1.000;SIM_ALT_FRAGS=.;SIM_RESIST=0.500;"),
+            "SIM_RESIST must follow SIM_REQ_VAF and SIM_ALT_FRAGS, got {}",
             info
         );
         let text = af_truth_text_with("resist_header", 0.5, &[None], &[Some(0.0)], &[None]);
@@ -886,5 +914,50 @@ mod tests {
     #[should_panic(expected = "one depth fold per event, in the same order")]
     fn test_truth_refuses_a_depth_fold_slice_that_does_not_match_the_events() {
         af_truth_text_with("fold_short", 0.5, &[None], &[None], &[]);
+    }
+
+    #[test]
+    fn test_truth_vcf_records_how_many_planted_pairs_show_each_event() {
+        let reference = SharedReference::from_sequences(
+            [("chr1".to_string(), b"GATTACAGATTACA".to_vec())].into(),
+        );
+        let contigs = vec![("chr1".to_string(), 14)];
+        let snv = |pos: u64| SimEvent::SmallVariant {
+            chrom: "chr1".to_string(),
+            pos,
+            ref_allele: b"T".to_vec(),
+            alt_allele: b"C".to_vec(),
+            gene: "G".to_string(),
+            allele_fraction: None,
+        };
+        let events = vec![
+            SimEvent::Deletion {
+                chrom: "chr1".to_string(),
+                del_start: 2,
+                del_end: 5,
+                gene: "G".to_string(),
+                exons: vec![],
+                allele_fraction: None,
+            },
+            snv(9),
+            snv(10),
+        ];
+        let path = std::env::temp_dir().join(format!("spike_truth_alt_frags_{}.vcf", std::process::id()));
+        write_truth_vcf(
+            &events, &[None; 3], &[None; 3], &[None; 3], &[Some(0), Some(7), None], 0.5,
+            path.to_str().unwrap(), "ref.fa", &reference, &contigs, false,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(text.contains("##INFO=<ID=SIM_ALT_FRAGS,Number=1,Type=Integer,"), "{}", text);
+        let info = |id: &str| -> String {
+            let line = text.lines().find(|l| l.split('\t').nth(2) == Some(id)).unwrap();
+            line.split('\t').nth(7).unwrap().to_string()
+        };
+        assert!(info("sim_del_1").contains("SIM_REQ_VAF=0.500;SIM_ALT_FRAGS=0;"), "{}", info("sim_del_1"));
+        assert!(info("sim_var_2").contains("SIM_REQ_VAF=0.500;SIM_ALT_FRAGS=7;"), "{}", info("sim_var_2"));
+        assert!(info("sim_var_3").contains(";SIM_ALT_FRAGS=.;"), "{}", info("sim_var_3"));
     }
 }

@@ -10,10 +10,10 @@ use anyhow::Result;
 use rand::rngs::StdRng;
 use rand::Rng;
 
-use crate::haplotype::VariantHaplotype;
+use crate::haplotype::{Evidence, VariantHaplotype};
 use crate::loh;
 use crate::reference::SharedReference;
-use crate::synth::{copy_rate, SynthReadGenerator};
+use crate::synth::{copy_rate, PairSpans, SynthReadGenerator};
 use crate::types::{DepthFold, ReadPair, ReadPool, SimConfig, SimEvent, SplicedOutput};
 
 /// Classification of how a read pair relates to SV boundaries.
@@ -296,7 +296,7 @@ fn simulate_event_inner(
     // Tile synthetic reads across the haplotype.
     // For additive events (DUP/Fusion), restrict tiling to near breakpoints
     // to avoid inflating flank coverage.
-    let (chimeric, adjusted_vaf) = tile_haplotype_reads(
+    let (chimeric, adjusted_vaf, spans) = tile_haplotype_reads(
         haplotype,
         other_haplotype.as_ref().map(|other| (other, p_other_copy)),
         synth_gen,
@@ -307,6 +307,24 @@ fn simulate_event_inner(
         &name_prefix,
         rng,
     );
+
+    // What the planted pairs show, beside the fraction their number was set
+    // by. Few pairs can all miss the event, as reads of a real variant can at
+    // low depth; spike does not draw again until one shows it, which would
+    // bias sensitivity, but says so (the review's low-count note).
+    let alt_fragments = pairs_showing(&evidence_of(event, haplotype), &spans);
+    if alt_fragments == 0 {
+        log::warn!(
+            "event {}:{}-{}: none of the {} read pair(s) spike planted shows it (requested AF \
+             {:.3}), so no caller can find it in these reads. truth.vcf still lists it, with \
+             SIM_ALT_FRAGS=0; a real variant this rare can go unseen at this depth too.",
+            sv_chrom,
+            sv_start,
+            sv_end,
+            chimeric.len(),
+            vaf,
+        );
+    }
 
     // For DUPs with legacy junction model, generate depth copies inside the
     // region. With the full tandem model, tiling handles depth automatically.
@@ -357,6 +375,7 @@ fn simulate_event_inner(
         suppressed_names: suppressed,
         uncovered_breakpoint_sides,
         adjusted_vaf,
+        alt_fragments,
         depth_fold,
         origin_chances: origin
             .map(|site| site.removal_chances(&read_copy, vaf))
@@ -840,10 +859,11 @@ fn floor_tiling_count(requested: usize, coverage: f64, vaf: f64) -> (usize, bool
         return (requested, false);
     }
     log::warn!(
-        "coverage {:.1}x at VAF {:.3} asks for {} tiled fragment(s); spike emits the \
-         {} it needs to plant the event at all, so the realized allele fraction is \
-         above the {:.3} requested; the truth VCF records the realized fraction as \
-         SIM_VAF and the {:.3} requested as SIM_REQ_VAF",
+        "coverage {:.1}x at VAF {:.3} asks for {} tiled fragment(s); spike emits \
+         {} anyway, so the realized allele fraction is above the {:.3} requested; the \
+         truth VCF records the realized fraction as SIM_VAF and the {:.3} requested as \
+         SIM_REQ_VAF. Those fragments land anywhere on the haplotype and may not show \
+         the event; SIM_ALT_FRAGS says how many do",
         coverage,
         vaf,
         requested,
@@ -937,9 +957,9 @@ fn sample_ref_overlapping_start(
 /// `other_copy` is the same haplotype with the other sample copy's alleles,
 /// and the chance a fragment comes from it (above VAF 0.5).
 ///
-/// Returns the pairs, and the fraction they actually plant when the additive
-/// cap or the two-fragment floor moved the count off `vaf` (see
-/// [`TilingCount`]).
+/// Returns the pairs, the fraction they plant when the additive cap or the
+/// two-fragment floor moved the count off `vaf` (see [`TilingCount`]), and
+/// where each pair lies on the haplotype, in the pairs' order.
 #[allow(clippy::too_many_arguments)]
 fn tile_haplotype_reads(
     haplotype: &VariantHaplotype,
@@ -951,10 +971,10 @@ fn tile_haplotype_reads(
     breakpoint_only: bool,
     name_prefix: &str,
     rng: &mut StdRng,
-) -> (Vec<ReadPair>, Option<f64>) {
+) -> (Vec<ReadPair>, Option<f64>, Vec<PairSpans>) {
     let hap_len = haplotype.total_len;
     if hap_len == 0 {
-        return (Vec::new(), None);
+        return (Vec::new(), None, Vec::new());
     }
 
     // Use the library's real mean fragment length; fall back only when the
@@ -980,6 +1000,7 @@ fn tile_haplotype_reads(
     );
 
     let mut pairs = Vec::with_capacity(n_frags);
+    let mut spans = Vec::with_capacity(n_frags);
 
     // Check if any novel (non-reference) segments exist. If so, placement
     // below draws the fragment start directly from the starts whose fragment
@@ -1052,7 +1073,7 @@ fn tile_haplotype_reads(
             _ => haplotype,
         };
 
-        if let Some(pair) = synth_gen.generate_haplotype_read_pair(
+        if let Some((pair, at)) = synth_gen.generate_haplotype_read_pair(
             source,
             hap_start,
             frag_len,
@@ -1060,10 +1081,35 @@ fn tile_haplotype_reads(
             rng,
         ) {
             pairs.push(pair);
+            spans.push(at);
         }
     }
 
-    (pairs, plan.adjusted_vaf)
+    (pairs, plan.adjusted_vaf, spans)
+}
+
+/// Where `event`'s planted pairs show it on `haplotype`. A small variant's
+/// changed bases are REF and ALT without their common prefix, then suffix
+/// (`carried::changed_span`), placed after the haplotype's left flank.
+fn evidence_of(event: &SimEvent, haplotype: &VariantHaplotype) -> Evidence {
+    match event {
+        SimEvent::SmallVariant { pos, ref_allele, alt_allele, .. } => {
+            let (start, end) = crate::carried::changed_span(*pos, ref_allele, alt_allele);
+            let prefix = start - pos;
+            let suffix = ref_allele.len() as u64 - prefix - (end - start);
+            let left = haplotype.segments.first().map_or(0, |s| s.sequence.len() as u64);
+            Evidence::Bases {
+                start: left + prefix,
+                end: left + alt_allele.len() as u64 - suffix,
+            }
+        }
+        _ => Evidence::Junctions(haplotype.junctions()),
+    }
+}
+
+/// How many of the pairs at `spans` show the event.
+fn pairs_showing(evidence: &Evidence, spans: &[PairSpans]) -> usize {
+    spans.iter().filter(|at| evidence.shown_by(at)).count()
 }
 
 /// [`depth_fold`] with each bin's depth measured by `coverage_at(chrom,
@@ -3391,6 +3437,7 @@ mod tests {
             suppressed_names: suppressed.iter().map(|n| n.to_string()).collect(),
             uncovered_breakpoint_sides: Vec::new(),
             adjusted_vaf: None,
+            alt_fragments: 0,
             depth_fold: DepthFold::default(),
             origin_chances: Vec::new(),
         }
@@ -3903,5 +3950,97 @@ mod tests {
         let dup = SimEvent::Duplication { chrom: "chr1".into(), dup_start: 10, dup_end: 20, gene: "G".into(), allele_fraction: None };
         assert!(is_additive(&dup, "junction"));
         assert!(!is_additive(&dup, "full"));
+    }
+
+    /// A small variant at chr1:5000 (0-based) with `ref_allele` and
+    /// `alt_allele`, and its haplotype with 2000-base flanks.
+    fn small_variant(ref_allele: &[u8], alt_allele: &[u8]) -> (SimEvent, VariantHaplotype) {
+        let seq: Vec<u8> = (0..10_000usize).map(|i| b"ACGT"[i % 4]).collect();
+        let reference = SharedReference::from_sequences([("chr1".to_string(), seq)].into());
+        let event = SimEvent::SmallVariant {
+            chrom: "chr1".to_string(),
+            pos: 5000,
+            ref_allele: ref_allele.to_vec(),
+            alt_allele: alt_allele.to_vec(),
+            gene: "G".to_string(),
+            allele_fraction: None,
+        };
+        let hap = VariantHaplotype::from_small_variant(&reference, "chr1", 5000, ref_allele, alt_allele, 2000)
+            .unwrap();
+        (event, hap)
+    }
+
+    #[test]
+    fn test_a_small_variants_evidence_is_its_changed_bases_after_the_left_flank() {
+        let bases = |r: &[u8], a: &[u8]| {
+            let (event, hap) = small_variant(r, a);
+            evidence_of(&event, &hap)
+        };
+        assert_eq!(bases(b"A", b"T"), Evidence::Bases { start: 2000, end: 2001 });
+        // The shared first base is the anchor: a deletion's change is the
+        // join after it, an insertion's the bases after it.
+        assert_eq!(bases(b"ACG", b"A"), Evidence::Bases { start: 2001, end: 2001 });
+        assert_eq!(bases(b"A", b"ACGT"), Evidence::Bases { start: 2001, end: 2004 });
+        // A shared last base is trimmed too.
+        assert_eq!(bases(b"CAT", b"CGT"), Evidence::Bases { start: 2001, end: 2002 });
+    }
+
+    #[test]
+    fn test_a_structural_events_evidence_is_its_haplotypes_junctions() {
+        let event = SimEvent::Deletion {
+            chrom: "chr1".to_string(),
+            del_start: 2000,
+            del_end: 3000,
+            gene: "G".to_string(),
+            exons: vec![],
+            allele_fraction: None,
+        };
+        let hap = del_haplotype(2000, 1000);
+        assert_eq!(evidence_of(&event, &hap), Evidence::Junctions(hap.junctions()));
+        assert_eq!(hap.junctions(), vec![2000]);
+    }
+
+    #[test]
+    fn test_only_the_pairs_that_show_the_event_are_counted() {
+        let snv = Evidence::Bases { start: 2000, end: 2001 };
+        let pair = |a: u64| PairSpans { fragment: (a, a + 400), mates: [(a, a + 150), (a + 250, a + 400)] };
+        // Over the SNV with R1, with R2, and a fragment around it with
+        // neither read on it.
+        let spans = [pair(1900), pair(1700), pair(1820)];
+        assert_eq!(pairs_showing(&snv, &spans), 2);
+    }
+
+    #[test]
+    fn test_each_tiled_pairs_spans_are_where_its_reads_came_from() {
+        // Random bases and an adapter-trimmed library at Q93 (no errors), so
+        // each read is exactly the haplotype at its span and the two mates'
+        // 3' trims often differ.
+        let mut rng = StdRng::seed_from_u64(5);
+        let sequence: Vec<u8> = (0..4_000).map(|_| b"ACGT"[rng.gen_range(0..4)]).collect();
+        let hap = make_haplotype(vec![HaplotypeSegment {
+            sequence,
+            origin: Some(SegmentOrigin { chrom: "chr1".to_string(), ref_start: 1_000, ref_end: 5_000, is_reverse: false }),
+            hap_offset: 0,
+        }]);
+        let pool = ReadPool { pairs: vec![], frag_dist: FragmentDist::from_stats(300.0, 60.0) };
+        let gen = mock_synth_gen_at_q(151, 93).with_adapter_trim(true);
+        let (pairs, _, spans) = tile_haplotype_reads(&hap, None, &gen, &pool, 30.0, 0.5, false, "sp", &mut rng);
+        assert_eq!(pairs.len(), spans.len());
+        assert!(pairs.len() > 100, "{} pairs", pairs.len());
+        let mut unequal = 0;
+        for (pair, at) in pairs.iter().zip(&spans) {
+            let [(fs, fe), (rs, re)] = at.mates;
+            let fwd = hap.get_sequence(fs, (fe - fs) as usize).to_vec();
+            let mut rev = hap.get_sequence(rs, (re - rs) as usize).to_vec();
+            extract::reverse_complement(&mut rev);
+            let mut reads = [pair.seq1.clone(), pair.seq2.clone()];
+            reads.sort();
+            let mut expected = [fwd, rev];
+            expected.sort();
+            assert_eq!(reads, expected, "{} at {:?}", pair.name, at);
+            assert_eq!(at.fragment, (fs, re), "{}", pair.name);
+            unequal += usize::from(pair.seq1.len() != pair.seq2.len());
+        }
+        assert!(unequal > 0, "no pair had mates of different lengths");
     }
 }
