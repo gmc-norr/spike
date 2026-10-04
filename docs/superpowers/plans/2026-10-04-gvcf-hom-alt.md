@@ -75,3 +75,24 @@ If R finds no such window, H3 uses a window found by widening the draw to the wh
 - REF is the reference base. ALT is the next of A, C, G, T after it.
 - H3 takes R's missed sites in order. It uses the first at which the master binary runs without refusing, and lists the ones it skipped and why.
 - H2(c) takes the first window with hom-alt calls, no het call and no miss, under the same refusal rule.
+
+## Result (2026-10-04): supported
+
+Code `7d6e605`. Binaries: new release `920d2b7c`, new debug `b553389e`, master `658baa4` release `93eb71b1`. Scratch: `scratchpad/gvcf/` (`h_run.py`, `h_run.log`, `h/`).
+
+**Tests.** 701 pass (2 new), 0 fail, 1 ignored. The mutation runner checks the unmutated `loh::`/`gvcf` tests are green first (27), then catches **5 of 5** mutants. clippy gives the same warnings as master.
+
+**R** is in the addendum: 88 of 500 windows are affected, and the pileup misses 17 of their 377 hom-alt calls.
+
+**H1: PASS.** In the reviewer's script (scratch copy), `hom_only` gives **0 REF and 5 ALT** (master: 5 REF and 0 ALT), and `hom_and_het` stays at 0 REF and 7 ALT. Every other result is as in the validate-base-depth result.
+
+**H2: PASS.** Each case gave the same 5 files as master, byte for byte:
+- (a) without `--gvcf`, at R's first window, with `snp:chr20:10019032:A:C`;
+- (b) with `--gvcf`, at the first window with a het call. That is the same window, and the same event;
+- (c) with `--gvcf`, at `snp:chr20:5237028:C:G`, the first window with hom-alt calls, no het call and no miss, where master ran.
+
+**H3: PASS.** R's missed sites, taken in order:
+- The first 8 (chr20:26.7-28.2 Mb) were skipped, because master refused their events. Four times this was RF8. Three times the donor reads were too few: 3, 5 and 6 pairs, against the 30 needed. The plan's rule says to skip those. So at those sites, spike does not run an event at all.
+- At the 9th, `chr20:4767379 A>G` (window 181, event `snp:chr20:4768371:A:C`), the pileup sees 26 reads, not 90% G, so it misses the call. There, every one of spike's 13 reads that cover the site carries **G** with the new binary. With master, all 13 carry **A**.
+
+**What this means at the hospital.** With `--gvcf`, a hom-alt call that the pileup misses no longer turns into REF on spike's reads. In R's sample that happened at 17 of 377 hom-alt calls in affected windows. Most of them lie where spike refuses to run anyway, but not all: chr20:4767379 is one where it does run. Without `--gvcf`, nothing changes.
