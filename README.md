@@ -1609,6 +1609,7 @@ simulate.rs      Read suppression + synthetic read tiling
 origin.rs        --edit-model origin: each read's chance of coming from the edited copy, look-alikes, origin depth;
                  under either model, the duplicates of a removed pair
 census.rs        Reads spike cannot edit (SIM_RESIST) and the warn/refuse thresholds and messages
+carried.rs       Small variants the sample already carries: reads with another allele at the site
 synth.rs         Quality-profiled synthetic read generation
 extract.rs       BAM/CRAM read pair extraction
 stats.rs         Fragment length distribution
