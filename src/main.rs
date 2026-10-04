@@ -462,6 +462,9 @@ fn main() -> Result<()> {
     // Validate inputs.
     validate_allele_fraction(args.allele_fraction)?;
     validate_flank(args.flank)?;
+    // Before the output folder exists: a refused run leaves nothing behind.
+    validate_into_fastq(args.into_fastq.as_deref())?;
+    validate_fastq_prefix(args.fastq_prefix.as_deref())?;
 
     // Create output directory.
     std::fs::create_dir_all(&args.output)?;
@@ -512,8 +515,6 @@ fn main() -> Result<()> {
     }
 
     validate_edit_model(&args.edit_model)?;
-    validate_into_fastq(args.into_fastq.as_deref())?;
-    validate_fastq_prefix(args.fastq_prefix.as_deref())?;
 
     // Compute BAM stats: the cycles each read is sequenced for, and whether
     // the library was adapter-trimmed.
