@@ -146,7 +146,7 @@ Probe `scripts/carried/probe.py` at the commit before this one. Output: `scratch
 
 Both sites already show another allele in this sample's reads.
 
-**The baseline.** spike's pileup SNP rule, compared site by site on the SNVs, gives the same answer as the new rule on all but 2 of 1,900 sites:
+**The baseline.** spike's pileup SNP rule, compared site by site on the SNVs, gives the same answer as the new rule on all but 2 of 1,400 sites:
 - the K2a site above (new: refuse, baseline: pass);
 - one K2c site that the new rule leaves unchecked (fewer than 10 reads span bases `s-1` to `e`) and the baseline passes.
 
