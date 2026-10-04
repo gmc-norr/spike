@@ -119,3 +119,31 @@ Every K1 miss and every K2 refusal is listed with its N, K and reads, so a cause
 **G3: nothing else changes.** On the hospital BAM, with `--seed 1 --threads 16`, the new and master binaries must give identical `truth.vcf`, `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt` and `fastq_removed_reads.txt`:
 - for F1's three structural events;
 - for one SNV at a K2(a) site.
+
+## K result (2026-10-04): PASS, so build
+
+Probe `scripts/carried/probe.py` at the commit before this one. Output: `scratchpad/carried/k/` (`probe.log`, `sites.tsv`, `sites.vcf`). The run took 66 s.
+
+| group | sites | checked | refused | share | unchecked | baseline refused | bound |
+|---|---|---|---|---|---|---|---|
+| K1 het SNV | 300 | 300 | 298 | 0.993 | 0 | 298/300 | >= 0.95 PASS |
+| K1 hom SNV | 300 | 299 | 299 | 1.000 | 1 | 299/299 | >= 0.99 PASS |
+| K1 het indel | 200 | 200 | 195 | 0.975 | 0 | - | >= 0.90 PASS |
+| K1 hom indel | 200 | 200 | 197 | 0.985 | 0 | - | >= 0.95 PASS |
+| K2a random SNV | 500 | 473 | 1 | 0.002 | 27 | 0/473 | <= 0.01 PASS |
+| K2b random deletion | 250 | 238 | 0 | 0.000 | 12 | - | <= 0.01 PASS |
+| K2b random insertion | 250 | 229 | 0 | 0.000 | 21 | - | <= 0.01 PASS |
+| K2c HG001 SNV | 300 | 297 | 0 | 0.000 | 3 | 0/298 | <= 0.01 PASS |
+| K2c HG001 indel | 200 | 200 | 1 | 0.005 | 0 | - | <= 0.01 PASS |
+
+**The misses (seen, not judged).**
+- 2 het SNVs, with K/N of 16/101 and 2/28. The baseline missed the same two.
+- 8 indels: 7 insertions and 1 deletion. Six have K = 0, at a called het or hom site with 22-36 reads. A K of 0 at a hom call means the reads carry the gap somewhere other than the call's own boundary. That fits bwa placing an insertion in a repeat at another position than the VCF does. Not measured.
+
+**The two K2 refusals.**
+- `chr20:31166704 T>C`: 92 of 322 reads, about 10 times the usual depth.
+- HG001's `chr20:271444 TACAC>T`: 9 of 42 reads.
+
+Both sites already show another allele in this sample's reads.
+
+**The baseline.** spike's pileup SNP rule gives the same answers as the new rule on SNVs, except the one K2a site. So it would have been enough for SNVs, but it cannot see indels.
