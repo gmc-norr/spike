@@ -151,3 +151,33 @@ Both sites already show another allele in this sample's reads.
 - one K2c site that the new rule leaves unchecked (fewer than 10 reads span bases `s-1` to `e`) and the baseline passes.
 
 So it would have been enough for SNVs, but it cannot see indels.
+
+## Result (2026-10-04): supported
+
+Code `a4b0c41`. Binaries: new release `61f2f01b`, new debug `86c2dd65`, master release `91f8fbab`. Runs: `scratchpad/carried/g_run.sh` (log `carried/g_run.log`) and `scratchpad/carried/g2/`.
+
+**Tests.** 696 pass (11 new), 0 fail, 1 ignored (bcftools on the PATH), and the probe's 14 pass. The mutation runner checks the unmutated tests are green first, then catches 13 of 14 mutants: all 11 planned, plus suffix trimming and an N base counted.
+- The survivor removes the call from `main`. No unit test reaches `main`, which is one function. G1 and G2 run the binary and do reach it.
+- The plan asked for a test that sees the info line logged at a REF site. The test log capture keeps only warnings, so that line is seen in G1 and G3 instead.
+- clippy gives the same warnings as master, after two of the new code's were fixed (a large enum variant, a complex test type).
+
+**G1: PASS.** One run of the new binary with all 2,500 K sites (`--allow-overlap`) took 14.6 s and exited 1.
+- It logged one line per site, 2,500 of 2,500.
+- It listed 991 refused events, the 989 K1 and 2 K2 refusals the probe found.
+- It warned at 64 sites, the probe's 64 unchecked.
+- The counts (N, K) are identical at **2,500 of 2,500** sites, and so are the decisions.
+
+**G2: PASS.** The reviewer's script stops at `existing_event` because its `run` raises on a non-zero exit. A scratch copy (`carried/g2/scripts/`) records the refusal instead.
+- `existing_event`: exit 1, `SNV  chr1:5001 T>A: 38 of 38 reads carry another allele here`, then `Error: the sample already carries another allele at 1 small variant(s): SNV  chr1:5001 T>A (38 of 38 reads). ...`
+- Every other result is as before:
+  - `hom_only` 5/0 and `hom_and_het` 0/7;
+  - `asymmetric_mates` 150/150;
+  - `low_fraction` 2 pairs, 0 ALT, `SIM_VAF=0.014`;
+  - `indel_rate` NaN, 2.0 and -0.5 all exit 0;
+  - `true_del_validate` exit 1, base depth 0;
+  - clean tiling 148 reads and origin 111;
+  - the two FASTQ probes refused, as after the fastq-safety fix.
+
+**G3: PASS.** The new and master binaries gave identical `truth.vcf`, `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt` and `fastq_removed_reads.txt`:
+- for F1's three structural events, which logged no check line;
+- for `snp:chr20:51218639:T:C;af=0.5`, the first K2a site with N of at least 25, which logged `0 of 33 reads carry another allele here`.
