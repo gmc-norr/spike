@@ -1,0 +1,139 @@
+# Read names: spike's reads named like the input's, and marked SPIKE
+
+**Asked 2026-10-04.** The user wants two things:
+- spike's reads can be told apart from real ones;
+- every tool in the raredisease pipeline still works on them.
+
+Real names differ from one dataset to the next, so spike must copy the shape of the input's names rather than use one fixed format. The user picked this option: put `SPIKE` in the machine-name part of the name.
+
+## Measured before this plan
+
+- **What raredisease runs.** The from_rv HG001 30x run (`pipeline_info/nf_core_raredisease_software_mqc_versions.yml`) uses Picard 3.3.0, FastQC 0.12.1, bwa-mem2 2.2.1 and GATK 4.5.0.0. Picard MarkDuplicates runs with `--READ_NAME_REGEX <optimized ...>` (the default) and `--OPTICAL_DUPLICATE_PIXEL_DISTANCE 100`.
+- **Picard leans on the names.** Its metrics count 10,361,338 optical duplicate pairs out of 17,385,340 duplicate pairs.
+- **The read group does not come from the names.** It is `ID:<fastq file name>`, set by bwa-mem2 `-R` from the sample sheet.
+- **How Picard 3.3.0 reads a name.** Read with `javap` from `picard/sam/util/ReadNameParser.class`:
+  - it splits the name on `:` (byte 58) and accepts 5 or 7 fields;
+  - the last three fields are the tile, x and y;
+  - any other count logs, once per run: `Default READ_NAME_REGEX '%s' did not match read name '%s'. You may need to specify a READ_NAME_REGEX in order to correctly identify optical duplicates. ...`
+  - such a read gets no position, so it can never count as an optical duplicate.
+- **The input names differ by machine.** The first read of each local BAM, and of the hospital BAM above:
+  - `A00744:46:HV3C3DSXX:2:1221:8775:9361` (GIAB HG002 NovaSeq 6000; 4 BAMs);
+  - `D00360:96:H2YLYBCXX:1:2105:5916:51581` (GIAB HG002 HiSeq 2500; 2 BAMs);
+  - `LH00352:…` (the hospital's NovaSeq X).
+
+  All have 7 fields. 200,000 hospital chr20 reads span 247 lane:tile pairs.
+- **spike's names today:**
+  - `ev{:04}_hap_{:06}` (`simulate.rs` `tile_haplotype_reads`);
+  - `ev{:04}_dup_depth_{:06}` (`synth.rs` `generate_dup_depth_copies`, `--dup-model junction` only).
+
+  They are written to FASTQ as `@<name>/1` and `/2`.
+- **Code that recognises spike's names:**
+  - `validate.rs` `planted_read_prefix` (the `ins_planted` and `del_planted` rows), pinned to the namer by `simulate.rs:3004` `test_an_insertions_tiled_reads_carry_the_prefix_validate_looks_for`;
+  - `scripts/review_sv_model.py:169`, `startswith("ev")`;
+  - `scripts/rf13_planted.py`, `rf13b_planted.py` and `rf14_planted.py`. These read runs that are already done, so they stay as they are.
+- **spike never edits a real read in place.** Grepping `src/` for writes to `seq1`/`seq2` finds hits only in test modules. Every read spike changes is a new read, so a mark on spike's reads covers all of them, and nothing else.
+
+## Design (locked)
+
+**Learning the shape.** `bam_stats` already reads the input's first 50,000 primary, mapped, non-duplicate, non-QC-fail records. It now also keeps their names.
+
+- Each name falls into one class:
+  - **7-part:** it splits on `:` into exactly 7 fields, and the last three are each 1-9 ASCII digits;
+  - **5-part:** the same, with exactly 5 fields;
+  - **other:** anything else.
+- **The shape** is the class most sampled names fall into. A tie, or no names at all, gives **other**.
+- For a 7-part or 5-part shape, among the names of that class:
+  - **middle:** the most common run of middle fields. That is fields 2-4 (`RUN:FLOWCELL:LANE`) for 7-part, and field 2 (`LANE`) for 5-part. A tie goes to the smallest string, so the choice is deterministic.
+  - **tiles:** the distinct tiles of the names with that middle.
+  - **x and y ranges:** the min and max of those names' x, and of their y.
+
+**The name.** spike's internal names stay as they are (`ev0001_hap_000123`, `ev0001_dup_depth_000123`). Each is written as:
+- `SPIKE_<internal>:<middle>:<tile>:<x>:<y>` for a 7-part or 5-part shape;
+- `SPIKE_<internal>` for **other**.
+
+  In the **other** case Picard cannot read the real names either, so a position on spike's reads would give them nothing.
+
+The tile, x and y come from a hash of the internal name: FNV-1a 64, then splitmix64 steps, one per value. They never come from the run's random stream. So every base, quality, position and choice in a run stays exactly as before, and only the names change.
+
+**Prefixes.** `planted_read_prefix(n)` becomes `SPIKE_ev{:04}_hap_`. `review_sv_model.py` tests `startswith("SPIKE_")`.
+
+**What the user sees:**
+- a log line naming the learned shape and one example of spike's names;
+- a README section on read names.
+
+**Tests, written first and seen red:**
+- the class rule for 7-part, 5-part, 6-part, non-digit tails, SRA-style names and empty input;
+- the majority and tie rules for the shape and for the middle;
+- tiles taken only from names with the chosen middle;
+- x and y within range;
+- the name for each shape, and that it parses back under Picard's rule (5 or 7 fields, last three digits);
+- the same internal name always gives the same name;
+- naming draws nothing from the random stream (same seed, with and without a shape: identical bases);
+- both namers (`_hap_` and `_dup_depth_`) use it;
+- `main` hands the learned shape to the generator;
+- the `planted_read_prefix` pin.
+
+**Mutation checks (each must turn a test red):**
+1. a 6-part name counts as 7-part;
+2. the digits check is dropped;
+3. the middle comes from the first name, not the most common;
+4. a tie goes to 7-part instead of other;
+5. the tile is fixed at the first tile seen;
+6. x is not clamped to the range;
+7. the `SPIKE_` prefix is dropped;
+8. the hap namer skips the shape;
+9. the dup-depth namer skips the shape;
+10. `main` does not hand over the shape;
+11. the tile is drawn from the run's random stream;
+12. `planted_read_prefix` goes back to `ev`.
+
+## Checks (locked before running)
+
+Two binaries:
+- **old** = master `3684f74`;
+- **new** = this branch.
+
+Both are built with a separate `CARGO_TARGET_DIR`, and both are md5'd. Runs use 16 threads. Each run's stderr goes to a log file that is read in full, and its exit status is checked.
+
+**K0: only the names change.** Every comparison runs old against new.
+- **K0a:** run 0 of the read-length K2 rerun. That is the first command in `readlen/full/spike.log`: HG002 hospital 30x, 700 events (654 small variants, 46 DUPs), `--seed 1 --threads 16 --align`. It is run with each binary from its own directory, using a relative `-o out`.
+- **K0b:** the same BAM, reference and seed, with `--dup-model junction --align` and these events:
+  - `del:chr20:10500000-10500300;af=0.5`
+  - `ins:chr20:10600000:100;af=0.5`
+  - `dup:chr20:10700000-10700200;af=0.5`
+
+  If spike refuses one (RF8), all three are moved +100,000 bp. The move is the same for both binaries, and is tried at most 3 times. Then `spike validate --bam out/sim.bam --truth out/truth.vcf --reference REF`.
+- **Pass, in both runs:**
+  - **R1.fq.gz and R2.fq.gz:** the same record count, in the same order.
+    - Every record whose old name starts with `ev` has the new name `SPIKE_<old name>` followed by either nothing or `:<middle>:<tile>:<x>:<y>`. The middle is the learned one, the tile is in the learned set, and x and y are in the learned ranges.
+    - Every other name is unchanged.
+    - Every sequence and quality is identical.
+  - **truth.vcf, events.bed, replaced_reads.txt and merge.sh:** byte-identical.
+  - **sim.bam:** record by record, with names mapped as above. Flag, contig, position, MAPQ, CIGAR, mate contig, mate position, TLEN, sequence and quality are all identical.
+  - **K0b:** the `spike validate` stdout is identical, including the `ins_planted` and `del_planted` rows.
+
+**K1: the tools read the names.** Run on K0a's and K0b's outputs, old and new alike.
+- **Picard 3.3.0 MarkDuplicates.** The jar is md5 `63ed3f5d6da8934d4199e06b1ac3c176`. It runs on `sim.bam` with the defaults raredisease uses (optimized `READ_NAME_REGEX`, pixel distance 100).
+  - **Pass:** new exits 0, and its stderr does not contain `did not match read name`.
+  - **Control:** old's stderr *does* contain it. If old's doesn't, the Picard check is no control, and K1-Picard is reported inconclusive.
+  - **Reported, not judged:** `READ_PAIR_OPTICAL_DUPLICATES`, old against new.
+- **FastQC 0.12.1** on `R1.fq.gz`.
+  - **Pass:** new's `fastqc_data.txt` has a `>>Per tile sequence quality` module.
+  - **Control:** old's lacks it. If old has it too, FastQC never needed the names, and that is reported. It is not a fail.
+- **The mark finds exactly spike's reads.**
+  - **Pass:** in new `sim.bam`, the distinct names starting `SPIKE_` number the same as the distinct names starting `ev` in old `sim.bam`, and the other names are the same set in both.
+
+**K2: the shape is learned right.**
+- **Inputs:** new spike, with one event `snp:chr20:10400000:<ref>:<alt>` (no `--align`), on three inputs:
+  - the hospital HG002 BAM (taken from K0a's log);
+  - `data/validation/hg002_novaseq_chr20.bam` (A00744);
+  - `data/giab_hg38/HG002/HG002.GRCh38.chr20.bwamem2.bam` (D00360).
+- **Pass:** for each input, the logged class, middle, tile set and x/y ranges equal what an independent `LC_ALL=C awk` gives over the same 50,000 records. Those records are the first 50,000 primary, mapped, non-duplicate, non-QC-fail records from `samtools view -F 0xF04`.
+
+**Outcomes:**
+- **K0, K1 and K2 pass:** supported. Merge on the user's word.
+- **K0 fails:** stop. A name reaches something it should not, and the cause is found before anything else.
+- **K1 Picard pass fails:** refuted for Picard. Look at why.
+- **K2 fails:** the learner has a bug. Fix it with a test first, then rerun K2.
+
+**Not run here:** the full raredisease pipeline, which needs the hospital. Also GATK's mitochondrial steps (RevertSam, SamToFastq, MergeBamAlignment): they pair mates by name, and old and new names are both unique, so they cannot tell old from new.
