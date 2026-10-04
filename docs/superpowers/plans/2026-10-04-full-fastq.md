@@ -108,3 +108,46 @@ The message: `RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, con
 - raredisease itself, and the real raw FASTQ (both at the hospital);
 - the gzip fallback (`pigz` is installed here);
 - samples with several FASTQ pairs (the user concatenates them first, as the guard message says).
+
+## Result (2026-10-04): supported
+
+**Setup.**
+- Binary `3b36bfbe` (code `4033041`).
+- 659 tests. 11 of the 11 planned mutants are caught. A 12th, `main` not calling `write_fastq_route`, survives the unit tests and is caught here: without it the run has no `fastq.sh`.
+- Logs: `scratchpad/fastq/{f_run,f1,f1_control,f2}.log`.
+
+**The input.**
+- **The stand-in raw FASTQ:** 478,815 pairs over chr20:9-13 Mb. samtools dropped 7,828 singletons.
+- **The control stand-in:** 126,141 pairs over chr20:20-21 Mb.
+- **The spike run:** exit 0, with no shift.
+  - `replaced_reads.txt` holds 7,171 pairs, of which spike kept 6,517 in R1/R2.
+  - `fastq_removed_reads.txt` holds 654 pairs.
+  - spike's own reads: 648 pairs.
+
+**F1: passes.**
+- `fastq.sh` exited 0 and printed `removed 654 original pairs, added 648 of spike's pairs`.
+- The checker, for each mate:
+  - 478,809 records, as wanted (478,815 - 654 + 648);
+  - byte-identical to the raw records minus the listed ones, in order, then spike's 648 with the header `@<name> <mate>:N:0:ACGTACGT+TGCATGCA`;
+  - 654 of the 654 listed names dropped;
+  - every name unique.
+- R1 and R2 hold the same names in the same order.
+- The list equals `replaced_reads.txt` minus the names in spike's R1, computed with `comm`.
+
+**F1 controls: both behave.**
+- The checker, fed the stand-in plus spike's reads with nothing dropped, says FAIL: 479,463 records, first difference at record 1,334.
+- `fastq.sh` on the control stand-in exited 1 with `R1: found 0 of the 654 originals listed`, and left no output.
+
+**F2: passes.** The full FASTQ was aligned with raredisease's `bwa-mem2 mem -M -K 100000000` and sorted. Then:
+- All **1,296 of 1,296** of spike's primary records have the same contig, position, CIGAR and strand as in `sim.bam`, and the same MAPQ.
+- `spike validate` on that BAM: `del_planted` PASS (8 reads) and `ins_planted` PASS (20 reads).
+- Reported, not judged: 8 rows pass on both the full-FASTQ BAM and `sim.bam`. The only failing row in both is the global `dup_rate` (`no dup flags`), because neither BAM went through duplicate marking. All 13 advisory rows pass.
+
+**F3: speed** (reported). 478,815 pairs took 2.46 s wall, both mates, `pigz -p 8`, with a 4 MB maximum resident size. That is about 194,600 pairs/s.
+
+`PREDICTED (not run)`: the hospital sample's 380,000,000 pairs would take about 33 minutes at that rate. Real files are read from disk, not page cache, so it may be slower.
+
+**Not run here:**
+- raredisease itself, and the real raw FASTQ;
+- the `gzip` fallback;
+- a real bcl-convert header. The stand-in's ` 1:N:0:ACGTACGT+TGCATGCA` was written by `f_run.sh`, in the bcl-convert form.
