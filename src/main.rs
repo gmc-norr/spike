@@ -172,8 +172,8 @@ struct Args {
     #[arg(long, value_name = "NAME", requires = "into_fastq")]
     fastq_prefix: Option<String>,
 
-    /// Indel error rate per base in synthetic reads (fraction of total error
-    /// that is indel rather than substitution). Default 0.0 means substitution-only.
+    /// Fraction of the sequencing errors in synthetic reads that are indels
+    /// rather than substitutions, in [0, 1]. Default 0.0: substitutions only.
     /// Typical Illumina: 0.0 to 0.05.
     #[arg(long, default_value_t = 0.0)]
     indel_error_rate: f64,
@@ -263,6 +263,20 @@ fn validate_allele_fraction(af: f64) -> Result<()> {
     // rejected rather than silently let through (L8).
     if !(af > 0.0 && af <= 1.0) {
         bail!("allele-fraction must be in (0.0, 1.0]");
+    }
+    Ok(())
+}
+
+/// Refuse an `--indel-error-rate` that is not a fraction (review finding 8):
+/// it is the share of sequencing errors drawn as indels, so NaN or a
+/// negative value turned indels off without a word, and above 1 acted as 1.
+fn validate_indel_error_rate(rate: f64) -> Result<()> {
+    // Negated so NaN fails too (L8).
+    if !((0.0..=1.0).contains(&rate)) {
+        bail!(
+            "--indel-error-rate must be in [0.0, 1.0]: it is the fraction of sequencing errors that are indels; got {}",
+            rate
+        );
     }
     Ok(())
 }
@@ -463,6 +477,7 @@ fn main() -> Result<()> {
     // Validate inputs.
     validate_allele_fraction(args.allele_fraction)?;
     validate_flank(args.flank)?;
+    validate_indel_error_rate(args.indel_error_rate)?;
     // Before the output folder exists: a refused run leaves nothing behind.
     validate_fastq_prefix(args.fastq_prefix.as_deref())?;
     validate_into_fastq(args.into_fastq.as_deref(), &args.output, fastq_prefix(&args))?;
@@ -5645,6 +5660,17 @@ cat "$root/validation_summary.tsv""#,
 
     fn base_at(pos: u64) -> u8 {
         crate::carried::tests::REF[pos as usize % crate::carried::tests::REF.len()]
+    }
+
+    #[test]
+    fn test_indel_error_rate_must_be_a_fraction() {
+        for ok in [0.0, 0.05, 1.0] {
+            validate_indel_error_rate(ok).unwrap();
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.5, 2.0, 1.000_000_1] {
+            let err = validate_indel_error_rate(bad).unwrap_err().to_string();
+            assert!(err.contains("--indel-error-rate") && err.contains("[0.0, 1.0]"), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -1312,7 +1312,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
   -o output/
 ```
 
-The `--indel-error-rate` specifies the fraction of sequencing errors that are indels (vs substitutions). Typical Illumina values are 0.0-0.05.
+The `--indel-error-rate` specifies the fraction of sequencing errors that are indels (vs substitutions). Typical Illumina values are 0.0-0.05. It is a probability, so spike refuses a value outside `[0, 1]`, including `nan` (review finding 8).
 
 ### Run time
 
@@ -1508,7 +1508,7 @@ Options:
           Name of the whole-sample pair --into-fastq writes: <output>/NAME_R1.fastq.gz and NAME_R2.fastq.gz [default: spiked]. A plain name, so many samples' pairs can sit side by side; -o picks the folder
 
       --indel-error-rate <INDEL_ERROR_RATE>
-          Indel error rate per base in synthetic reads (fraction of total error that is indel rather than substitution). Default 0.0 means substitution-only. Typical Illumina: 0.0 to 0.05
+          Fraction of the sequencing errors in synthetic reads that are indels rather than substitutions, in [0, 1]. Default 0.0: substitutions only. Typical Illumina: 0.0 to 0.05
           
           [default: 0]
 
@@ -1555,6 +1555,7 @@ the message is the exact text spike prints, measured by running it.
 | No events at all | `no events specified (use --event or --vcf)` | `main.rs` |
 | `--allele-fraction` outside `(0.0, 1.0]` — including `0`, a negative, `inf` and `nan` | `allele-fraction must be in (0.0, 1.0]` | `validate_allele_fraction` |
 | `--flank` below 2000 | `--flank 500 is too small: it must be at least 2000 so every original read replaced by synthetic reads is extracted` | `validate_flank` |
+| `--indel-error-rate` outside `[0.0, 1.0]`, including `nan` and `inf` ([Indel error model](#indel-error-model)) | `--indel-error-rate must be in [0.0, 1.0]: it is the fraction of sequencing errors that are indels; got NaN` | `validate_indel_error_rate` |
 | `--dup-model` other than `full`/`junction` | `invalid --dup-model 'tandem', expected 'full' or 'junction'` | `main.rs` |
 | `--region` with a 0 start (it is 1-based) | `region start must be >= 1 (1-based), got 0 in 'chr20:0-1000'` | `parse_region` |
 | `--region` with start after end | `region start > end (5000 > 1000) in 'chr20:5000-1000'; check your interval` | `parse_region` |
