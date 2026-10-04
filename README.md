@@ -1348,7 +1348,7 @@ spike --bam sample.bam --reference ref.fa --vcf variants.vcf -o output/S1 \
 This writes `output/S1/S1_R1.fastq.gz` and `output/S1/S1_R2.fastq.gz`: the whole sample, spiked. These are the pair to give the pipeline.
 - **The prefix.** Without `--fastq-prefix` the pair is `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`. With many samples, a prefix per sample keeps the pairs apart. It is a plain name, with no `/`, because `-o` picks the folder.
 - **Not `R1.fq.gz` and `R2.fq.gz`.** Those hold only spike's reads around the events (the originals it kept and its own new ones), not the whole sample.
-- **Checks.** spike checks that both raw files exist, and that the prefix is a plain name, before it starts.
+- **Checks.** Before it starts, spike checks that both raw files exist and are two different files, that neither is a file the run writes (such as `S1_R1.fastq.gz` or `R1.fq.gz` in `-o`), and that the prefix is a plain name.
 - **At the end** it runs the output's `fastq.sh`, and fails if `fastq.sh` refuses the raw files.
 
 `fastq.sh` can also be run by hand on a finished run:
@@ -1362,10 +1362,16 @@ What `fastq.sh` does:
 - **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back, and their duplicates. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
 - **It then adds spike's own reads** (`SPIKE_...`) at the end of each file. Their headers take the raw file's style, copied from its first record: for example ` 1:N:0:ACGTACGT+TGCATGCA` after the name, or `/1`.
 - **A read is matched by name:** its header's first word, without `@` and a trailing `/1` or `/2`. That is the name the aligner gave it in the BAM spike was run on.
-- **It stops, and leaves no output,** when either mate holds fewer of the listed originals than the list names. That means the raw FASTQ is not the full FASTQ of that BAM's run. A sample sequenced on several lanes is concatenated first (`cat` joins gzip files).
+- **It reads both mates together,** record by record. They must hold the same names in the same order, because an aligner pairs R1 and R2 by position.
+- **It stops, and changes nothing,** when:
+  - an output is the same file as an input (a raw file, or spike's own `R1.fq.gz`, `R2.fq.gz` or `fastq_removed_reads.txt`), or both outputs are one file, or both raw files are one file. Writing an output over an input would destroy it;
+  - the mates differ in name at some record, or one has more records;
+  - a record is broken: a header without `@`, a third line without `+`, a sequence and quality of different lengths, or a file that ends inside a record;
+  - a listed original is missing from the raw pair, or is in it more than once. Missing means the raw FASTQ is not the full FASTQ of that BAM's run. A sample sequenced on several lanes is concatenated first (`cat` joins gzip files), in the same lane order for R1 and R2.
+- **Outputs appear only when finished.** Each is written to a hidden temporary file beside it and moved into place once both mates are complete and checked. A run that stops leaves files already at those names as they were.
 - It needs no `align.sh` or `sim.bam`. It uses `pigz` when installed, and `gzip` otherwise.
 
-The checks are in `docs/superpowers/plans/2026-10-04-full-fastq.md`.
+The checks are in `docs/superpowers/plans/2026-10-04-full-fastq.md` and `docs/superpowers/plans/2026-10-04-fastq-safety.md`.
 
 ### Read names
 

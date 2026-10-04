@@ -463,8 +463,8 @@ fn main() -> Result<()> {
     validate_allele_fraction(args.allele_fraction)?;
     validate_flank(args.flank)?;
     // Before the output folder exists: a refused run leaves nothing behind.
-    validate_into_fastq(args.into_fastq.as_deref())?;
     validate_fastq_prefix(args.fastq_prefix.as_deref())?;
+    validate_into_fastq(args.into_fastq.as_deref(), &args.output, fastq_prefix(&args))?;
 
     // Create output directory.
     std::fs::create_dir_all(&args.output)?;
@@ -1365,11 +1365,58 @@ fn next_steps_message(output_dir: &str, into_fastq: bool) -> String {
     }
 }
 
-/// Refuse `--into-fastq` paths that are not files, before any work is done.
-fn validate_into_fastq(raw: Option<&[String]>) -> Result<()> {
-    for path in raw.unwrap_or_default() {
+/// The files a run writes into `-o`, besides `--into-fastq`'s pair.
+const RUN_OUTPUT_FILES: [&str; 12] = [
+    "R1.fq.gz",
+    "R2.fq.gz",
+    "truth.vcf",
+    "events.bed",
+    "replaced_reads.txt",
+    "fastq_removed_reads.txt",
+    "fastq.sh",
+    "align.sh",
+    "merge.sh",
+    "README.md",
+    "sim.bam",
+    "sim.bam.bai",
+];
+
+/// Whether `a` and `b` are one file on disk: the same device and inode, after
+/// symlinks. A path that does not exist is no file, so it is never the same.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// Refuse `--into-fastq` paths that are not files, one file given for both
+/// mates, and a raw file this run would write over (review finding 1: writing
+/// over a raw input destroys it), before any work is done.
+fn validate_into_fastq(raw: Option<&[String]>, output_dir: &str, prefix: &str) -> Result<()> {
+    let raw = raw.unwrap_or_default();
+    for path in raw {
         if !Path::new(path).is_file() {
             bail!("--into-fastq {} is not a file; give the sample's raw FASTQ pair (R1 then R2)", path);
+        }
+    }
+    if let [r1, r2] = raw {
+        if same_file(Path::new(r1), Path::new(r2)) {
+            bail!("--into-fastq {} and {} are the same file; give the sample's R1 file, then its R2 file", r1, r2);
+        }
+    }
+    let written = whole_sample_paths(output_dir, prefix)
+        .into_iter()
+        .chain(RUN_OUTPUT_FILES.iter().map(|name| Path::new(output_dir).join(name)));
+    for out in written {
+        if let Some(path) = raw.iter().find(|path| same_file(Path::new(path), &out)) {
+            bail!(
+                "--into-fastq {} is the same file as {}, which this run writes; writing it would destroy the raw \
+                 FASTQ. Move the raw pair out of the -o folder, or give another -o or --fastq-prefix",
+                path,
+                out.display()
+            );
         }
     }
     Ok(())
@@ -2025,6 +2072,11 @@ set -euo pipefail
 # `cat` joins gzip files) from the run whose BAM spike was given. A read is
 # matched by name: its header's first word without `@` and a trailing /1 or
 # /2, the name the aligner gave it in the BAM.
+#
+# The two mates are read together, record by record, and must hold the same
+# names in the same order, as an aligner pairs them. No output may be one of
+# the inputs. Each output is written beside its name and moved there only when
+# both are complete and checked, so a run that fails changes nothing.
 if [ $# -lt 4 ]; then
     echo "Usage: bash fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 [THREADS]" >&2
     exit 2
@@ -2041,17 +2093,10 @@ for f in fastq_removed_reads.txt R1.fq.gz R2.fq.gz; do
     fi
 done
 
-if command -v pigz > /dev/null; then
-    ZIP=(pigz -p "$THREADS")
-    UNZIP=(pigz -dc)
-else
-    ZIP=(gzip)
-    UNZIP=(gzip -dc)
-fi
-
-TMP="$(mktemp -d)"
-# A run that does not finish leaves no output behind.
-trap 'rc=$?; rm -rf "$TMP"; if [ "$rc" -ne 0 ]; then rm -f "${OUT[@]}"; fi' EXIT
+die() {
+    echo "Error: $1" >&2
+    exit 1
+}
 
 fail() {
     echo "Error: $1" >&2
@@ -2059,30 +2104,135 @@ fail() {
     exit 1
 }
 
-# The raw records, but the removed originals; and the raw header style.
-KEEP_RAW=$(cat <<'AWK'
-BEGIN {
-    list = ENVIRON["SPIKE_REMOVED"]
-    while ((getline name < list) > 0) removed[name] = 1
-    close(list)
+# Writing an output over an input destroys that input, so a clash stops the
+# run before anything is written.
+if [ "${RAW[0]}" -ef "${RAW[1]}" ]; then
+    die "${RAW[0]} and ${RAW[1]} are the same file; give the sample's R1 file, then its R2 file."
+fi
+for o in "${OUT[@]}"; do
+    for i in "${RAW[@]}" "$DIR/R1.fq.gz" "$DIR/R2.fq.gz" "$DIR/fastq_removed_reads.txt"; do
+        if [ "$o" -ef "$i" ]; then
+            die "$o and $i are the same file; an output must not be one of fastq.sh's inputs."
+        fi
+    done
+done
+canon() { realpath -m -- "$1" 2> /dev/null || printf '%s\n' "$1"; }
+if [ "${OUT[0]}" -ef "${OUT[1]}" ] || [ "$(canon "${OUT[0]}")" = "$(canon "${OUT[1]}")" ]; then
+    die "${OUT[0]} and ${OUT[1]} are the same file; OUT_R1 and OUT_R2 must be two files."
+fi
+
+if command -v pigz > /dev/null; then
+    # The two mates are compressed at the same time.
+    ZIP=(pigz -p "$(( THREADS > 1 ? THREADS / 2 : 1 ))")
+    UNZIP=(pigz -dc)
+else
+    ZIP=(gzip)
+    UNZIP=(gzip -dc)
+fi
+
+TMP="$(mktemp -d)"
+PART=()
+PIDS=()
+# A run that does not finish removes only what it made: its temporary folder,
+# its unfinished outputs beside OUT_R1/OUT_R2, and its background jobs.
+cleanup() {
+    for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2> /dev/null || true; done
+    rm -rf "$TMP"
+    if [ ${#PART[@]} -gt 0 ]; then rm -f "${PART[@]}"; fi
 }
-NR % 4 == 1 {
-    if (NR == 1) {
-        space = index($0, " ")
-        if (space) style = substr($0, space)
-        else if ($0 ~ /\/[12]$/) style = "/" ENVIRON["SPIKE_MATE"]
-        else style = ""
-        printf "%s", style > ENVIRON["SPIKE_STYLE"]
-        close(ENVIRON["SPIKE_STYLE"])
-    }
-    name = $1
+trap cleanup EXIT
+for MATE in 1 2; do
+    o="${OUT[$((MATE - 1))]}"
+    case "$o" in
+        */*) d="${o%/*}"; d="${d:-/}" ;;
+        *) d=. ;;
+    esac
+    PART[$((MATE - 1))]="$(mktemp "$d/.${o##*/}.XXXXXX")"
+done
+
+# Both raw mates at once: R1 on the input, R2 through a named pipe. The
+# records kept go out unchanged, R1's on the output and R2's to a second
+# named pipe; the header style of each mate's first record is kept for
+# spike's reads.
+PAIR=$(cat <<'AWK'
+function stop(why) {
+    printf "%s\n", why > ENVIRON["SPIKE_WHY"]
+    failed = 1
+    exit 1
+}
+function name_of(header,   name) {
+    name = header
+    sub(/[ \t].*/, "", name)
     sub(/^@/, "", name)
     sub(/\/[12]$/, "", name)
-    skip = (name in removed)
-    dropped += skip
+    return name
 }
-!skip
-END { print dropped + 0 > ENVIRON["SPIKE_COUNT"] }
+function style_of(header, mate,   space) {
+    space = index(header, " ")
+    if (space) return substr(header, space)
+    if (header ~ /\/[12]$/) return "/" mate
+    return ""
+}
+BEGIN {
+    list = ENVIRON["SPIKE_REMOVED"]
+    while ((getline name < list) > 0) {
+        if (!(name in removed)) want++
+        removed[name] = 0
+    }
+    close(list)
+    raw2 = ENVIRON["SPIKE_RAW2"]
+    out2 = ENVIRON["SPIKE_OUT2"]
+    # Open R2's output now, so the job reading it never waits.
+    printf "" > out2
+}
+{
+    if ((getline line2 < raw2) <= 0)
+        stop("RAW_R2 ends after line " (NR - 1) " but RAW_R1 goes on; the mates must have the same records.")
+    part = NR % 4
+    if (part == 1) {
+        record++
+        if (substr($0, 1, 1) != "@" || substr(line2, 1, 1) != "@")
+            stop("record " record " (line " NR "): a FASTQ header starts with @.")
+        name = name_of($0)
+        if (name != name_of(line2))
+            stop("record " record ": RAW_R1 has " name " and RAW_R2 has " name_of(line2) "; the mates are not in the same order.")
+        if (NR == 1) {
+            printf "%s", style_of($0, 1) > ENVIRON["SPIKE_STYLE1"]
+            close(ENVIRON["SPIKE_STYLE1"])
+            printf "%s", style_of(line2, 2) > ENVIRON["SPIKE_STYLE2"]
+            close(ENVIRON["SPIKE_STYLE2"])
+        }
+        skip = (name in removed)
+        if (skip) {
+            if (removed[name]++ == 0) found++
+            dropped++
+        }
+    } else if (part == 2) {
+        length1 = length($0)
+        length2 = length(line2)
+    } else if (part == 3) {
+        if (substr($0, 1, 1) != "+" || substr(line2, 1, 1) != "+")
+            stop("record " record " (line " NR "): the third line of a FASTQ record starts with +.")
+    } else if (length($0) != length1 || length(line2) != length2) {
+        stop("record " record ": a sequence and its quality differ in length.")
+    }
+    if (!skip) {
+        print
+        print line2 > out2
+    }
+}
+END {
+    if (failed) exit 1
+    if ((getline line2 < raw2) > 0)
+        stop("RAW_R1 ends after line " NR " but RAW_R2 goes on; the mates must have the same records.")
+    if (NR % 4)
+        stop("the last record ends after line " (NR % 4) " of its 4.")
+    if (found != want)
+        stop("found " (found + 0) " of the " (want + 0) " originals listed in fastq_removed_reads.txt.")
+    if (dropped != found)
+        stop("an original listed in fastq_removed_reads.txt is in the raw pair more than once (" dropped " records for " found " names).")
+    print record + 0, found + 0 > ENVIRON["SPIKE_COUNT"]
+}
 AWK
 )
 
@@ -2108,29 +2258,49 @@ END { print added + 0 > ENVIRON["SPIKE_COUNT"] }
 AWK
 )
 
-WANT=$(wc -l < "$DIR/fastq_removed_reads.txt")
-for MATE in 1 2; do
-    : > "$TMP/style$MATE"
-    echo "R$MATE: ${RAW[$((MATE - 1))]} -> ${OUT[$((MATE - 1))]}"
-    {
-        "${UNZIP[@]}" "${RAW[$((MATE - 1))]}" \
-            | SPIKE_REMOVED="$DIR/fastq_removed_reads.txt" SPIKE_MATE="$MATE" \
-              SPIKE_STYLE="$TMP/style$MATE" SPIKE_COUNT="$TMP/dropped$MATE" awk "$KEEP_RAW"
-        "${UNZIP[@]}" "$DIR/R$MATE.fq.gz" \
-            | SPIKE_STYLE="$TMP/style$MATE" SPIKE_COUNT="$TMP/added$MATE" awk "$ADD_SPIKE"
-    } | "${ZIP[@]}" > "${OUT[$((MATE - 1))]}"
-    DROPPED=$(cat "$TMP/dropped$MATE")
-    if [ "$DROPPED" -ne "$WANT" ]; then
-        fail "R$MATE: found $DROPPED of the $WANT originals listed in $DIR/fastq_removed_reads.txt."
+echo "R1: ${RAW[0]} -> ${OUT[0]}"
+echo "R2: ${RAW[1]} -> ${OUT[1]}"
+: > "$TMP/style1"
+: > "$TMP/style2"
+mkfifo "$TMP/raw2" "$TMP/out2"
+"${UNZIP[@]}" "${RAW[1]}" > "$TMP/raw2" &
+UNZIP2=$!
+"${ZIP[@]}" < "$TMP/out2" > "${PART[1]}" &
+ZIP2=$!
+PIDS=("$UNZIP2" "$ZIP2")
+if ! "${UNZIP[@]}" "${RAW[0]}" \
+    | SPIKE_REMOVED="$DIR/fastq_removed_reads.txt" SPIKE_RAW2="$TMP/raw2" SPIKE_OUT2="$TMP/out2" \
+      SPIKE_STYLE1="$TMP/style1" SPIKE_STYLE2="$TMP/style2" SPIKE_WHY="$TMP/why" \
+      SPIKE_COUNT="$TMP/count" LC_ALL=C awk "$PAIR" \
+    | "${ZIP[@]}" > "${PART[0]}"; then
+    if [ -s "$TMP/why" ]; then
+        fail "$(cat "$TMP/why")"
     fi
-done
+    die "reading RAW_R1 or writing OUT_R1 failed; the message is above."
+fi
+wait "$UNZIP2" || die "reading RAW_R2 failed; the message is above."
+wait "$ZIP2" || die "writing OUT_R2 failed; the message is above."
+PIDS=()
+read -r RECORDS FOUND < "$TMP/count"
 
+for MATE in 1 2; do
+    "${UNZIP[@]}" "$DIR/R$MATE.fq.gz" \
+        | SPIKE_STYLE="$TMP/style$MATE" SPIKE_COUNT="$TMP/added$MATE" LC_ALL=C awk "$ADD_SPIKE" \
+        | "${ZIP[@]}" >> "${PART[$((MATE - 1))]}"
+done
 ADDED1=$(cat "$TMP/added1")
 ADDED2=$(cat "$TMP/added2")
 if [ "$ADDED1" -ne "$ADDED2" ]; then
     fail "spike's R1.fq.gz and R2.fq.gz hold $ADDED1 and $ADDED2 of its own reads; they must pair up."
 fi
-echo "Done: removed $WANT original pairs, added $ADDED1 of spike's pairs."
+
+# Both complete and checked: publish them, with the mode a new file gets here.
+MODE=$(printf '%o' $(( 0666 & ~0$(umask) )))
+for MATE in 1 2; do
+    chmod "$MODE" "${PART[$((MATE - 1))]}"
+    mv -f -T "${PART[$((MATE - 1))]}" "${OUT[$((MATE - 1))]}"
+done
+echo "Done: read $RECORDS raw pairs, removed $FOUND original pairs, added $ADDED1 of spike's pairs."
 "#
     .replace("@THREADS@", &threads.to_string());
 
@@ -3115,6 +3285,204 @@ mod tests {
         assert!(!base.join("pwned").exists(), "fastq.sh ran the backtick in a path as a command");
         assert_eq!(gz_read(&o1), fastq_expected(1, "comment"));
         assert_eq!(gz_read(&o2), fastq_expected(2, "comment"));
+    }
+
+    fn stderr_of(out: &std::process::Output) -> String {
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
+    /// The names in `dir`, sorted: a leftover temporary file shows up here.
+    fn entries(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_an_output_that_is_a_raw_input() {
+        // Review finding 1: `> OUT` emptied the raw file, then the trap deleted it.
+        for how in ["same_name", "hard_link", "symlink"] {
+            let dir = scratch_dir(&format!("fastq_alias_{how}"));
+            let [r1, r2, _, o2] = fastq_paths(&dir, "");
+            fastq_fixture(&dir, [&r1, &r2], "comment");
+            let o1 = match how {
+                "same_name" => r1.clone(),
+                "hard_link" => {
+                    let link = dir.join("link_R1.fq.gz");
+                    std::fs::hard_link(&r1, &link).unwrap();
+                    link
+                }
+                _ => {
+                    let link = dir.join("link_R1.fq.gz");
+                    std::os::unix::fs::symlink(&r1, &link).unwrap();
+                    link
+                }
+            };
+            let before = std::fs::read(&r1).unwrap();
+            let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+            assert!(!out.status.success(), "{how}");
+            assert!(stderr_of(&out).contains("same file"), "{how}: {}", stderr_of(&out));
+            assert_eq!(std::fs::read(&r1).unwrap(), before, "{how}: the raw R1 changed");
+            assert!(!o2.exists(), "{how}");
+        }
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_an_output_over_its_own_inputs() {
+        for own in ["R1.fq.gz", "R2.fq.gz", "fastq_removed_reads.txt"] {
+            let dir = scratch_dir(&format!("fastq_over_own_{own}"));
+            let [r1, r2, _, o2] = fastq_paths(&dir, "");
+            fastq_fixture(&dir, [&r1, &r2], "comment");
+            let target = dir.join(own);
+            let before = std::fs::read(&target).unwrap();
+            let out = run_fastq_script(&dir, &dir, [&r1, &r2, &target, &o2]);
+            assert!(!out.status.success(), "{own}");
+            assert!(stderr_of(&out).contains("same file"), "{own}: {}", stderr_of(&out));
+            assert_eq!(std::fs::read(&target).unwrap(), before, "{own} changed");
+        }
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_one_path_for_both_outputs() {
+        let dir = scratch_dir("fastq_one_output");
+        let [r1, r2, o1, _] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        // Neither exists yet, and the two spellings differ.
+        let o1_again = dir.join(".").join("out_R1.fq.gz");
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o1_again]);
+        assert!(!out.status.success());
+        assert!(stderr_of(&out).contains("same file"), "{}", stderr_of(&out));
+        assert!(!o1.exists());
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_one_file_for_both_raw_mates() {
+        let dir = scratch_dir("fastq_one_raw");
+        let [r1, r2, o1, o2] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        let out = run_fastq_script(&dir, &dir, [&r1, &r1, &o1, &o2]);
+        assert!(!out.status.success());
+        assert!(stderr_of(&out).contains("same file"), "{}", stderr_of(&out));
+        assert!(!o1.exists() && !o2.exists());
+    }
+
+    #[test]
+    fn test_a_refused_fastq_script_run_keeps_existing_outputs_and_leaves_no_temporary_file() {
+        let dir = scratch_dir("fastq_keep_existing");
+        let outs = dir.join("outs");
+        std::fs::create_dir_all(&outs).unwrap();
+        let [r1, r2, _, _] = fastq_paths(&dir, "");
+        let [_, _, o1, o2] = fastq_paths(&outs, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        std::fs::write(&o1, b"an earlier R1").unwrap();
+        std::fs::write(&o2, b"an earlier R2").unwrap();
+        // Refused only at the end, after both mates are read.
+        std::fs::write(dir.join("fastq_removed_reads.txt"), "M:1:FC:2:1101:99:99\n").unwrap();
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+        assert!(!out.status.success());
+        assert_eq!(std::fs::read(&o1).unwrap(), b"an earlier R1");
+        assert_eq!(std::fs::read(&o2).unwrap(), b"an earlier R2");
+        assert_eq!(entries(&outs), ["out_R1.fq.gz", "out_R2.fq.gz"]);
+    }
+
+    #[test]
+    fn test_a_finished_fastq_script_run_leaves_no_temporary_file_and_ordinary_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir("fastq_finished");
+        let outs = dir.join("outs");
+        std::fs::create_dir_all(&outs).unwrap();
+        let [r1, r2, _, _] = fastq_paths(&dir, "");
+        let [_, _, o1, o2] = fastq_paths(&outs, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+        assert!(out.status.success(), "{}", stderr_of(&out));
+        assert_eq!(entries(&outs), ["out_R1.fq.gz", "out_R2.fq.gz"]);
+        // The mode a new file gets here, as `> OUT` gave it.
+        let probe = dir.join("mode_probe");
+        std::fs::write(&probe, b"").unwrap();
+        let want = std::fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
+        for o in [&o1, &o2] {
+            assert_eq!(std::fs::metadata(o).unwrap().permissions().mode() & 0o777, want, "{}", o.display());
+        }
+    }
+
+    /// fastq.sh on the fixture, with the raw pair replaced by `raw` (R1 text,
+    /// R2 text) and the removed list by `removed`: the run's output, and
+    /// whether either output exists afterwards.
+    fn fastq_script_on(name: &str, raw: [&str; 2], removed: &str) -> (std::process::Output, bool) {
+        let dir = scratch_dir(name);
+        let [r1, r2, o1, o2] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        gz_write(&r1, raw[0]);
+        gz_write(&r2, raw[1]);
+        std::fs::write(dir.join("fastq_removed_reads.txt"), removed).unwrap();
+        let out = run_fastq_script(&dir, &dir, [&r1, &r2, &o1, &o2]);
+        (out, o1.exists() || o2.exists())
+    }
+
+    /// The raw text of mate `mate` holding `RAW_NAMES[i]` for each `i`, in order.
+    fn raw_mate(mate: u8, order: &[usize]) -> String {
+        order.iter().map(|&i| fq(&raw_header(RAW_NAMES[i], mate, "comment"), "AAAA")).collect()
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_mates_in_a_different_order() {
+        // Review finding 7: [a,b] against [b,a] exited 0 and kept the wrong order.
+        let removed = format!("{}\n", RAW_NAMES[1]);
+        let (out, written) = fastq_script_on("fastq_order", [&raw_mate(1, &[0, 1, 2, 3]), &raw_mate(2, &[0, 1, 3, 2])], &removed);
+        assert!(!out.status.success());
+        let err = stderr_of(&out);
+        assert!(err.contains("not in the same order") && err.contains("record 3"), "{err}");
+        assert!(!written);
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_mates_with_different_record_counts() {
+        let removed = format!("{}\n", RAW_NAMES[1]);
+        let r1 = raw_mate(1, &[0, 1, 2, 3]);
+        let longer = raw_mate(2, &[0, 1, 2, 3]) + &fq("@M:1:FC:2:1101:50:50 2:N:0:ACGT+TGCA", "AAAA");
+        for (case, r2) in [("short", raw_mate(2, &[0, 1, 2])), ("long", longer)] {
+            let (out, written) = fastq_script_on(&format!("fastq_count_{case}"), [&r1, &r2], &removed);
+            assert!(!out.status.success(), "{case}");
+            assert!(stderr_of(&out).contains("same records"), "{case}: {}", stderr_of(&out));
+            assert!(!written, "{case}");
+        }
+    }
+
+    #[test]
+    fn test_fastq_script_refuses_a_broken_fastq_record() {
+        let removed = format!("{}\n", RAW_NAMES[1]);
+        let good = [raw_mate(1, &[0, 1, 2, 3]), raw_mate(2, &[0, 1, 2, 3])];
+        let cut = |s: &str| s.lines().take(14).map(|l| format!("{l}\n")).collect::<String>();
+        let cases = [
+            ("cut_short", [cut(&good[0]), cut(&good[1])], "last record ends"),
+            ("quality_length", [good[0].clone(), good[1].replacen("+\nIIII\n", "+\nIII\n", 1)], "differ in length"),
+            ("no_at", [good[0].clone(), good[1].replacen("@M:1:FC:2:1101:40:40", "M:1:FC:2:1101:40:40", 1)], "starts with @"),
+            ("no_plus", [good[0].clone(), good[1].replacen("AAAA\n+\n", "AAAA\n-\n", 1)], "starts with +"),
+        ];
+        for (case, raw, why) in cases {
+            let (out, written) = fastq_script_on(&format!("fastq_broken_{case}"), [&raw[0], &raw[1]], &removed);
+            assert!(!out.status.success(), "{case}");
+            assert!(stderr_of(&out).contains(why), "{case}: {}", stderr_of(&out));
+            assert!(!written, "{case}");
+        }
+    }
+
+    #[test]
+    fn test_fastq_script_checks_the_removed_names_not_only_their_count() {
+        let twice = [raw_mate(1, &[0, 1, 1, 2, 3]), raw_mate(2, &[0, 1, 1, 2, 3])];
+        // One listed name twice: 2 records dropped for 1 name.
+        let (out, written) = fastq_script_on("fastq_listed_twice", [&twice[0], &twice[1]], &format!("{}\n", RAW_NAMES[1]));
+        assert!(!out.status.success());
+        assert!(stderr_of(&out).contains("more than once"), "{}", stderr_of(&out));
+        assert!(!written);
+        // Two listed, one found twice and one missing: the count alone matches.
+        let removed = format!("{}\nM:1:FC:2:1101:99:99\n", RAW_NAMES[1]);
+        let (out, written) = fastq_script_on("fastq_listed_swap", [&twice[0], &twice[1]], &removed);
+        assert!(!out.status.success());
+        assert!(stderr_of(&out).contains("found 1 of the 2"), "{}", stderr_of(&out));
+        assert!(!written);
     }
 
     /// A stub "samtools" for exercising merge.sh's own shell logic (the
@@ -5154,12 +5522,48 @@ cat "$root/validation_summary.tsv""#,
         let dir = scratch_dir("into_fastq_check");
         let present = dir.join("r1.fq.gz");
         std::fs::write(&present, b"").unwrap();
+        let other = dir.join("r2.fq.gz");
+        std::fs::write(&other, b"").unwrap();
         let (p, missing) = (present.to_str().unwrap().to_string(), dir.join("nope.fq.gz").to_str().unwrap().to_string());
-        validate_into_fastq(None).unwrap();
-        validate_into_fastq(Some(&[p.clone(), p.clone()])).unwrap();
-        let err = validate_into_fastq(Some(&[p.clone(), missing.clone()])).unwrap_err().to_string();
+        let q = other.to_str().unwrap().to_string();
+        let out = dir.join("out");
+        let out = out.to_str().unwrap();
+        validate_into_fastq(None, out, "spiked").unwrap();
+        validate_into_fastq(Some(&[p.clone(), q]), out, "spiked").unwrap();
+        let err = validate_into_fastq(Some(&[p.clone(), missing.clone()]), out, "spiked").unwrap_err().to_string();
         assert!(err.contains(&missing) && err.contains("--into-fastq"), "{err}");
-        assert!(validate_into_fastq(Some(&[missing, p])).is_err());
+        assert!(validate_into_fastq(Some(&[missing, p]), out, "spiked").is_err());
+    }
+
+    #[test]
+    fn test_into_fastq_refuses_a_raw_file_the_run_would_write_over() {
+        let dir = scratch_dir("into_fastq_clash");
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let s = |p: &std::path::Path| p.to_str().unwrap().to_string();
+        let (a, b, link) = (dir.join("a.fq.gz"), dir.join("b.fq.gz"), dir.join("link.fq.gz"));
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+        let o = out.to_str().unwrap();
+        validate_into_fastq(Some(&[s(&a), s(&b)]), o, "S1").unwrap();
+        // One file for both mates, by name and through a symlink.
+        for second in [&a, &link] {
+            let err = validate_into_fastq(Some(&[s(&a), s(second)]), o, "S1").unwrap_err().to_string();
+            assert!(err.contains("same file"), "{}: {err}", second.display());
+        }
+        // A raw file where this run writes: the whole-sample pair, or spike's R1/R2.
+        for name in ["S1_R1.fastq.gz", "S1_R2.fastq.gz", "R1.fq.gz", "R2.fq.gz", "fastq_removed_reads.txt"] {
+            let raw = out.join(name);
+            std::fs::write(&raw, b"raw").unwrap();
+            let err = validate_into_fastq(Some(&[s(&b), s(&raw)]), o, "S1").unwrap_err().to_string();
+            assert!(err.contains("same file") && err.contains(name), "{name}: {err}");
+            std::fs::remove_file(&raw).unwrap();
+        }
+        // The default prefix's name is free under another prefix.
+        let raw = out.join("spiked_R1.fastq.gz");
+        std::fs::write(&raw, b"raw").unwrap();
+        validate_into_fastq(Some(&[s(&raw), s(&b)]), o, "S1").unwrap();
     }
 
     #[test]
