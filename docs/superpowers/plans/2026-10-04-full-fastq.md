@@ -151,3 +151,34 @@ The message: `RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, con
 - raredisease itself, and the real raw FASTQ;
 - the `gzip` fallback;
 - a real bcl-convert header. The stand-in's ` 1:N:0:ACGTACGT+TGCATGCA` was written by `f_run.sh`, in the bcl-convert form.
+
+## `--raw-fastq`: spike runs fastq.sh itself (locked before running, 2026-10-04)
+
+**Asked.** The user picked "1" on 2026-10-04: one command instead of two, the way `--align` runs `align.sh`.
+
+**Design.**
+- **The option:** `--raw-fastq RAW_R1 RAW_R2`, exactly two values.
+- **Up front:** spike checks that both paths are files before it reads the BAM, so a typo costs seconds, not a run.
+- **At the end:** after `--align` if that is given too, spike runs the run's own `fastq.sh` with `RAW_R1 RAW_R2 <output>/spiked_R1.fastq.gz <output>/spiked_R2.fastq.gz <threads>`.
+  - If the script exits non-zero, spike exits non-zero and names its exit code. The script's own message reaches stderr, and it leaves no output.
+- **Docs:** the README and the run README say so.
+
+**Tests, written first and seen red:**
+- the option parses two values, and refuses one;
+- the up-front check refuses a missing file and accepts two present ones;
+- `run_fastq` on the fastq.sh test files writes `spiked_R*.fastq.gz` equal to `fastq_expected`;
+- `run_fastq` returns an error when fastq.sh refuses.
+
+**Mutation checks (each must turn a test red):**
+1. the up-front check passes a missing file;
+2. `run_fastq` ignores the script's exit status;
+3. `run_fastq` passes R1 as both raw files;
+4. the clap option takes one value.
+
+**Check G (on the F1 stand-in and spike run).** The new binary is run with the F1 run's exact command, plus `--raw-fastq <stand-in raw R1> <stand-in raw R2>`.
+- **Pass:**
+  - spike exits 0;
+  - its `spiked_R1/R2.fastq.gz`, decompressed, equal F1's verified `standin/main/spiked_R1/R2.fastq.gz`, decompressed, byte for byte.
+- **Controls:**
+  - with the F1 control stand-in (chr20:20-21 Mb), spike exits non-zero, the log holds fastq.sh's `found 0 of the`, and no `spiked_R*.fastq.gz` is left;
+  - with a raw path that does not exist, spike exits non-zero before any `Extracting read pairs` log line.
