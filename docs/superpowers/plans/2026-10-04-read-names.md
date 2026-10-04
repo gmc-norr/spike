@@ -205,3 +205,38 @@ The HiSeq BAM mixes several runs. Its first read is `D00360:96:H2YLYBCXX:...`, b
 **Left as it is.** `spike validate`'s expected column still reads `>=1 ev0001 read carrying`. That is only the row's label: the prefix it matches is now `SPIKE_ev0001_hap_`, and the rows found the reads.
 
 **Not run:** the full raredisease pipeline. Also how often spike's reads land in a duplicate set in a merged whole-genome BAM, which is when Picard reads their names.
+
+## K1b: Picard, on fresh data (locked before running, 2026-10-04)
+
+This settles K1-Picard, which was inconclusive. The user asked for it ("1": firm up Picard first). Nothing below has been run on the K1b inputs.
+
+**The real warning.** Copied from a run, as the case file now requires: Picard 3.3.0 MarkDuplicates on K0b's old `sim.bam` (`scratchpad/names/k1/k0b/old/picard.log`) printed:
+
+```
+WARNING ... AbstractOpticalDuplicateFinderCommandLineProgram  A field field parsed out of a read name was expected to contain an integer and did not. Read name: ev0001_hap_000178. ...
+```
+
+No new log so far has a line containing `read name` (case-insensitive).
+
+**Inputs.**
+- Binaries: old `918e92fc` and new `b558405f`.
+- Picard jar: `63ed3f5d`, with defaults.
+- Seed **2**; it was 1 before.
+- Events, all new: `del:chr20:11500000-11500300`, `ins:chr20:11600000:100` and `dup:chr20:11700000-11700200`, each `af=0.5`, under the default `--dup-model`, with `--align`. If spike refuses one (RF8), all three move +100,000 bp, the same for both binaries, at most 3 times.
+- Run on two BAMs:
+  - **H:** the hospital HG002 30x (NovaSeq X);
+  - **N:** `data/validation/hg002_novaseq_chr20.bam` (NovaSeq 6000).
+
+**Checks, on each of H and N:**
+1. **The warning.** Picard on `out/sim.bam`.
+   - **Pass:** new exits 0, and no log line contains `read name` (case-insensitive).
+   - **Control:** old's log has a line containing `expected to contain an integer`.
+2. **The position is read.** Take the first of spike's pairs in `sim.bam`, in file order, with both mates present as primary, proper-pair records. Add a copy of it under a second name that differs only in spike's part (an `x` after the internal name, so the tile and x/y stay the same). Then sort, and run Picard on that file and on `sim.bam` alone.
+   - **Pass:** for new, `READ_PAIR_OPTICAL_DUPLICATES` rises by exactly 1.
+   - **Control:** for old, it rises by 0.
+   - **Sanity check for both:** `READ_PAIR_DUPLICATES` rises by exactly 1.
+
+**Outcomes:**
+- **Supported:** both checks pass on H and N, with every control firing and the sanity check holding.
+- **Refuted:** new warns, or new's optical count does not rise by 1, while the controls fire.
+- **Inconclusive:** any control or sanity check fails.
