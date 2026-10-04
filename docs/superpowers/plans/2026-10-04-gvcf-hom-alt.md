@@ -62,3 +62,16 @@ The rule is applied in Python: primary, not duplicate, not QC-fail, MAPQ at leas
 - master's do not.
 
 If R finds no such window, H3 uses a window found by widening the draw to the whole of chr20, scanned in order. That is said in the result.
+
+## Addendum, before H2 and H3 ran: R's output and how the sites are chosen
+
+**R (run, `scripts/gvcf/reach.py`, output `scratchpad/gvcf/r.log` and `r.tsv`).**
+- Of 500 windows: 336 have a het call, 88 (0.176) have hom-alt calls and no het call, and 76 have no SNV call.
+- In the 88, the pileup misses 17 of 377 hom-alt calls (0.045), in 11 windows.
+- 15 of the 17 lie in chr20:26.7-30.0 Mb, with 0-7 reads at MAPQ 20. The two others are chr20:4767379 (26 reads, not 90% ALT) and chr20:53717174 (7 reads).
+
+**Site rule for H2(c) and H3, fixed now.** Before H3 runs, it is already clear that the first missed sites hold 0-2 reads, where spike may refuse to run at all.
+- Each window's event is an SNV at the window's centre (start + 2,000, 0-based), so its footprint is the window. If the centre is one of the sample's calls, the event moves 1 bp right until it is not.
+- REF is the reference base. ALT is the next of A, C, G, T after it.
+- H3 takes R's missed sites in order. It uses the first at which the master binary runs without refusing, and lists the ones it skipped and why.
+- H2(c) takes the first window with hom-alt calls, no het call and no miss, under the same refusal rule.
