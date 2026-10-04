@@ -211,3 +211,53 @@ The user picked option 1: fix the default (`--edit-model clean`), then re-run th
 - **K2 or K3 fails:** the code is wrong; fix it with a test first.
 
 **Reported:** how many duplicate pairs were added; the het alt share; the duplicate share near the sites; Picard's `PERCENT_DUPLICATION`; spike's wall time, old against new.
+
+## Fix result (2026-10-04): supported
+
+**Setup.**
+- spike `5c4cd9a2`, from code commit `a93cc7f`.
+- 669 tests. 9 of 9 planned-style mutants are caught, with the unmutated suite checked green first: 5 planned and 4 more (QC-fail filter, dedup across spans, the flag on both mates, a fusion's second side).
+- Logs: `scratchpad/dups/{go-fix.log,go-fix.err,run-fix/,k2.log,k3.log}`.
+
+**The run.**
+- The same 43 events (`events.vcf` byte-identical to the first run). spike exited 0.
+- The log line: `Duplicates of the removed originals: 638 pair(s), removed with them (...); 0 removed pair(s) had a mate outside the windows read`.
+- `fastq.sh`: `removed 14558 original pairs, added 13495 of spike's pairs` (before: 13,920 removed).
+- spike's own log spans 45 s, against 43 s before.
+
+**K1: passes. The leak is gone.**
+- D says **does not matter**. `R_spk` = 0/653 = 0.0000, against `R_real` 0.0017.
+- **0** source-duplicate reads are left: 0 old-allele reads at the 20 hom SNVs, and 0 reads of any kind wholly inside the 3 hom deletions. Before the fix there were 23 + 8 = 31.
+- C1 (100/100 against 0/100), C2 and C3 pass again.
+
+**K2: passes. Only duplicates are added, and the right ones.**
+- `R1.fq.gz`, `R2.fq.gz` and `truth.vcf` are identical, and so are `sim.bam`'s 201,212 records.
+- `replaced_reads.txt` is 100,938 → 101,576 (638 added), and `fastq_removed_reads.txt` is 13,920 → 14,558, with the same 638 names.
+- The independent Python key (sorted mates' unclipped 5' end and strand, read from the source BAM):
+  - all 638 added names are duplicates of a kept pair in the old `fastq_removed_reads.txt`, so 100%;
+  - 638 of the 638 such duplicate pairs inside the spans are added, so 1.0000.
+- **Controls: both fail, as they must.**
+  - The checker on old against old (nothing added) fails the 99% rule: 0 of 638.
+  - The new lists plus 20 source duplicates spike did not list fail the 100% rule: 638 of 658.
+
+**K3: passes. Origin is unchanged.** With `--edit-model origin`, the old and new binaries give byte-identical results:
+- `replaced_reads.txt` (101,541 lines);
+- `fastq_removed_reads.txt` (14,418);
+- `truth.vcf`;
+- `R1.fq.gz` and `R2.fq.gz` (100,605 records each, decompressed).
+
+The new binary logs no clean-mode duplicate line in origin mode.
+
+**Reported, not judged:**
+- **Het SNVs:** spiked alt share 314/666 = 0.4715, against real 0.4964. Before the fix: 0.4631.
+- **Duplicates within 300 bp of the spiked SNVs:** 55/6,702 = 0.0082 in the spiked BAM, against 0.0360 in the baseline.
+  - spike still makes no duplicates of its own reads, so after marking, the spiked regions hold about a quarter of the duplicates real ones do.
+  - Callers skip duplicates, so this shows only in duplicate counts and in a viewer that shows duplicates. It was not part of this fix.
+- **Picard `PERCENT_DUPLICATION`:** spiked 0.040446, baseline 0.041689.
+- **The BAM route at hom SNVs:** 7/660 old allele, as before. These are the cross-chromosome pairs spike cannot take (the `SIM_RESIST` share), not duplicates.
+
+**Not run here:**
+- raredisease, fastp and DeepVariant themselves;
+- a real full FASTQ;
+- a CRAM input (the reader is origin's, which its own tests cover on CRAM);
+- an input BAM that was never duplicate-marked.
