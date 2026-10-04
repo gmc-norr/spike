@@ -250,3 +250,39 @@ of 28 group-direction-metrics and down in 11.
   different random numbers than the old one.
 - This round cannot tell whether duplications and 20-49 bp insertions got
   worse, or only drew differently.
+
+## The look (locked 2026-10-04, before its run, with the user's "1")
+
+**The question:** did the change widen spike's spread at duplications and
+20-49 bp insertions, or did K2a's flip come from drawing new random numbers?
+
+**The runs: two spike binaries x two seeds,** on round 2b's DUP50-299 and
+INS20-49 events (forward and reverse, normal arm):
+
+| | seed 1 | seed 2 |
+|---|---|---|
+| old (`fe15a46`, md5 `0302a168`) | round 2b (`transplant2/full`) | the replant from the look after round 2b (`transplant2/dig/seed2`) |
+| new (`858f13f`, md5 `918e92fc`) | the K2 rerun (`readlen/full`) | to run: the same script, binary and output directory changed |
+
+**The statistic:** d = fake - real per event. For each run, d's 10th-90th
+width (round 2b's spread measure), in 6 cells:
+- DUP J, forward and reverse;
+- INS20-49 A, forward and reverse;
+- INS20-49 E, forward and reverse.
+
+**The rule:**
+- A cell is **new wider** when both new widths exceed both old widths, and
+  **new narrower** when both are below both.
+- If the four runs were exchangeable, each has probability 1/6.
+- **The change widens them** if 4 or more of the 6 cells are new wider. By
+  chance that has probability about 0.009.
+- **A draw** if at most 1 cell is new wider.
+- **Unclear** otherwise.
+
+Also reported: the four forward DUP J widths against round 2b's limit of
+0.350, and the new-narrower count.
+
+**What each outcome leads to:**
+- **Widens:** no merge. Look at junction reads under the new length model.
+- **A draw:** K2a's flip was the draw. Merge on the user's word.
+- **Unclear:** report it, and the user decides.
