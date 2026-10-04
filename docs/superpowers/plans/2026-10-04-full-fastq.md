@@ -195,3 +195,51 @@ The message: `RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, con
 - **Main run:** the F1 run's command plus `--raw-fastq` on the F1 stand-in. spike exits 0, and `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`, decompressed, are byte-identical to F1's verified output.
 - **Control stand-in (chr20:20-21 Mb):** spike exits 1, the log holds fastq.sh's `found 0 of the ...`, and no `spiked_R*.fastq.gz` is left.
 - **A raw R2 that does not exist:** spike exits 1 with `--raw-fastq ... is not a file`, and there is no `Extracting read pairs` line in the log.
+
+## `--raw-fastq` becomes `--into-fastq`; which FASTQ to use is said plainly (plan, 2026-10-04)
+
+**Asked.** The user asked whether it is obvious that `--raw-fastq` makes spiked FASTQ files. It is not:
+- The name says only what goes in.
+- What comes out is in the help text's second sentence and in the run's last log line.
+- An output directory holds two FASTQ pairs:
+  - `R1.fq.gz`/`R2.fq.gz`, spike's reads around the events (100,513 pairs in the duplicates after-check);
+  - `spiked_R1.fastq.gz`/`spiked_R2.fastq.gz`, the whole sample (478,809 pairs on the F1 stand-in).
+
+  The README's file table calls the first pair "Forward reads" and "Reverse reads", and the run's summary prints `FASTQ: out/R1.fq.gz and out/R2.fq.gz`. Nothing says which pair a pipeline needs.
+
+The user picked option 1: rename, and say plainly which FASTQ is which.
+
+**Design (locked).**
+- **The option.** `--into-fastq RAW_R1 RAW_R2`, read as "spike the events into these FASTQ files".
+  - The help's first sentence says what comes out: the whole sample, spiked, in `<output>/spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`, the pair to give a pipeline that starts from FASTQ.
+  - `--raw-fastq` is no longer accepted. It was public for a few hours, and an alias would keep the unclear name alive.
+  - Nothing else about the option changes: the up-front file check (its message names `--into-fastq`), `fastq.sh`, and the output paths.
+- **What the run says.**
+  - The summary line for R1/R2 says they are spike's reads around the events, not the whole sample.
+  - With `--into-fastq`, the last line names both `spiked_` files and says they are the whole sample, spiked.
+  - Without it, "Next steps" names `--into-fastq` beside `fastq.sh`.
+- **The run's README.**
+  - The R1/R2 row says the same as the summary line.
+  - A new row for `spiked_R1.fastq.gz`/`spiked_R2.fastq.gz` says they are the whole sample, spiked: written at the end of this run when `--into-fastq` was given; otherwise how to make them.
+  - The workflow block names `--into-fastq`.
+- **The README.** The same wording in the R1/R2 rows and in the Full FASTQ section. The `--help` copy is regenerated from the binary. `scripts/duplicates/run.sh` uses the new name. Done plans keep the old name, since that is what they ran.
+
+**Tests, written first and seen red:**
+- `--into-fastq a b` parses into the pair;
+- `--raw-fastq a b` is refused;
+- the up-front check names `--into-fastq`;
+- the run README's R1/R2 row says "not the whole sample", and its `spiked_` row differs with and without `--into-fastq`;
+- the two log messages, built by functions, say what is planned above.
+
+**Check H (locked).** The duplicates after-check's spike step (same 43 events, seed and stand-in, `scratchpad/dups/run-fix/spike`) is run with the new binary and `--into-fastq` in place of `--raw-fastq`.
+- **H1:** spike exits 0. `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz` decompress byte-identical to the after-check's. `R1.fq.gz`, `R2.fq.gz` (decompressed), `replaced_reads.txt`, `fastq_removed_reads.txt` and `truth.vcf` are identical too.
+  - **Control:** the same comparison of `spiked_R1.fastq.gz` against the raw stand-in R1 must say "differs".
+- **H2:** the same command with `--raw-fastq` exits non-zero before any work, and no output directory is made. clap's message is recorded.
+- **H3:**
+  - the log's last line names both `spiked_` files and the words "whole sample";
+  - the run README holds the new rows;
+  - the README's `--help` copy equals `spike --help`.
+
+**Outcomes.**
+- **Supported:** H1, H2 and H3 pass. Merge on the user's word.
+- **Otherwise:** fix it, with a test first.
