@@ -948,6 +948,80 @@ pub fn gather(
     })
 }
 
+/// `--edit-model clean`'s duplicates: the duplicate pairs whose molecule
+/// spike removed. A duplicate marker flags every copy of a molecule but the
+/// one it keeps, and clean never takes a flagged copy, so removing the kept
+/// one left the copies behind. A pipeline that marks duplicates again (the
+/// full-FASTQ route) found nothing for them to copy and counted one per
+/// family as a read of the old allele: 23 of 676 reads at hom SNVs
+/// (`docs/superpowers/plans/2026-10-04-duplicates.md`). A copy goes where
+/// its molecule goes, as under origin (R3).
+///
+/// `records` are grouped by name, QC-failed ones left out; only a name with
+/// both mates is a pair, since its family is both mates' 5' ends. A family
+/// is removed when a pair in it with no duplicate flag is in `removed`, and
+/// the pairs in it flagged on both mates are returned. The second value is
+/// how many names in `removed` had no whole pair in `records`: their
+/// duplicates cannot be found.
+pub fn duplicates_of(records: &[OriginRecord], removed: &BTreeSet<String>) -> (BTreeSet<String>, usize) {
+    let mut by_name: BTreeMap<&str, Vec<&OriginRecord>> = BTreeMap::new();
+    for r in records.iter().filter(|r| !r.qc_fail) {
+        by_name.entry(r.name.as_str()).or_default().push(r);
+    }
+    let mut removed_families: BTreeSet<Vec<FivePrime>> = BTreeSet::new();
+    let mut copies: Vec<(Vec<FivePrime>, &str)> = Vec::new();
+    let mut whole: BTreeSet<&str> = BTreeSet::new();
+    for (name, mates) in by_name {
+        let pair = mates.len() == 2 && mates.iter().any(|m| m.first) && mates.iter().any(|m| !m.first);
+        if !pair {
+            continue;
+        }
+        whole.insert(name);
+        let all_flagged = mates.iter().all(|m| m.duplicate);
+        let none_flagged = !mates.iter().any(|m| m.duplicate);
+        let family = Fragment { name, mates }.family();
+        if all_flagged {
+            copies.push((family, name));
+        } else if none_flagged && removed.contains(name) {
+            removed_families.insert(family);
+        }
+    }
+    let incomplete = removed.iter().filter(|n| !whole.contains(n.as_str())).count();
+    let duplicates = copies
+        .into_iter()
+        .filter(|(family, _)| removed_families.contains(family))
+        .map(|(_, name)| name.to_string())
+        .collect();
+    (duplicates, incomplete)
+}
+
+/// [`duplicates_of`] over the records `spans` hold in `bam_path` (BAM or
+/// CRAM), read with origin's reader. Only duplicate records and records
+/// named in `removed` are kept, and a record two overlapping spans both hold
+/// counts once.
+pub fn removed_duplicates(
+    bam_path: &str,
+    ref_path: &str,
+    spans: &[Span],
+    removed: &BTreeSet<String>,
+) -> Result<(BTreeSet<String>, usize)> {
+    let mut source = Source::open(bam_path, ref_path)?;
+    let mut seen: BTreeSet<(String, bool)> = BTreeSet::new();
+    let mut kept = Vec::new();
+    for span in spans {
+        // A contig the header lacks holds no record to read.
+        let Some(found) = source.scan_long(bam_path, span)? else {
+            continue;
+        };
+        for r in found {
+            if (r.duplicate || removed.contains(&r.name)) && seen.insert((r.name.clone(), r.first)) {
+                kept.push(r);
+            }
+        }
+    }
+    Ok(duplicates_of(&kept, removed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1804,6 +1878,119 @@ mod tests {
             .all(|p| p.span.chrom == "chrA"));
         let names: Vec<&str> = site.fragments().iter().map(|f| f.name).collect();
         assert_eq!(names, ["chrA_pair0", "chrA_pair1", "chrA_pair2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- clean mode: a duplicate shares its kept pair's fate ---------------
+
+    /// A pair's records: read 1 forward at `a`, read 2 reverse at `b`.
+    fn pair_records(name: &str, a: u64, b: u64, duplicate: bool) -> Vec<OriginRecord> {
+        vec![
+            OriginRecord { duplicate, ..record(name, true, a, 60, &[]) },
+            OriginRecord { duplicate, ..record(name, false, b, 60, &[]) },
+        ]
+    }
+
+    fn name_set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn test_a_duplicate_of_a_removed_pair_goes_with_it_and_one_of_a_kept_pair_stays() {
+        let records = [
+            pair_records("gone", 100, 300, false),
+            pair_records("gone_dup", 100, 300, true),
+            pair_records("kept", 500, 700, false),
+            pair_records("kept_dup", 500, 700, true),
+        ]
+        .concat();
+        let (dups, incomplete) = duplicates_of(&records, &name_set(&["gone"]));
+        assert_eq!(dups, name_set(&["gone_dup"]));
+        assert_eq!(incomplete, 0);
+    }
+
+    #[test]
+    fn test_a_duplicate_of_another_molecule_stays() {
+        // One base off at read 2, or read 2 on the other strand: another family.
+        let mut other_strand = pair_records("strand_dup", 100, 300, true);
+        other_strand[1].five_prime.reverse = !other_strand[1].five_prime.reverse;
+        let records = [
+            pair_records("gone", 100, 300, false),
+            pair_records("off_dup", 100, 301, true),
+            other_strand,
+        ]
+        .concat();
+        let (dups, _) = duplicates_of(&records, &name_set(&["gone"]));
+        assert!(dups.is_empty(), "{:?}", dups);
+    }
+
+    #[test]
+    fn test_a_returned_fragment_is_a_duplicate_on_both_mates_and_not_qc_failed() {
+        // `twin` shares the family but carries no duplicate flag (another
+        // library, say): spike did not remove it, so it stays. `half` has the
+        // flag on one mate only. `failed` is a QC-failed duplicate.
+        let mut half = pair_records("half", 100, 300, true);
+        half[1].duplicate = false;
+        let failed: Vec<OriginRecord> = pair_records("failed", 100, 300, true)
+            .into_iter()
+            .map(|r| OriginRecord { qc_fail: true, ..r })
+            .collect();
+        let records = [
+            pair_records("gone", 100, 300, false),
+            pair_records("twin", 100, 300, false),
+            half,
+            failed,
+        ]
+        .concat();
+        let (dups, _) = duplicates_of(&records, &name_set(&["gone"]));
+        assert!(dups.is_empty(), "{:?}", dups);
+    }
+
+    #[test]
+    fn test_a_removed_pair_seen_through_one_mate_matches_nothing_and_is_counted() {
+        let gone = pair_records("gone", 100, 300, false);
+        let records = [vec![gone[0].clone()], pair_records("gone_dup", 100, 300, true)].concat();
+        let (dups, incomplete) = duplicates_of(&records, &name_set(&["gone"]));
+        assert!(dups.is_empty(), "{:?}", dups);
+        assert_eq!(incomplete, 1);
+    }
+
+    /// chrT, 60 kb: `gone` (removed) and its duplicate at 10,001/10,201;
+    /// `kept` and its duplicate at 12,001/12,201; `far` (removed) and its
+    /// duplicate with read 2 at 30,001, outside the spans below.
+    fn duplicates_bam(dir: &std::path::Path) -> String {
+        let (r1, r2) = (0x63u16, 0x93u16);
+        let records = [
+            bam_record("gone", r1, 10_001, 60, None, 10_201),
+            bam_record("gone_dup", r1 | 0x400, 10_001, 60, None, 10_201),
+            bam_record("gone", r2, 10_201, 60, None, 10_001),
+            bam_record("gone_dup", r2 | 0x400, 10_201, 60, None, 10_001),
+            bam_record("kept", r1, 12_001, 60, None, 12_201),
+            bam_record("kept_dup", r1 | 0x400, 12_001, 60, None, 12_201),
+            bam_record("kept", r2, 12_201, 60, None, 12_001),
+            bam_record("kept_dup", r2 | 0x400, 12_201, 60, None, 12_001),
+            bam_record("far", r1, 14_001, 60, None, 30_001),
+            bam_record("far_dup", r1 | 0x400, 14_001, 60, None, 30_001),
+            bam_record("far", r2, 30_001, 60, None, 14_001),
+            bam_record("far_dup", r2 | 0x400, 30_001, 60, None, 14_001),
+        ];
+        crate::extract::test_fixtures::write_one_contig_bam(&dir.join("dups.bam"), "chrT", 60_000, &records)
+    }
+
+    #[test]
+    fn test_removed_duplicates_reads_the_families_from_the_bam() {
+        let dir = scratch("removed_dups");
+        let bam = duplicates_bam(&dir);
+        let removed = name_set(&["gone", "far"]);
+        let (dups, incomplete) =
+            removed_duplicates(&bam, "", &[Span::new("chrT", 9_000, 15_000)], &removed).unwrap();
+        assert_eq!(dups, name_set(&["gone_dup"]));
+        assert_eq!(incomplete, 1, "far's read 2 lies outside the span");
+        // Both spans hold both of `gone`'s mates; read twice, it is still one pair.
+        let spans = [Span::new("chrT", 9_000, 10_250), Span::new("chrT", 10_050, 15_000)];
+        let (dups, incomplete) = removed_duplicates(&bam, "", &spans, &removed).unwrap();
+        assert_eq!(dups, name_set(&["gone_dup"]));
+        assert_eq!(incomplete, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

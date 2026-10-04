@@ -359,6 +359,35 @@ fn extraction_bounds(
     vec![event_window]
 }
 
+/// Where `--edit-model clean` looks for the duplicates of the originals it
+/// removed: every window `extract_pool_for_event` reads, widened by
+/// `MAX_FRAGMENT_LEN` on each side, since a removed pair's mate -- and so its
+/// duplicates' mates -- can lie that far outside the window.
+fn duplicate_scan_spans(
+    events: &[SimEvent],
+    flank: u64,
+    region: &Option<ExtractionRegion>,
+) -> Vec<origin::Span> {
+    let pad = crate::stats::MAX_FRAGMENT_LEN as u64;
+    let mut sides: Vec<(&str, u64, u64)> = Vec::new();
+    for event in events {
+        if let SimEvent::Fusion { chrom_a, bp_a, chrom_b, bp_b, .. } = event {
+            sides.push((chrom_a, *bp_a, *bp_a));
+            sides.push((chrom_b, *bp_b, *bp_b));
+        } else if let Some(side) = event.primary_region() {
+            sides.push(side);
+        }
+    }
+    sides
+        .into_iter()
+        .flat_map(|(chrom, start, end)| {
+            extraction_bounds(chrom, start, end, flank, region)
+                .into_iter()
+                .map(move |(s, e)| origin::Span::new(chrom, s.saturating_sub(pad), e.saturating_add(pad)))
+        })
+        .collect()
+}
+
 /// Parse a region string like "chr19:11080000-11140000" into (chrom, start, end).
 /// Coordinates are 1-based inclusive (like samtools), converted to 0-based half-open internally.
 ///
@@ -820,6 +849,25 @@ fn main() -> Result<()> {
     replaced_names.extend(unusable_qual_names);
 
     let all_output_pairs = simulate::combine_event_outputs(event_outputs);
+
+    // Clean never takes a duplicate, so the copies of a pair it removed stay
+    // behind, and a pipeline that marks duplicates again counts one per
+    // family as a read of the old allele. They go where their molecule went;
+    // origin's removals already hold whole families (R3).
+    if !edit_origin {
+        let removed = fastq_removed_names(&replaced_names, &all_output_pairs);
+        let spans = duplicate_scan_spans(&events, config.flank_bp, &extraction_region);
+        let (duplicates, incomplete) =
+            origin::removed_duplicates(&config.bam_path, &config.ref_path, &spans, &removed)?;
+        log::info!(
+            "Duplicates of the removed originals: {} pair(s), removed with them (replaced_reads.txt, \
+             fastq_removed_reads.txt); {} removed pair(s) had a mate outside the windows read, so \
+             their duplicates were not looked for",
+            duplicates.len(),
+            incomplete,
+        );
+        replaced_names.extend(duplicates);
+    }
 
     // Write FASTQ.
     let (r1_path, r2_path) = fastq::write_paired_fastq(&all_output_pairs, &args.output)?;
@@ -2055,11 +2103,12 @@ fn write_merge_script(
 set -euo pipefail
 # Merge sim.bam (spiked reads) into the original BAM.
 #
-# The originals spike extracted are listed by read name in replaced_reads.txt;
-# sim.bam holds their replacements. Removing them by name (rather than by event
-# region) keeps every record spike did not take -- duplicates, non-proper pairs,
-# low-MAPQ or orphaned mates -- and also removes the out-of-region mates spike
-# did take, so no record is lost and none appears twice.
+# The originals spike extracted are listed by read name in replaced_reads.txt,
+# with the duplicates of the pairs it removed; sim.bam holds their replacements.
+# Removing them by name (rather than by event region) keeps every record spike
+# did not take -- duplicates of the pairs it kept, non-proper pairs, low-MAPQ or
+# orphaned mates -- and also removes the out-of-region mates spike did take, so
+# no record is lost and none appears twice.
 #
 # Usage: bash merge.sh [ORIGINAL_BAM] [REFERENCE_FASTA] [THREADS]
 #
@@ -2448,10 +2497,10 @@ fn write_readme(
     writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
     writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
     writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
-    writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took out of the BAM, plus any pair dropped for unusable quality; `merge.sh` removes exactly these |")?;
+    writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took out of the BAM, plus any pair dropped for unusable quality and the duplicates of every pair it removed; `merge.sh` removes exactly these |")?;
     writeln!(md, "| `align.sh` | Aligns R1/R2 → `sim.bam` (event regions ± {}bp flank) |", flank)?;
     writeln!(md, "| `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |")?;
-    writeln!(md, "| `fastq_removed_reads.txt` | The originals spike removed and does not write back (`replaced_reads.txt` minus the pairs in R1/R2); `fastq.sh` removes exactly these from the raw FASTQ |")?;
+    writeln!(md, "| `fastq_removed_reads.txt` | The originals spike removed and does not write back, their duplicates among them (`replaced_reads.txt` minus the pairs in R1/R2); `fastq.sh` removes exactly these from the raw FASTQ |")?;
     writeln!(md, "| `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair: every raw read but the removed ones, unchanged, then spike's own reads |")?;
     writeln!(md)?;
     writeln!(md, "## Workflow")?;
@@ -2751,6 +2800,31 @@ mod tests {
         let windows = extraction_bounds("chr20", 30_495_000, 30_520_000, 10_000, &r);
 
         assert_eq!(windows, vec![(30_485_000, 30_530_000)]);
+    }
+
+    #[test]
+    fn test_duplicate_scan_spans_widen_each_extraction_window_by_the_longest_fragment() {
+        // A removed pair's mate, and so its duplicates' mates, can lie up to
+        // MAX_FRAGMENT_LEN (1500) outside the window its extraction read.
+        let spans = duplicate_scan_spans(&[del("chr20", 30_000_000, 30_010_000)], 2_000, &None);
+        assert_eq!(spans, vec![origin::Span::new("chr20", 29_996_500, 30_013_500)]);
+        // Near the contig's start the window is clipped at 0.
+        let spans = duplicate_scan_spans(&[del("chr1", 1_000, 2_000)], 2_000, &None);
+        assert_eq!(spans, vec![origin::Span::new("chr1", 0, 5_500)]);
+        // A fusion's extraction reads both breakpoints.
+        let spans =
+            duplicate_scan_spans(&[fusion("chr9", 130_000_000, "chr22", 23_000_000)], 2_000, &None);
+        assert_eq!(
+            spans,
+            vec![
+                origin::Span::new("chr9", 129_996_500, 130_003_500),
+                origin::Span::new("chr22", 22_996_500, 23_003_500),
+            ]
+        );
+        // --region joins the window it touches, as extraction does.
+        let r = region("chr20", 29_900_000, 30_000_500);
+        let spans = duplicate_scan_spans(&[del("chr20", 30_000_000, 30_010_000)], 2_000, &r);
+        assert_eq!(spans, vec![origin::Span::new("chr20", 29_898_500, 30_013_500)]);
     }
 
     #[test]

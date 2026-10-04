@@ -445,6 +445,7 @@ bash output/merge.sh /moved/original.bam ref.fa 8 # Override paths/threads (stil
 The originals to replace are named, not located. spike writes every read name it extracted to `replaced_reads.txt`, and `merge.sh` drops exactly those records (`samtools view -N`, so samtools >= 1.13 is required) before merging `sim.bam` in. Removing by name rather than by event region matters in both directions:
 
 - Records inside the event regions that spike never extracted — PCR duplicates, non-proper pairs, reads below `--min-mapq`, reads whose mate was filtered — are **kept**. Removing by region deleted them without putting anything back, which cost real depth.
+- **Duplicates of a pair spike removed are removed with it.** A duplicate is another read of the same molecule, so it goes where that molecule goes. spike never takes a duplicate as donor material. After the run, it reads the event windows again (± 1,500 bp) and lists every duplicate pair that shares both 5' ends with a pair it removed. Left behind, they would do no harm in `merged.bam`, where they keep their flag. But a pipeline that marks duplicates again from scratch, as one starting from the [full FASTQ](#full-fastq) does, finds nothing for them to copy and counts one per family as a read of the old allele. Measured before this fix: 3.4% of the reads at spiked hom SNVs, against 0.17% at real ones, and 2-3 reads inside hom deletions (`docs/superpowers/plans/2026-10-04-duplicates.md`). Duplicates of a pair spike kept stay, with their flag.
 - Mates that lie outside the event regions but whose pair spike did extract are **removed**, because `sim.bam` carries their replacement. Removing by region left them in, so they appeared twice.
 - Pairs spike extracted but could not use — a mate with no stored base qualities, see [Missing or unusable donor base qualities](#missing-or-unusable-donor-base-qualities) — are **removed without replacement**. That costs depth; left in, they would dilute the realised VAF of every event they overlap.
 
@@ -452,7 +453,7 @@ The originals to replace are named, not located. spike writes every read name it
 
 Records spike extracted and then suppressed (the deleted copy of a heterozygous deletion, for instance) stay gone: that absence *is* the simulated variant.
 
-Under `--edit-model origin`, `replaced_reads.txt` also names every read `origin` removed, so `merge.sh` can remove records `clean` keeps: duplicates of a removed pair, reads below `--min-mapq`, and reads at a look-alike elsewhere in the genome. See [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental).
+Under `--edit-model origin`, `replaced_reads.txt` also names every read `origin` removed, so `merge.sh` can remove records `clean` keeps: reads below `--min-mapq`, and reads at a look-alike elsewhere in the genome. Duplicates of a removed pair go under either model. See [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental).
 
 The records kept because spike never extracted them (PCR duplicates, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
 
@@ -1323,13 +1324,13 @@ A small event under `origin` takes slightly longer on more than one thread than 
 | `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
 | `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
-| `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality, and under `--edit-model origin` every read `origin` removed; `merge.sh` removes exactly these |
+| `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality, the duplicates of every pair it removed, and under `--edit-model origin` every read `origin` removed; `merge.sh` removes exactly these |
 | `align.sh` | Aligns R1/R2 → `sim.bam` (event regions only) |
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
 | `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- then kept, chimeric and suppressed reads, pairs dropped for unusable quality, **Resistant reads** and **Depth fold**), the pairs dropped in total, read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
-| `fastq_removed_reads.txt` | The originals spike removed and does not write back: `replaced_reads.txt` minus the pairs in R1/R2. `fastq.sh` removes exactly these from the raw FASTQ |
+| `fastq_removed_reads.txt` | The originals spike removed and does not write back, their duplicates among them: `replaced_reads.txt` minus the pairs in R1/R2. `fastq.sh` removes exactly these from the raw FASTQ |
 | `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair (see [Full FASTQ](#full-fastq)) |
 
 ### Full FASTQ
@@ -1349,7 +1350,7 @@ spike --bam sample.bam --reference ref.fa --vcf variants.vcf -o output \
 
 spike checks that both raw files exist before it starts, and fails if `fastq.sh` refuses them.
 
-- **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
+- **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back, and their duplicates. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
 - **It then adds spike's own reads** (`SPIKE_...`) at the end of each file. Their headers take the raw file's style, copied from its first record: for example ` 1:N:0:ACGTACGT+TGCATGCA` after the name, or `/1`.
 - **A read is matched by name:** its header's first word, without `@` and a trailing `/1` or `/2`. That is the name the aligner gave it in the BAM spike was run on.
 - **It stops, and leaves no output,** when either mate holds fewer of the listed originals than the list names. That means the raw FASTQ is not the full FASTQ of that BAM's run. A sample sequenced on several lanes is concatenated first (`cat` joins gzip files).
