@@ -517,7 +517,7 @@ It needs the aligner's `XA` tags. bwa-mem and bwa-mem2 write them by default, an
 
 **At RF14's site**, `del:chr20:7119236-7120236` on the 35x HG002 BAM with default flags:
 - `clean` refuses: 359 of 382 reads over it (94%) are ones it cannot edit.
-- `origin` runs: 6 of 382 (`SIM_RESIST=0.016`), and `SIM_DEPTH_FOLD=1.30`. It removed 219 fragments at the spot and **0** at its 14 look-alikes.
+- `origin` runs: 6 of 382 (`SIM_RESIST=0.016`), and `SIM_DEPTH_FOLD=1.29`. It removed 201 fragments at the spot and **0** at its 14 look-alikes (measured 2026-10-04; earlier figures were 1.30 and 219).
 
 **The look-alike half does little on real data so far.** Those 14 look-alikes all hold reads (3518 primary reads), so the BAM is not what is missing. Of the 52 fragments there with a read whose `XA` hit lies in the footprint, 25 have a mate that could not have come from the footprint, so the second bullet's rule keeps them. 18 more have a mate outside the regions spike reads. The other 9 pass, yet none was removed in that run. (The count is awk over `samtools view` using `XA` start positions only; see `.claude/judgment-gate-cases.md`.)
 

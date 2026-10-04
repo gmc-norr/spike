@@ -83,3 +83,47 @@ The README takes the new binary's numbers, says which ones moved, and corrects t
   - the five largest changes, with their MAPQ 0 share in the footprint.
 
 **T: speed.** `dup:chr20:10000000-11000000` on the 35x HG002 BAM, with `--edit-model origin --allow-resistant --seed 1 --threads 16`. Run master, new, master, new. The new binary's best time must be at most 1.25 x master's best. If it is slower, the speed is fixed before the result is written.
+
+## Result (2026-10-04): supported
+
+Code `6ef9c19`. Binaries: new release `8fc328b8`, new debug `8f913663`; master `2ab9fc7` release `920d2b7c`, debug `38ade71d`. Scratch: `scratchpad/ocp/` (logs, `mutate.py`, `lookprobe.py`).
+
+**Tests.** 705 pass (4 new), 0 fail, 1 ignored. clippy gives 16 lines, the same as master.
+- **Mutation.** The runner first checks that the 53 unmutated `origin::` tests are green. It then catches **5 of 5** mutants:
+  - 1 (no scaling) reddens the sure/unsure, other-contig and duplicate-family tests;
+  - 2 (own chance) and 3 (family lowest) redden the duplicate-family test;
+  - 4 (outside scaled) reddens the other-contig test;
+  - 5 (own chance over all placements) reddens 7 tests.
+- **A changed test.** `simulate::tests::test_origin_depth_sums_what_summing_every_placement_sums` failed on the new code. Its 1,500 random reads used their random start as their 5' end, so reads starting at the same base formed duplicate families, and those now count their family's chance. The test is about the depth index, so each read now gets its own 5' end. Its brute-force side is unchanged.
+
+**K: PASS.** `origin` removed 149 and added **148**, inside [145, 151]. Its log reads `origin depth at chr1:4999: 12.0x (the donor pool's there: 12.0x)`. Master added 111. Every other probe result is identical to master's, apart from timestamps and temp paths.
+
+**P: PASS.** `VERDICT: SUPPORTED`, with L 0.739 and P 0.763, the same as master.
+
+**B1: PASS.** Each probe run makes its own temp folder, so the two `truth.vcf` files differ in their `##reference` line only. B1 was therefore rerun on one set of input files, with both debug binaries. `clean`'s `R1.fq.gz`, `R2.fq.gz`, `truth.vcf`, `fastq_removed_reads.txt` and `replaced_reads.txt` are identical. On the slice, `clean`'s `replaced_reads.txt` is identical too.
+
+**B2: PASS.** The physics runs also differ in `##reference` only. So `origin` was rerun on master's `donor.bam` and `ref.fa`, with the harness's arguments (`del:chrT:24500-25500 --seed 7 --allow-resistant`). `R1.fq.gz`, `R2.fq.gz`, `truth.vcf`, `replaced_reads.txt` and `fastq_removed_reads.txt` are identical. Master's rerun equals the harness's own run.
+
+**D.**
+- **The slice** is unchanged: 2,748 against 2,736 names, 25 and 13 alone. `origin`'s `replaced_reads.txt` is identical to master's.
+- **RF14's site:** origin depth 33.7x, 142 tiled reads and 201 fragments removed, all as on master. `SIM_DEPTH_FOLD` moves from 1.30 to **1.29**.
+- **The README** now says 1.29 and 201. The 219 it said before was already 201 on master.
+
+**R (reported).** 150 sites.
+- **Refused:** 5 sites, the same 5 under both binaries. 4 are too-few-reads refusals near the centromere (chr20:27.2-28.4 Mb). One, chr20:1598012, has no origin depth at any breakpoint.
+- **Changed:** 9 of the other 145. Tiled reads, new / master: min 0.9746, median 1.0000, max 1.0089. Origin depth: 0.9744 to 1.0111.
+- **Largest changes:**
+
+| site | MAPQ 0 share | tiled reads | origin depth | pool depth |
+|---|---|---|---|---|
+| chr20:30264835 | 0.005 | 197 → 192 | 43.0 → 41.9 | 41.3 |
+| chr20:29486139 | 0.083 | 294 → 296 | 63.3 → 63.8 | 52.8 |
+| chr20:61987027 | 0.020 | 224 → 226 | 46.2 → 46.7 | 45.1 |
+| chr20:26259627 | 0.012 | 224 → 225 | 48.7 → 48.7 | 46.5 |
+| chr20:47827272 | 0.105 | 225 → 226 | 48.9 → 49.1 | 42.4 |
+
+**Why the depth also goes down (measured, `lookprobe.py`, chr20:30264835).** At the spot, 32 reads are scaled up, by 0.62 in total, and 16 down, by 11.20. All 16 reads scaled down (listed by `lookprobe_all.py`) have a mate that is MAPQ 43-60 and placed at a look-alike, so its share in the footprint is at most `(1 - p_here)`, below 1e-4. Removal already treats such a pair as almost surely from elsewhere. Master's depth still counted the pair's other read (MAPQ 0-30) at the spot, at its own 0.17-1.00.
+
+**T: PASS.** The 1 Mb DUP took 25.6 s (cold cache) and 11.79 s on master, and 11.76 s and 12.10 s on the new binary. Best against best is 0.998. Its outputs are identical to master's.
+
+**What this means.** `origin` now adds back what it removes. On the reviewer's probe, the quarter it fell short is gone. On real data the change is small: 9 of 145 random hospital sites, each by at most 2.5%, and in both directions. `clean` does not change.
