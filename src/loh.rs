@@ -54,6 +54,16 @@ struct RegionSnps {
 }
 
 impl RegionSnps {
+    /// These SNPs (the pileup's) with the gVCF's hom-alt calls `hom_alt` on
+    /// top: each is hom-alt with the gVCF's allele, and a pileup het at its
+    /// position goes. The gVCF wins where the two disagree; everything else
+    /// the pileup found stays (review finding 4).
+    fn with_hom_alt_from(mut self, hom_alt: HashMap<u64, u8>) -> Self {
+        self.het.retain(|s| !hom_alt.contains_key(&s.pos));
+        self.hom_alt.extend(hom_alt);
+        self
+    }
+
     /// A het SNP whose base another haplotype deletes has no copy carrying
     /// REF: both copies get ALT (a copy can't hold a deletion), so make it
     /// hom-alt.
@@ -159,8 +169,9 @@ struct HetSnp {
 ///
 /// `ref_seq` is the reference over the region; pileup needs it to tell
 /// hom-alt from hom-ref. SNPs come from the gVCF when it has het SNPs here,
-/// otherwise from pileup. With no het SNPs, no fragment is assigned and the
-/// caller falls back to random suppression.
+/// otherwise from pileup, with the gVCF's hom-alt calls kept over the
+/// pileup's. With no het SNPs, no fragment is assigned and the caller falls
+/// back to random suppression.
 #[allow(clippy::too_many_arguments)]
 pub fn sample_copies(
     alignment_path: &str,
@@ -173,20 +184,25 @@ pub fn sample_copies(
     ref_path: Option<&str>,
     rng: &mut StdRng,
 ) -> Result<SampleCopies> {
-    let from_gvcf = match gvcf_path {
+    let (from_gvcf, gvcf_hom_alt) = match gvcf_path {
         Some(gvcf) => {
             let snps = load_snps_from_gvcf(gvcf, chrom, region_start, region_end)
                 .with_context(|| GvcfUnreadable {
                     path: gvcf.to_string(),
                 })?;
             if snps.het.is_empty() {
-                log::info!("no het SNPs from gVCF, trying pileup fallback");
-                None
+                // The pileup finds the het SNPs; the gVCF's hom-alt calls
+                // are kept over its own (review finding 4).
+                log::info!(
+                    "no het SNPs from gVCF, trying pileup fallback; keeping the gVCF's {} hom-alt SNPs",
+                    snps.hom_alt.len()
+                );
+                (None, snps.hom_alt)
             } else {
-                Some(snps)
+                (Some(snps), HashMap::new())
             }
         }
-        None => None,
+        None => (None, HashMap::new()),
     };
     let snps = match from_gvcf {
         Some(snps) => snps,
@@ -199,7 +215,7 @@ pub fn sample_copies(
                 min_mapq,
                 ref_path,
             )?;
-            call_snps(&counts, region_start, ref_seq)
+            call_snps(&counts, region_start, ref_seq).with_hom_alt_from(gvcf_hom_alt)
         }
     };
     log::info!(
@@ -1594,6 +1610,57 @@ pub(crate) mod tests {
         assert!(warnings[0].contains("names chromosome '20', not 'chr20'"), "{}", warnings[0]);
         assert!(warnings[0].contains("The run stops here."), "{}", warnings[0]);
         assert!(!warnings[0].contains("pileup"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn test_the_gvcf_s_hom_alt_calls_go_on_top_of_the_pileup_s() {
+        // Review finding 4: a gVCF without het calls here used to be dropped whole.
+        let pileup = RegionSnps {
+            het: vec![snp(100), snp(200)],
+            hom_alt: HashMap::from([(300, b'C'), (400, b'T')]),
+            spanned: HashSet::new(),
+        };
+        let gvcf = HashMap::from([(100, b'T'), (300, b'G'), (500, b'A')]);
+        let merged = pileup.with_hom_alt_from(gvcf);
+        assert_eq!(merged.het.iter().map(|s| s.pos).collect::<Vec<_>>(), [200], "the het at 100 gives way");
+        assert_eq!(
+            merged.hom_alt,
+            HashMap::from([(100, b'T'), (300, b'G'), (400, b'T'), (500, b'A')]),
+            "the gVCF's allele wins at 300; the pileup's 400 stays; 500 is added"
+        );
+    }
+
+    #[test]
+    fn test_a_gvcf_without_het_calls_still_gives_its_hom_alt_calls() {
+        // 8 reads carry T at chrT:1501 (0-based 1,500): too few for the pileup
+        // (10), so only the gVCF's 1/1 call can put T on the copies.
+        let dir = test_dir("gvcf_hom_alt_only");
+        let bam = crate::carried::tests::site_bam(&dir, 8, 8);
+        let contig: Vec<u8> = (0..2_000).map(|i| crate::carried::tests::REF[i % crate::carried::tests::REF.len()]).collect();
+        assert_eq!(contig[1_500], b'A');
+        let vcf = dir.join("hom_only.vcf");
+        std::fs::write(
+            &vcf,
+            "##fileformat=VCFv4.2\n##contig=<ID=chrT,length=2000>\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n\
+             chrT\t1501\t.\tA\tT\t50\tPASS\t.\tGT\t1/1\n",
+        )
+        .unwrap();
+        let mut rng = StdRng::seed_from_u64(1);
+        let copies = sample_copies(
+            &bam,
+            "chrT",
+            1_000,
+            2_000,
+            &contig[1_000..2_000],
+            20,
+            Some(vcf.to_str().unwrap()),
+            None,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(copies.event_copy.get(&1_500), Some(&b'T'));
+        assert_eq!(copies.other_copy.get(&1_500), Some(&b'T'));
     }
 
     #[test]

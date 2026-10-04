@@ -380,6 +380,8 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 Without `--gvcf`, spike uses an automatic pileup approach to discover het and hom-alt SNPs. The gVCF approach is more accurate when calls are available, and a phased VCF also links SNPs that no read spans.
 
+Where the gVCF has no het call around an event, spike still finds het SNPs from the pileup, which phase the reads. It keeps the gVCF's hom-alt calls there over the pileup's, so a hom-alt call stays on both copies even where too few reads pass `--min-mapq` for the pileup to call it (review finding 4). On the hospital HG002 30x BAM with its own DeepVariant calls, this applied to 88 of 500 random event-sized windows on chr20. In those windows the pileup alone missed 17 of 377 hom-alt calls, most of them near the centromere.
+
 ### Configurable aligner
 
 The generated `align.sh` script uses `bwa-mem2` by default. Override with `--aligner`:
