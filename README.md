@@ -253,6 +253,21 @@ spike --bam sample.bam --reference GRCh38.fasta \
   -o output/
 ```
 
+**A site the sample already carries is refused.** spike edits one copy of the sample and keeps the other copy's reads as they were. If the sample already has another allele at the bases a small variant changes, those reads keep it, and the requested fraction cannot be reached. Asked for at 0.5, a site where the sample is hom-alt for the same change came out 25 ALT and 0 REF reads, while `truth.vcf` said 0.5 (review finding 3).
+
+So before any other work, spike counts the reads at each small variant's own bases. It uses the pileup's filter: primary, not duplicate, not QC-fail, MAPQ at least `--min-mapq`. A read that spans the site carries another allele when it has, inside the changed bases, a base other than the reference, a deletion, or an insertion at either edge.
+- spike refuses the event when at least 10 reads span the site and at least a fifth of them carry another allele. These are the pileup's own floor and its het bound.
+- Every refused event is listed in one error, and nothing is written.
+- With fewer than 10 spanning reads, spike warns that it could not check, and goes on.
+- Structural events (`del:`, `ins:`, `dup:`, `inv:`, fusions) are not checked.
+
+On the hospital HG002 30x BAM (chr20), the rule refused:
+- 99.3% of the het SNVs, 100% of the hom SNVs, 97.5% of the het indels and 98.5% of the hom indels that the sample's own DeepVariant calls hold;
+- 0.2% of random SNVs and 0% of random 1-10 bp indels where it has no call;
+- 0% of HG001's SNVs and 0.5% of its indels.
+
+The plan and the numbers are in `docs/superpowers/plans/2026-10-04-carried-allele.md`.
+
 ### Multiple events with per-event allele fractions
 
 Combine multiple events in a single run. Each event can have its own allele fraction:

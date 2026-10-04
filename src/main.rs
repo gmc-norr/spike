@@ -4,6 +4,7 @@
 //! (SVs, fusions, SNPs, indels).
 
 mod bam_stats;
+mod carried;
 mod census;
 mod exon;
 mod extract;
@@ -614,6 +615,7 @@ fn main() -> Result<()> {
     // Validate event coordinates against reference chromosome lengths.
     validate_event_coordinates(&events, &shared_ref)?;
     validate_event_overlaps(&events, args.allow_overlap)?;
+    refuse_carried_alleles(&events, &config.bam_path, &config.ref_path, config.min_mapq, &shared_ref)?;
 
     let mut event_outputs = Vec::with_capacity(events.len());
     // Per event, in the same order: the fraction its tiled fragments actually
@@ -968,6 +970,59 @@ fn main() -> Result<()> {
         run_fastq(&args.output, raw, fastq_prefix(&args), args.threads)?;
     }
 
+    Ok(())
+}
+
+/// Refuse the small variants the sample already carries (review finding 3),
+/// before any extraction: all of them in one error.
+///
+/// spike edits one copy and keeps the other copy's reads, so where the sample
+/// already has another allele at a small variant's own bases, the reads keep
+/// it and the requested fraction cannot be reached. Each site's reads are
+/// counted with the pileup's filter (see [`carried`]). Structural events are
+/// not checked.
+fn refuse_carried_alleles(
+    events: &[SimEvent],
+    bam_path: &str,
+    ref_path: &str,
+    min_mapq: u8,
+    reference: &reference::SharedReference,
+) -> Result<()> {
+    let mut reader = None;
+    let mut refused = Vec::new();
+    for event in events {
+        let SimEvent::SmallVariant { chrom, pos, ref_allele, alt_allele, .. } = event else { continue };
+        let reader = match &mut reader {
+            Some(r) => r,
+            None => reader.insert(carried::SiteReader::open(bam_path, ref_path)?),
+        };
+        let (start, end) = carried::changed_span(*pos, ref_allele, alt_allele);
+        let site_ref = reference.fetch_sequence(chrom, start, end)?;
+        let count = reader.count(chrom, start, end, &site_ref, min_mapq)?;
+        let label = event_label(event);
+        log::info!("{}: {} of {} reads carry another allele here", label, count.other, count.spanning);
+        match count.carried() {
+            Some(true) => refused.push(format!("{} ({} of {} reads)", label, count.other, count.spanning)),
+            Some(false) => {}
+            None => log::warn!(
+                "{}: only {} reads span it at MAPQ >= {}, fewer than {}, so whether the sample already \
+                 carries another allele here was not checked",
+                label,
+                count.spanning,
+                min_mapq,
+                carried::MIN_READS
+            ),
+        }
+    }
+    if !refused.is_empty() {
+        bail!(
+            "the sample already carries another allele at {} small variant(s): {}. spike edits one copy and \
+             keeps the other copy's reads, so those reads keep that allele and the requested fraction cannot be \
+             reached (a hom-alt site asked for at 0.5 comes out all ALT). Remove these events from the input",
+            refused.len(),
+            refused.join("; ")
+        );
+    }
     Ok(())
 }
 
@@ -5564,6 +5619,61 @@ cat "$root/validation_summary.tsv""#,
         let raw = out.join("spiked_R1.fastq.gz");
         std::fs::write(&raw, b"raw").unwrap();
         validate_into_fastq(Some(&[s(&raw), s(&b)]), o, "S1").unwrap();
+    }
+
+    /// The carried-allele fixture: every counted read carries T at chrT:1,501
+    /// (0-based 1,500), and nothing else differs from the reference.
+    fn carried_fixture(name: &str) -> (String, reference::SharedReference) {
+        use crate::carried::tests::{site_bam, site_dir, REF};
+        let bam = site_bam(&site_dir(name), 30, 30);
+        let contig: Vec<u8> = (0..2_000).map(|i| REF[i % REF.len()]).collect();
+        let reference = reference::SharedReference::from_sequences(std::collections::HashMap::from([("chrT".to_string(), contig)]));
+        (bam, reference)
+    }
+
+    /// A small variant on chrT.
+    fn event(pos: u64, r: &[u8], a: &[u8]) -> SimEvent {
+        SimEvent::SmallVariant {
+            chrom: "chrT".to_string(),
+            pos,
+            ref_allele: r.to_vec(),
+            alt_allele: a.to_vec(),
+            gene: "g".to_string(),
+            allele_fraction: None,
+        }
+    }
+
+    fn base_at(pos: u64) -> u8 {
+        crate::carried::tests::REF[pos as usize % crate::carried::tests::REF.len()]
+    }
+
+    #[test]
+    fn test_small_variants_the_sample_carries_are_refused_together() {
+        let (bam, reference) = carried_fixture("refuse_all");
+        let (r1500, r1499, r1520) = (base_at(1_500), base_at(1_499), base_at(1_520));
+        let events = [
+            event(1_500, &[r1500], b"T"),               // the sample carries T here
+            event(1_499, &[r1499, r1500], &[r1499]),    // a deletion of that base
+            event(1_520, &[r1520], if r1520 == b'G' { b"C" } else { b"G" }), // clear
+        ];
+        let err = refuse_carried_alleles(&events, &bam, "unused.fa", 20, &reference).unwrap_err().to_string();
+        assert!(err.contains("already carries another allele at 2 small variant"), "{err}");
+        assert!(err.contains("chrT:1501") && err.contains("chrT:1500") && err.contains("30 of 30 reads"), "{err}");
+        assert!(!err.contains("chrT:1521"), "{err}");
+        refuse_carried_alleles(&events[2..], &bam, "unused.fa", 20, &reference).unwrap();
+    }
+
+    #[test]
+    fn test_a_small_variant_with_too_few_reads_is_warned_about_and_kept() {
+        crate::loh::tests::capture::install();
+        let (bam, reference) = carried_fixture("refuse_few");
+        // 8 of the fixture's counted reads span 1,569-1,571.
+        let r = base_at(1_570);
+        let events = [event(1_570, &[r], if r == b'G' { b"C" } else { b"G" })];
+        refuse_carried_alleles(&events, &bam, "unused.fa", 20, &reference).unwrap();
+        let warned = crate::loh::tests::capture::warnings_matching("chrT:1571");
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(warned[0].contains("not checked") && warned[0].contains("8 reads"), "{}", warned[0]);
     }
 
     #[test]
