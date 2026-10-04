@@ -1043,7 +1043,7 @@ fn tile_haplotype_reads(
             rng.gen_range(0..=max_start)
         };
 
-        let name = format!("{}_hap_{:06}", name_prefix, idx);
+        let name = synth_gen.read_name(&format!("{}_hap_{:06}", name_prefix, idx));
         idx += 1;
 
         // Both copies share the layout; only their alleles differ.
@@ -1915,8 +1915,8 @@ mod tests {
 
         assert!(!pairs_a.is_empty());
         assert!(!pairs_b.is_empty());
-        assert!(pairs_a.iter().all(|p| p.name.starts_with("ev0001_")));
-        assert!(pairs_b.iter().all(|p| p.name.starts_with("ev0002_")));
+        assert!(pairs_a.iter().all(|p| p.name.starts_with("SPIKE_ev0001_")));
+        assert!(pairs_b.iter().all(|p| p.name.starts_with("SPIKE_ev0002_")));
 
         let names_a: std::collections::HashSet<&str> =
             pairs_a.iter().map(|p| p.name.as_str()).collect();
@@ -1928,6 +1928,46 @@ mod tests {
             overlap_count, 0,
             "synthetic names must not collide across events"
         );
+    }
+
+    /// A 7-part name shape for the naming tests.
+    fn seven_part_shape() -> crate::read_name::NameShape {
+        crate::read_name::NameShape::Illumina {
+            middle: "46:FC:2".to_string(),
+            tiles: vec![1101, 1102],
+            x: (1000, 2000),
+            y: (3000, 4000),
+        }
+    }
+
+    /// `named` is `plain` with each name in `shape`: the same reads, bases,
+    /// qualities and places, so naming drew nothing from the random stream.
+    fn same_reads_named_in(plain: &[ReadPair], named: &[ReadPair], shape: &crate::read_name::NameShape) {
+        assert!(!plain.is_empty());
+        assert_eq!(plain.len(), named.len());
+        for (p, n) in plain.iter().zip(named) {
+            let internal = p.name.strip_prefix("SPIKE_").unwrap_or_else(|| panic!("unmarked: {}", p.name));
+            assert_eq!(n.name, shape.name(internal));
+            let read = |r: &ReadPair| {
+                (r.seq1.clone(), r.qual1.clone(), r.seq2.clone(), r.qual2.clone(), r.ref_start, r.ref_end)
+            };
+            assert_eq!(read(p), read(n), "{}", p.name);
+            assert_eq!((p.insert_size, &p.chrom), (n.insert_size, &n.chrom), "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn test_tiled_reads_are_named_in_the_generator_s_shape_without_drawing_randomness() {
+        let hap = del_haplotype(2000, 5000);
+        let pool = make_pool(vec![]);
+        let tile = |gen: &SynthReadGenerator| {
+            let mut rng = StdRng::seed_from_u64(42);
+            tile_haplotype_reads(&hap, None, gen, &pool, 30.0, 0.5, false, "ev0001", &mut rng).0
+        };
+        let plain = tile(&mock_synth_gen(150));
+        let named = tile(&mock_synth_gen(150).with_read_names(seven_part_shape()));
+        assert!(plain.iter().all(|p| p.name.starts_with("SPIKE_ev0001_hap_")));
+        same_reads_named_in(&plain, &named, &seven_part_shape());
     }
 
     #[test]
@@ -2199,6 +2239,7 @@ mod tests {
             indel_error_rate: 0.0,
             dup_model: "full".to_string(),
             adapter_trimmed: false,
+            read_names: Default::default(),
         }
     }
 
@@ -2254,10 +2295,10 @@ mod tests {
             "DEL should produce chimeric reads spanning the deletion junction"
         );
 
-        // Chimeric read names should carry the event prefix.
+        // Chimeric read names should carry the mark and the event prefix.
         assert!(
-            out.chimeric_pairs[0].name.starts_with("ev0001"),
-            "chimeric read name should start with event prefix 'ev0001'"
+            out.chimeric_pairs[0].name.starts_with("SPIKE_ev0001"),
+            "chimeric read name should start with 'SPIKE_ev0001'"
         );
 
         // Total output (kept + chimeric) should be non-empty.
@@ -3310,6 +3351,32 @@ mod tests {
         assert!(of_event.len() > 100 && of_other.len() > 40, "{} / {}", of_event.len(), of_other.len());
         assert_eq!(count_by_copy(&of_event), (of_event.len(), 0));
         assert_eq!(count_by_copy(&of_other), (0, of_other.len()));
+    }
+
+    #[test]
+    fn test_junction_dup_depth_copies_are_named_in_the_generator_s_shape_without_drawing_randomness() {
+        let mut config = make_config();
+        config.dup_model = "junction".to_string();
+        let pool = make_pool((0..300u64).map(|i| make_pair(&format!("p{}", i), 2100 + i * 10, 2500 + i * 10)).collect());
+        let event = SimEvent::Duplication {
+            chrom: "chr1".to_string(),
+            dup_start: 2000,
+            dup_end: 6000,
+            gene: "TEST".to_string(),
+            allele_fraction: Some(0.5),
+        };
+        let run = |gen: &SynthReadGenerator| {
+            let mut hap = make_haplotype(vec![ref_segment(4000, 2000), ref_segment(2000, 2000)]);
+            let mut rng = StdRng::seed_from_u64(5);
+            simulate_event(1, &event, &pool, &mut hap, &config, gen, 0.5, &mut rng).unwrap().chimeric_pairs
+        };
+        let plain = run(&mock_synth_gen(150));
+        let named = run(&mock_synth_gen(150).with_read_names(seven_part_shape()));
+        assert!(
+            plain.iter().filter(|p| p.name.starts_with("SPIKE_ev0001_dup_depth_")).count() > 100,
+            "the depth copies are marked"
+        );
+        same_reads_named_in(&plain, &named, &seven_part_shape());
     }
 
     // ---------------------------------------------------------------

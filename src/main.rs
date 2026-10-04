@@ -11,6 +11,7 @@ mod fastq;
 mod haplotype;
 mod loh;
 mod origin;
+mod read_name;
 mod reference;
 mod simulate;
 mod stats;
@@ -473,6 +474,20 @@ fn main() -> Result<()> {
         crate::bam_stats::compute_stats(&args.bam, 50_000, Some(args.reference.as_str()))?;
     let read_length = bam_stats.cycles;
     validate_read_length(read_length)?;
+    let classes = bam_stats.name_classes;
+    log::info!(
+        "Read names: of {} sampled, {} have 7 fields and {} 5 (Picard reads a flowcell position \
+         from those) and {} are other; spike's reads take the shape {}, e.g. {}",
+        classes.seven + classes.five + classes.other,
+        classes.seven,
+        classes.five,
+        classes.other,
+        bam_stats.read_names.describe(),
+        bam_stats.read_names.name("ev0001_hap_000000"),
+    );
+    if let crate::read_name::NameShape::Illumina { tiles, .. } = &bam_stats.read_names {
+        log::debug!("Read name tiles: {:?}", tiles);
+    }
 
     // The simulated read group reuses the original sample, so merged.bam stays
     // single-sample. Read here, not in align.sh: align.sh never sees the BAM.
@@ -494,6 +509,7 @@ fn main() -> Result<()> {
         indel_error_rate: args.indel_error_rate,
         dup_model: args.dup_model.clone(),
         adapter_trimmed: bam_stats.adapter_trimmed,
+        read_names: bam_stats.read_names.clone(),
     };
 
     // Parse --region if provided.
@@ -1505,12 +1521,9 @@ struct EventStat {
 /// simulation.
 const MIN_DONOR_PAIRS: usize = 30;
 
-/// Dedup one event's extracted pairs and turn them into its donor pool.
-///
-/// Split out of `extract_pool_for_event` so the pool the simulation runs on
-/// can be checked without a BAM behind it.
 /// The event's read generator: its quality profile learned from the donor
-/// pool, sequencing `config.read_length` cycles, trimmed as the library was.
+/// pool, sequencing `config.read_length` cycles, trimmed as the library was,
+/// naming its reads in the input's name shape.
 fn synth_generator<'a>(
     pool: &ReadPool,
     reference: &'a crate::reference::SharedReference,
@@ -1519,8 +1532,13 @@ fn synth_generator<'a>(
     let quality_profile = synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
     synth::SynthReadGenerator::new(quality_profile, reference, config.read_length, config.indel_error_rate)
         .with_adapter_trim(config.adapter_trimmed)
+        .with_read_names(config.read_names.clone())
 }
 
+/// Dedup one event's extracted pairs and turn them into its donor pool.
+///
+/// Split out of `extract_pool_for_event` so the pool the simulation runs on
+/// can be checked without a BAM behind it.
 fn finish_donor_pool(
     mut all_pairs: Vec<ReadPair>,
     event: &SimEvent,
@@ -3960,6 +3978,7 @@ cat "$root/validation_summary.tsv""#,
             indel_error_rate: 0.0,
             dup_model: "full".to_string(),
             adapter_trimmed,
+            read_names: Default::default(),
         }
     }
 
@@ -4000,6 +4019,32 @@ cat "$root/validation_summary.tsv""#,
         assert_eq!(
             synth_generator(&pool, &reference, &pool_config(false)).min_fragment_len(),
             TEST_READ_LENGTH as i64
+        );
+    }
+
+    #[test]
+    fn test_the_generator_names_reads_in_the_input_s_shape() {
+        let mut seqs = std::collections::HashMap::new();
+        seqs.insert("chr20".to_string(), vec![b'A'; 1_000]);
+        let reference = crate::reference::SharedReference::from_sequences(seqs);
+        let pool = finish_donor_pool(
+            donor_pairs(MIN_DONOR_PAIRS),
+            &del("chr20", 30_000_000, 30_010_000),
+            &["chr20:29990000-30020000".to_string()],
+            0,
+            &pool_config(false),
+        )
+        .expect("a full pool");
+        let mut config = pool_config(false);
+        config.read_names = crate::read_name::NameShape::Illumina {
+            middle: "46:FC:2".to_string(),
+            tiles: vec![1101],
+            x: (5, 5),
+            y: (7, 7),
+        };
+        assert_eq!(
+            synth_generator(&pool, &reference, &config).read_name("ev0001_hap_000001"),
+            "SPIKE_ev0001_hap_000001:46:FC:2:1101:5:7"
         );
     }
 

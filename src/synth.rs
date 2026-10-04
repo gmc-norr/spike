@@ -18,6 +18,7 @@ use rayon::prelude::*;
 use crate::extract::reverse_complement;
 use crate::haplotype::VariantHaplotype;
 use crate::loh::SampleCopies;
+use crate::read_name::NameShape;
 use crate::reference::SharedReference;
 use crate::stats::FragmentDist;
 use crate::types::{ReadPair, ReadPool};
@@ -432,6 +433,9 @@ pub struct SynthReadGenerator<'a> {
     /// adapter's start (see `adapter_suffix_len`). Otherwise every read is
     /// `read_length` long and no fragment is shorter than one read.
     adapter_trimmed: bool,
+    /// The shape of the input's read names, which this generator's reads are
+    /// named in (`read_name`).
+    read_names: NameShape,
 }
 
 impl<'a> SynthReadGenerator<'a> {
@@ -447,6 +451,7 @@ impl<'a> SynthReadGenerator<'a> {
             read_length,
             indel_error_rate,
             adapter_trimmed: false,
+            read_names: NameShape::Other,
         }
     }
 
@@ -455,6 +460,17 @@ impl<'a> SynthReadGenerator<'a> {
     pub fn with_adapter_trim(mut self, on: bool) -> Self {
         self.adapter_trimmed = on;
         self
+    }
+
+    /// This generator naming its reads in `shape`; `new` uses `Other`.
+    pub fn with_read_names(mut self, shape: NameShape) -> Self {
+        self.read_names = shape;
+        self
+    }
+
+    /// The name of this generator's read `internal` (`NameShape::name`).
+    pub fn read_name(&self, internal: &str) -> String {
+        self.read_names.name(internal)
     }
 
     /// The shortest fragment this generator sequences: any, in a trimmed
@@ -797,7 +813,7 @@ impl<'a> SynthReadGenerator<'a> {
                     &pair.chrom,
                     pair,
                     alleles,
-                    &format!("{}_dup_depth_{:06}", name_prefix, i),
+                    &self.read_name(&format!("{}_dup_depth_{:06}", name_prefix, i)),
                     &pool.frag_dist,
                     rng,
                 ) {

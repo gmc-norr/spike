@@ -885,7 +885,7 @@ decides.
 deletion is in the BAM within 500 bp of START or END (the windows `split_reads`
 reads), carrying the deletion's join. It is the DEL row that decides (RF14).
 - **Whose reads.** spike's reads are known by name: truth record `sim_del_N` goes
-  with reads named `evNNNN_hap_...`.
+  with reads named `SPIKE_evNNNN_hap_...` (see [Read names](#read-names)).
 - **Carrying.** A read carries the deletion when its bases hold the event
   haplotype's 31 bases across the join, `ref[START-15, START) + ref[END, END+16)`,
   in either orientation, with at most 2 bases differing. Those are the sample's
@@ -920,7 +920,7 @@ Measured on RF14's fresh sites in the 35x HG002 BAM:
 `ins_planted` establishes that at least **one** of the reads spike made for the
 event is in the BAM within 150 bp of POS, carrying its inserted bases across a
 junction. It is the INS row that decides (RF13). spike's reads are known by
-name: truth record `sim_ins_N` goes with reads named `evNNNN_hap_...`. A read
+name: truth record `sim_ins_N` goes with reads named `SPIKE_evNNNN_hap_...` (see [Read names](#read-names)). A read
 carries the insertion when its bases hold one of two 31-base junction probes
 from the event's own haplotype (15 reference bases, then 16 past the junction,
 at each end of the insertion), with every **inserted** base matching exactly and
@@ -1329,6 +1329,19 @@ A small event under `origin` takes slightly longer on more than one thread than 
 | `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- then kept, chimeric and suppressed reads, pairs dropped for unusable quality, **Resistant reads** and **Depth fold**), the pairs dropped in total, read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
+
+### Read names
+
+Every read spike makes is named `SPIKE_<event>_<kind>_<counter>`: for example `SPIKE_ev0001_hap_000123` (tiled reads), or `SPIKE_ev0001_dup_depth_000123` (depth copies under `--dup-model junction`). `samtools view merged.bam | grep SPIKE_` finds every one of them. spike never edits a real read in place, so every other read in `merged.bam` is an original.
+
+Tools also read a flowcell position out of a read's name. Picard MarkDuplicates, which raredisease runs, splits the name on `:`. When there are 5 or 7 fields, it takes the last three as tile, x and y, and uses them to find optical duplicates. Any other name gets no position, and Picard warns once that its `READ_NAME_REGEX` did not match.
+
+Real names differ by machine: for example `A00744:46:HV3C3DSXX:2:1221:8775:9361` (NovaSeq 6000) and `D00360:96:H2YLYBCXX:1:2105:5916:51581` (HiSeq 2500). So spike learns the shape from the input's first 50,000 primary records and names its own reads the same way. The shape is the one most of those names have:
+
+- **7 fields** (`MACHINE:RUN:FLOWCELL:LANE:TILE:X:Y`) or **5 fields** (`MACHINE:LANE:TILE:X:Y`), with the last three numbers. spike's reads keep the input's most common `RUN:FLOWCELL:LANE` (or `LANE`), and get a tile seen with it and an x and y within the range seen. From the first input above, that is `SPIKE_ev0001_hap_000123:46:HV3C3DSXX:2:<tile>:<x>:<y>`. The machine field is the only one changed, and Picard does not read it.
+- **Anything else** (or a tie): spike's reads are named `SPIKE_ev0001_hap_000123`, with no position. Picard cannot read a position from the real reads either.
+
+The tile, x and y come from a hash of the read's name, not from the run's random stream, so the name changes nothing else about a run. The log line `Read names: ...` says which shape was learned. The checks are in `docs/superpowers/plans/2026-10-04-read-names.md`.
 
 ### Truth VCF
 

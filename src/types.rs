@@ -200,6 +200,9 @@ pub struct SimConfig {
     /// Whether the input library's reads were adapter-trimmed before
     /// alignment (`bam_stats`); see `SynthReadGenerator::with_adapter_trim`.
     pub adapter_trimmed: bool,
+    /// The shape of the input's read names (`bam_stats`), which spike's own
+    /// reads are named in; see `read_name`.
+    pub read_names: crate::read_name::NameShape,
 }
 
 impl SimConfig {

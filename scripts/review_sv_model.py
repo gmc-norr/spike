@@ -166,7 +166,7 @@ class Probe:
                 (first, second)
                 for (name, first), (_, second) in zip(
                     fastq(destination / "R1.fq.gz"), fastq(destination / "R2.fq.gz"),
-                ) if name.startswith("ev")
+                ) if name.startswith("SPIKE_")
             ]
             anchored = sum(
                 self.locate(first) is not None or self.locate(second) is not None

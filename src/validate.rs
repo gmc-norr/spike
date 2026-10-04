@@ -378,11 +378,11 @@ fn del_junction_probes(left: &[u8], right: &[u8]) -> Vec<(Vec<u8>, Vec<bool>)> {
     probes
 }
 
-/// The read-name prefix spike gives the tiled reads of event `n`:
-/// `simulate_event`'s `format!("ev{:04}", n)` and `tile_haplotype_reads`'s
-/// `_hap_`. `simulate.rs` pins that the two agree.
+/// The read-name prefix spike gives the tiled reads of event `n`: the
+/// `SPIKE_` mark (`read_name`), `simulate_event`'s `format!("ev{:04}", n)` and
+/// `tile_haplotype_reads`'s `_hap_`. `simulate.rs` pins that the two agree.
 pub(crate) fn planted_read_prefix(n: u32) -> String {
-    format!("ev{:04}_hap_", n)
+    format!("{}ev{:04}_hap_", crate::read_name::MARK, n)
 }
 
 /// `N` if `id` is spike's truth ID `<prefix>N` (`sim_ins_N`, `sim_del_N`);
@@ -8049,11 +8049,11 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
     /// carrying `carried_insertion()` whole as an `I` operation, so only their
     /// names and flags tell them apart:
     ///
-    /// - `ev0001_hap_000001` and `_000002`: event 1's own, MAPQ 60, unflagged;
-    /// - `ev0001_hap_000003`: event 1's own, **MAPQ 0 and duplicate-flagged**;
-    /// - `ev0001_hap_000004`: event 1's own, but **secondary**;
+    /// - `SPIKE_ev0001_hap_000001` and `_000002`: event 1's own, MAPQ 60, unflagged;
+    /// - `SPIKE_ev0001_hap_000003`: event 1's own, **MAPQ 0 and duplicate-flagged**;
+    /// - `SPIKE_ev0001_hap_000004`: event 1's own, but **secondary**;
     /// - `A00744:46:HV3C3DSXX:2:1104:13160:1000`: a read of the sample's own;
-    /// - `ev0002_hap_000001`: **another event's** read.
+    /// - `SPIKE_ev0002_hap_000001`: **another event's** read.
     ///
     /// For truth record `sim_ins_1`, `ins_planted` must count exactly the first
     /// three.
@@ -8066,12 +8066,12 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         let carried = carried_insertion();
         let flank = (TEST_READ_LEN - carried.len()) / 2;
         let reads: [(&str, u16, u8); 6] = [
-            ("ev0001_hap_000001", 0, 60),
-            ("ev0001_hap_000002", 0, 60),
-            ("ev0001_hap_000003", 0x400, 0),
-            ("ev0001_hap_000004", 0x100, 60),
+            ("SPIKE_ev0001_hap_000001:46:FC:2:1101:1:1", 0, 60),
+            ("SPIKE_ev0001_hap_000002:46:FC:2:1101:1:1", 0, 60),
+            ("SPIKE_ev0001_hap_000003:46:FC:2:1101:1:1", 0x400, 0),
+            ("SPIKE_ev0001_hap_000004:46:FC:2:1101:1:1", 0x100, 60),
             ("A00744:46:HV3C3DSXX:2:1104:13160:1000", 0, 60),
-            ("ev0002_hap_000001", 0, 60),
+            ("SPIKE_ev0002_hap_000001:46:FC:2:1101:1:1", 0, 60),
         ];
         // All six at one start, so every read carries the insertion at POS
         // itself: `inserted_sequence_cram`'s `+ i` staggering would put read i's
@@ -8303,15 +8303,15 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
     /// `seq[..5000] + seq[8000..]`, told apart by name, placement, flags and
     /// bases:
     ///
-    /// - `ev0001_hap_000001`: event 1's, aligned at the START side (60M40S);
-    /// - `ev0001_hap_000002`: event 1's, aligned at the END side only (40S60M),
+    /// - `SPIKE_ev0001_hap_000001`: event 1's, aligned at the START side (60M40S);
+    /// - `SPIKE_ev0001_hap_000002`: event 1's, aligned at the END side only (40S60M),
     ///   inside END's window and outside START's;
-    /// - `ev0001_hap_000003`: event 1's, **MAPQ 0 and duplicate-flagged**;
-    /// - `ev0001_hap_000004`: event 1's, but **secondary**;
-    /// - `ev0001_hap_000005`: event 1's, **one** base of the probe changed;
-    /// - `ev0001_hap_000006`: event 1's, **three** bases of the probe changed;
+    /// - `SPIKE_ev0001_hap_000003`: event 1's, **MAPQ 0 and duplicate-flagged**;
+    /// - `SPIKE_ev0001_hap_000004`: event 1's, but **secondary**;
+    /// - `SPIKE_ev0001_hap_000005`: event 1's, **one** base of the probe changed;
+    /// - `SPIKE_ev0001_hap_000006`: event 1's, **three** bases of the probe changed;
     /// - `A00744:46:HV3C3DSXX:2:1104:13160:1000`: a read of the sample's own;
-    /// - `ev0002_hap_000001`: **another event's** read.
+    /// - `SPIKE_ev0002_hap_000001`: **another event's** read.
     ///
     /// For truth record `sim_del_1`, `del_planted` must count exactly 1, 2, 3
     /// and 5.
@@ -8342,15 +8342,15 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
         right_placed.extend_from_slice(&seq[e..e + 60]);
 
         let mut reads: Vec<DelPlantedRead> = vec![
-            ("ev0001_hap_000001", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
-            ("ev0001_hap_000003", s - 60, left_ops.to_vec(), left_placed(), 0x400, 0),
-            ("ev0001_hap_000004", s - 60, left_ops.to_vec(), left_placed(), 0x100, 60),
-            ("ev0001_hap_000005", s - 60, left_ops.to_vec(), with_changes(&[55]), 0, 60),
-            ("ev0001_hap_000006", s - 60, left_ops.to_vec(), with_changes(&[50, 55, 65]), 0, 60),
+            ("SPIKE_ev0001_hap_000001:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
+            ("SPIKE_ev0001_hap_000003:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), left_placed(), 0x400, 0),
+            ("SPIKE_ev0001_hap_000004:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), left_placed(), 0x100, 60),
+            ("SPIKE_ev0001_hap_000005:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), with_changes(&[55]), 0, 60),
+            ("SPIKE_ev0001_hap_000006:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), with_changes(&[50, 55, 65]), 0, 60),
             ("A00744:46:HV3C3DSXX:2:1104:13160:1000", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
-            ("ev0002_hap_000001", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
+            ("SPIKE_ev0002_hap_000001:46:FC:2:1101:1:1", s - 60, left_ops.to_vec(), left_placed(), 0, 60),
             (
-                "ev0001_hap_000002",
+                "SPIKE_ev0001_hap_000002:46:FC:2:1101:1:1",
                 e,
                 vec![(Kind::SoftClip, 40), (Kind::Match, 60)],
                 right_placed,
@@ -8543,8 +8543,9 @@ chrA\t9001\tsim_var_1\tA\tT\t999\tPASS\tSIM_VAF=0.500\tGT\t0/1
     #[test]
     fn test_planted_read_prefix_spells_spikes_read_names() {
         // `simulate.rs` names event N's tiled reads `format!("ev{:04}", N)` +
-        // `_hap_` + a counter; simulate's own test pins that the two agree.
-        assert_eq!(planted_read_prefix(1), "ev0001_hap_");
-        assert_eq!(planted_read_prefix(123), "ev0123_hap_");
+        // `_hap_` + a counter, written as `SPIKE_` + that (`read_name`);
+        // simulate's own test pins that the two agree.
+        assert_eq!(planted_read_prefix(1), "SPIKE_ev0001_hap_");
+        assert_eq!(planted_read_prefix(123), "SPIKE_ev0123_hap_");
     }
 }

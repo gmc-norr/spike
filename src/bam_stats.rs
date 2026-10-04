@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use log::info;
 
+use crate::read_name::{NameClasses, NameShape};
+
 /// What spike reads off the head of the input BAM/CRAM.
 ///
 /// Only the read length and the trimming verdict are used downstream. An insert size and a coverage
@@ -19,6 +21,10 @@ pub struct BamStats {
     pub adapter_trimmed: bool,
     /// Primary, mapped records the scan examined.
     pub records_sampled: usize,
+    /// The shape of the sampled records' names (`NameShape::learn`).
+    pub read_names: NameShape,
+    /// How many sampled names fell in each class.
+    pub name_classes: NameClasses,
 }
 
 /// Full-length reads the scan must see before judging trimming.
@@ -60,6 +66,7 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     reader.read_header()?;
 
     let mut read_lengths: Vec<(usize, bool)> = Vec::with_capacity(sample_size);
+    let mut names: Vec<Vec<u8>> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
 
@@ -78,6 +85,7 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
 
         total_records += 1;
         saw_segmented |= flags.is_segmented();
+        names.push(record.name().map(|n| n.to_vec()).unwrap_or_default());
 
         let seq: Vec<u8> = record.sequence().iter().collect();
         if !seq.is_empty() {
@@ -90,7 +98,7 @@ fn compute_stats_bam(bam_path: &str, sample_size: usize) -> Result<BamStats> {
     }
 
     reject_single_end(bam_path, saw_segmented, total_records, sample_size)?;
-    finalize_stats(read_lengths, total_records)
+    Ok(with_names(finalize_stats(read_lengths, total_records)?, &names))
 }
 
 /// CRAM-specific stats computation.
@@ -109,6 +117,7 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
     let header = reader.read_header()?;
 
     let mut read_lengths: Vec<(usize, bool)> = Vec::with_capacity(sample_size);
+    let mut names: Vec<Vec<u8>> = Vec::with_capacity(sample_size);
     let mut total_records: usize = 0;
     let mut saw_segmented = false;
 
@@ -131,6 +140,7 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
 
         total_records += 1;
         saw_segmented |= flags.is_segmented();
+        names.push(buf.name().map(|n| n.to_vec()).unwrap_or_default());
 
         let seq: &[u8] = buf.sequence().as_ref();
         if !seq.is_empty() {
@@ -143,7 +153,13 @@ fn compute_stats_cram(cram_path: &str, sample_size: usize, ref_path: &str) -> Re
     }
 
     reject_single_end(cram_path, saw_segmented, total_records, sample_size)?;
-    finalize_stats(read_lengths, total_records)
+    Ok(with_names(finalize_stats(read_lengths, total_records)?, &names))
+}
+
+/// `stats` with the shape of the sampled `names` (`NameShape::learn`).
+fn with_names(stats: BamStats, names: &[Vec<u8>]) -> BamStats {
+    let (read_names, name_classes) = NameShape::learn(names.iter().map(Vec::as_slice));
+    BamStats { read_names, name_classes, ..stats }
 }
 
 /// Refuse a single-end library, once the scan has established it is one.
@@ -225,6 +241,8 @@ fn finalize_stats(read_lengths: Vec<(usize, bool)>, total_records: usize) -> Res
         cycles,
         adapter_trimmed,
         records_sampled: total_records,
+        read_names: NameShape::Other,
+        name_classes: NameClasses::default(),
     };
 
     info!(
@@ -391,6 +409,12 @@ mod tests {
     /// `0x41` a paired one whose reads never aligned as a proper pair, and
     /// `0x63` an ordinary proper pair.
     fn write_flat_bam(path: &std::path::Path, n: usize, flags: u16, template_length: i32) {
+        let names: Vec<String> = (0..n).map(|i| format!("r{}", i)).collect();
+        write_named_bam(path, &names, flags, template_length);
+    }
+
+    /// As `write_flat_bam`, one record per name in `names`.
+    fn write_named_bam(path: &std::path::Path, names: &[String], flags: u16, template_length: i32) {
         use noodles::sam::alignment::io::Write as _;
         use std::num::NonZeroUsize;
 
@@ -410,9 +434,9 @@ mod tests {
             .unwrap();
         writer.write_header(&header).unwrap();
 
-        for i in 0..n {
+        for (i, name) in names.iter().enumerate() {
             let record = noodles::sam::alignment::RecordBuf::builder()
-                .set_name(format!("r{}", i))
+                .set_name(name.as_str())
                 .set_flags(noodles::sam::alignment::record::Flags::from(flags))
                 .set_reference_sequence_id(0)
                 .set_alignment_start(noodles::core::Position::new(1 + i % 1000).unwrap())
@@ -571,6 +595,35 @@ mod tests {
         assert_eq!(stats.records_sampled, 10, "5 pairs = 10 primary records");
         assert_eq!(stats.cycles, 100, "every read is 100 bp");
         assert!(!stats.adapter_trimmed, "10 reads are too few to tell");
+        assert_eq!(
+            stats.name_classes,
+            NameClasses { seven: 0, five: 0, other: 10 },
+            "the CRAM scan reads every sampled record's name (chrA_pair0, ...)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_scan_learns_the_shape_of_the_input_s_read_names() {
+        let dir = scratch_dir("bam_stats_read_names");
+        let bam = dir.join("named.bam");
+        let mut names: Vec<String> = (0..30)
+            .map(|i| format!("A00744:46:HV3C3DSXX:2:{}:{}:{}", 1101 + i % 3, 1000 + i, 2000 + i))
+            .collect();
+        names.extend((0..10).map(|i| format!("r{}", i)));
+        write_named_bam(&bam, &names, 0x63, 300);
+
+        let stats = compute_stats(bam.to_str().unwrap(), 35, None).unwrap();
+        assert_eq!(stats.name_classes, NameClasses { seven: 30, five: 0, other: 5 }, "the first 35 records");
+        assert_eq!(
+            stats.read_names,
+            NameShape::Illumina {
+                middle: "46:HV3C3DSXX:2".to_string(),
+                tiles: vec![1101, 1102, 1103],
+                x: (1000, 1029),
+                y: (2000, 2029),
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
