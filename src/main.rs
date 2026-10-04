@@ -156,6 +156,12 @@ struct Args {
     #[arg(long)]
     align: bool,
 
+    /// The sample's raw FASTQ pair (every lane concatenated), from the run
+    /// whose BAM --bam is. At the end spike runs fastq.sh on it, writing the
+    /// full spiked pair to <output>/spiked_R1.fastq.gz and spiked_R2.fastq.gz.
+    #[arg(long, num_args = 2, value_names = ["RAW_R1", "RAW_R2"])]
+    raw_fastq: Option<Vec<String>>,
+
     /// Indel error rate per base in synthetic reads (fraction of total error
     /// that is indel rather than substitution). Default 0.0 means substitution-only.
     /// Typical Illumina: 0.0 to 0.05.
@@ -467,6 +473,7 @@ fn main() -> Result<()> {
     }
 
     validate_edit_model(&args.edit_model)?;
+    validate_raw_fastq(args.raw_fastq.as_deref())?;
 
     // Compute BAM stats: the cycles each read is sequenced for, and whether
     // the library was adapter-trimmed.
@@ -901,6 +908,11 @@ fn main() -> Result<()> {
         run_alignment(&args.output, &args.reference, args.threads)?;
     }
 
+    // Build the full FASTQ if given the raw one.
+    if let Some(raw) = &args.raw_fastq {
+        run_fastq(&args.output, raw, args.threads)?;
+    }
+
     Ok(())
 }
 
@@ -1234,6 +1246,34 @@ echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))?;
     }
 
+    Ok(())
+}
+
+/// Refuse `--raw-fastq` paths that are not files, before any work is done.
+fn validate_raw_fastq(raw: Option<&[String]>) -> Result<()> {
+    for path in raw.unwrap_or_default() {
+        if !Path::new(path).is_file() {
+            bail!("--raw-fastq {} is not a file; give the sample's raw FASTQ pair (R1 then R2)", path);
+        }
+    }
+    Ok(())
+}
+
+/// Run the output's fastq.sh on the raw pair `raw`, writing
+/// `<output>/spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`.
+fn run_fastq(output_dir: &str, raw: &[String], threads: usize) -> Result<()> {
+    log::info!("Building the full spiked FASTQ from {} and {}...", raw[0], raw[1]);
+    let out = |mate: u8| Path::new(output_dir).join(format!("spiked_R{}.fastq.gz", mate));
+    let status = std::process::Command::new("bash")
+        .arg(Path::new(output_dir).join("fastq.sh"))
+        .args([&raw[0], &raw[1]])
+        .args([out(1), out(2)])
+        .arg(threads.to_string())
+        .status()?;
+    if !status.success() {
+        bail!("fastq.sh failed with exit code {:?}; its message is above", status.code());
+    }
+    log::info!("Full FASTQ: {} and {}", out(1).display(), out(2).display());
     Ok(())
 }
 
@@ -2427,7 +2467,8 @@ fn write_readme(
     writeln!(md, "bash merge.sh  # produces merged.bam")?;
     writeln!(md)?;
     writeln!(md, "# Or: a full FASTQ pair for a pipeline that starts from raw FASTQ")?;
-    writeln!(md, "#   (needs no align.sh; RAW_R1/RAW_R2 = the sample's raw FASTQ, every lane)")?;
+    writeln!(md, "#   (needs no align.sh; RAW_R1/RAW_R2 = the sample's raw FASTQ, every lane;")?;
+    writeln!(md, "#   spike --raw-fastq RAW_R1 RAW_R2 runs this itself, into spiked_R1/R2.fastq.gz)")?;
     writeln!(md, "bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz")?;
     writeln!(md, "```")?;
 
@@ -4947,6 +4988,50 @@ cat "$root/validation_summary.tsv""#,
     fn test_validate_edit_model_rejects_anything_else_and_names_both() {
         let err = validate_edit_model("Origin").unwrap_err().to_string();
         assert!(err.contains("'Origin'") && err.contains("clean") && err.contains("origin"), "{}", err);
+    }
+
+    #[test]
+    fn test_raw_fastq_takes_a_pair_of_paths() {
+        let base = ["spike", "--bam", "x.bam", "--reference", "x.fa"];
+        let args = Args::try_parse_from(base.iter().chain(&["--raw-fastq", "a.fq.gz", "b.fq.gz"])).unwrap();
+        assert_eq!(args.raw_fastq, Some(vec!["a.fq.gz".to_string(), "b.fq.gz".to_string()]));
+        assert!(Args::try_parse_from(base.iter().chain(&["--raw-fastq", "a.fq.gz"])).is_err(), "one path is not a pair");
+        assert_eq!(Args::try_parse_from(base).unwrap().raw_fastq, None);
+    }
+
+    #[test]
+    fn test_raw_fastq_paths_must_be_files_before_any_work() {
+        let dir = scratch_dir("raw_fastq_check");
+        let present = dir.join("r1.fq.gz");
+        std::fs::write(&present, b"").unwrap();
+        let (p, missing) = (present.to_str().unwrap().to_string(), dir.join("nope.fq.gz").to_str().unwrap().to_string());
+        validate_raw_fastq(None).unwrap();
+        validate_raw_fastq(Some(&[p.clone(), p.clone()])).unwrap();
+        let err = validate_raw_fastq(Some(&[p.clone(), missing.clone()])).unwrap_err().to_string();
+        assert!(err.contains(&missing), "{err}");
+        assert!(validate_raw_fastq(Some(&[missing, p])).is_err());
+    }
+
+    #[test]
+    fn test_run_fastq_writes_the_spiked_pair_into_the_output() {
+        let dir = scratch_dir("run_fastq");
+        let [r1, r2, _, _] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        let raw = [r1.to_str().unwrap().to_string(), r2.to_str().unwrap().to_string()];
+        run_fastq(dir.to_str().unwrap(), &raw, 2).unwrap();
+        assert_eq!(gz_read(&dir.join("spiked_R1.fastq.gz")), fastq_expected(1, "comment"));
+        assert_eq!(gz_read(&dir.join("spiked_R2.fastq.gz")), fastq_expected(2, "comment"));
+    }
+
+    #[test]
+    fn test_run_fastq_fails_when_fastq_sh_refuses() {
+        let dir = scratch_dir("run_fastq_refused");
+        let [r1, r2, _, _] = fastq_paths(&dir, "");
+        fastq_fixture(&dir, [&r1, &r2], "comment");
+        std::fs::write(dir.join("fastq_removed_reads.txt"), "M:1:FC:2:1101:99:99\n").unwrap();
+        let raw = [r1.to_str().unwrap().to_string(), r2.to_str().unwrap().to_string()];
+        assert!(run_fastq(dir.to_str().unwrap(), &raw, 2).is_err());
+        assert!(!dir.join("spiked_R1.fastq.gz").exists() && !dir.join("spiked_R2.fastq.gz").exists());
     }
 
     #[test]

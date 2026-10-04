@@ -1340,6 +1340,15 @@ A pipeline that starts from raw FASTQ, such as nf-core/raredisease, needs the wh
 bash output/fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz [THREADS]
 ```
 
+Or let spike run it at the end of the run, writing `output/spiked_R1.fastq.gz` and `output/spiked_R2.fastq.gz`:
+
+```bash
+spike --bam sample.bam --reference ref.fa --vcf variants.vcf -o output \
+      --raw-fastq RAW_R1.fastq.gz RAW_R2.fastq.gz
+```
+
+spike checks that both raw files exist before it starts, and fails if `fastq.sh` refuses them.
+
 - **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
 - **It then adds spike's own reads** (`SPIKE_...`) at the end of each file. Their headers take the raw file's style, copied from its first record: for example ` 1:N:0:ACGTACGT+TGCATGCA` after the name, or `/1`.
 - **A read is matched by name:** its header's first word, without `@` and a trailing `/1` or `/2`. That is the name the aligner gave it in the BAM spike was run on.
