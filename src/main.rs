@@ -156,11 +156,20 @@ struct Args {
     #[arg(long)]
     align: bool,
 
-    /// The sample's raw FASTQ pair (every lane concatenated), from the run
-    /// whose BAM --bam is. At the end spike runs fastq.sh on it, writing the
-    /// full spiked pair to <output>/spiked_R1.fastq.gz and spiked_R2.fastq.gz.
+    /// Spike the events into the sample's raw FASTQ pair: the whole sample,
+    /// spiked, is written to <output>/<NAME>_R1.fastq.gz and <NAME>_R2.fastq.gz
+    /// (NAME from --fastq-prefix, default spiked), the pair to give a pipeline
+    /// that starts from FASTQ. RAW_R1/RAW_R2 are every lane concatenated, from
+    /// the run whose BAM --bam is; spike runs fastq.sh on them at the end.
+    /// (R1.fq.gz and R2.fq.gz hold only spike's reads around the events.)
     #[arg(long, num_args = 2, value_names = ["RAW_R1", "RAW_R2"])]
-    raw_fastq: Option<Vec<String>>,
+    into_fastq: Option<Vec<String>>,
+
+    /// Name of the whole-sample pair --into-fastq writes: <output>/NAME_R1.fastq.gz
+    /// and NAME_R2.fastq.gz [default: spiked]. A plain name, so many samples'
+    /// pairs can sit side by side; -o picks the folder.
+    #[arg(long, value_name = "NAME", requires = "into_fastq")]
+    fastq_prefix: Option<String>,
 
     /// Indel error rate per base in synthetic reads (fraction of total error
     /// that is indel rather than substitution). Default 0.0 means substitution-only.
@@ -503,7 +512,8 @@ fn main() -> Result<()> {
     }
 
     validate_edit_model(&args.edit_model)?;
-    validate_raw_fastq(args.raw_fastq.as_deref())?;
+    validate_into_fastq(args.into_fastq.as_deref())?;
+    validate_fastq_prefix(args.fastq_prefix.as_deref())?;
 
     // Compute BAM stats: the cycles each read is sequenced for, and whether
     // the library was adapter-trimmed.
@@ -935,22 +945,17 @@ fn main() -> Result<()> {
         args.flank,
         dropped_unreplaced,
         edit_origin,
+        args.into_fastq.as_ref().map(|_| fastq_prefix(&args)),
     )?;
 
     // Summary.
     log::info!("=== spike complete ===");
     log::info!("Output directory: {}", args.output);
-    log::info!("FASTQ: {} and {}", r1_path, r2_path);
+    log::info!("{}", spike_reads_message(&r1_path, &r2_path));
     log::info!("Truth VCF: {}", truth_path.display());
     log::info!("Total read pairs: {}", all_output_pairs.len());
     log::info!("README: {}/README.md", args.output);
-    log::info!(
-        "Next steps: bash {}/align.sh  →  bash {}/merge.sh; or, for a full FASTQ: bash {}/fastq.sh \
-         RAW_R1 RAW_R2 OUT_R1 OUT_R2",
-        args.output,
-        args.output,
-        args.output
-    );
+    log::info!("{}", next_steps_message(&args.output, args.into_fastq.is_some()));
 
     // Auto-align if requested.
     if args.align {
@@ -958,8 +963,8 @@ fn main() -> Result<()> {
     }
 
     // Build the full FASTQ if given the raw one.
-    if let Some(raw) = &args.raw_fastq {
-        run_fastq(&args.output, raw, args.threads)?;
+    if let Some(raw) = &args.into_fastq {
+        run_fastq(&args.output, raw, fastq_prefix(&args), args.threads)?;
     }
 
     Ok(())
@@ -1298,31 +1303,92 @@ echo "Done: $DIR/sim.bam ($TOTAL reads, $SA_COUNT with SA tags)"
     Ok(())
 }
 
-/// Refuse `--raw-fastq` paths that are not files, before any work is done.
-fn validate_raw_fastq(raw: Option<&[String]>) -> Result<()> {
-    for path in raw.unwrap_or_default() {
-        if !Path::new(path).is_file() {
-            bail!("--raw-fastq {} is not a file; give the sample's raw FASTQ pair (R1 then R2)", path);
+/// The name `--into-fastq`'s whole-sample pair takes without `--fastq-prefix`.
+const DEFAULT_FASTQ_PREFIX: &str = "spiked";
+
+/// The name `--into-fastq`'s whole-sample pair takes.
+fn fastq_prefix(args: &Args) -> &str {
+    args.fastq_prefix.as_deref().unwrap_or(DEFAULT_FASTQ_PREFIX)
+}
+
+/// Refuse a `--fastq-prefix` that is not a plain file name, before any work:
+/// `-o` picks the folder, so a `/` would put the pair somewhere else.
+fn validate_fastq_prefix(prefix: Option<&str>) -> Result<()> {
+    if let Some(p) = prefix {
+        if p.is_empty() || p == "." || p == ".." || p.contains('/') {
+            bail!(
+                "--fastq-prefix {:?} is not a plain name; give a name such as the sample's: S1 writes \
+                 S1_R1.fastq.gz and S1_R2.fastq.gz into the -o folder",
+                p
+            );
         }
     }
     Ok(())
 }
 
-/// Run the output's fastq.sh on the raw pair `raw`, writing
-/// `<output>/spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`.
-fn run_fastq(output_dir: &str, raw: &[String], threads: usize) -> Result<()> {
-    log::info!("Building the full spiked FASTQ from {} and {}...", raw[0], raw[1]);
-    let out = |mate: u8| Path::new(output_dir).join(format!("spiked_R{}.fastq.gz", mate));
+/// `<output>/<prefix>_R1.fastq.gz` and `_R2.fastq.gz`: the whole sample, spiked.
+fn whole_sample_paths(output_dir: &str, prefix: &str) -> [std::path::PathBuf; 2] {
+    [1, 2].map(|mate| Path::new(output_dir).join(format!("{}_R{}.fastq.gz", prefix, mate)))
+}
+
+/// The run's line for R1/R2: they are not a sample on their own.
+fn spike_reads_message(r1: &str, r2: &str) -> String {
+    format!("spike's reads, around the events only (not the whole sample): {} and {}", r1, r2)
+}
+
+/// The run's last line under `--into-fastq`: the pair a pipeline wants.
+fn whole_sample_message(r1: &Path, r2: &Path) -> String {
+    format!(
+        "The whole sample, spiked -- the pair for a pipeline that starts from FASTQ: {} and {}",
+        r1.display(),
+        r2.display()
+    )
+}
+
+/// What to run after spike: under `--into-fastq` the whole-sample FASTQ comes
+/// next in this run, so only the BAM route is left to name.
+fn next_steps_message(output_dir: &str, into_fastq: bool) -> String {
+    if into_fastq {
+        format!(
+            "Next steps: the whole sample's spiked FASTQ is built below; for a spiked BAM: bash \
+             {o}/align.sh  →  bash {o}/merge.sh",
+            o = output_dir
+        )
+    } else {
+        format!(
+            "Next steps: bash {o}/align.sh  →  bash {o}/merge.sh; or, for the whole sample as spiked \
+             FASTQ: bash {o}/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 \
+             runs at the end of a run)",
+            o = output_dir
+        )
+    }
+}
+
+/// Refuse `--into-fastq` paths that are not files, before any work is done.
+fn validate_into_fastq(raw: Option<&[String]>) -> Result<()> {
+    for path in raw.unwrap_or_default() {
+        if !Path::new(path).is_file() {
+            bail!("--into-fastq {} is not a file; give the sample's raw FASTQ pair (R1 then R2)", path);
+        }
+    }
+    Ok(())
+}
+
+/// Run the output's fastq.sh on the raw pair `raw`, writing the whole sample,
+/// spiked, to `<output>/<prefix>_R1.fastq.gz` and `_R2.fastq.gz`.
+fn run_fastq(output_dir: &str, raw: &[String], prefix: &str, threads: usize) -> Result<()> {
+    log::info!("Building the whole sample's spiked FASTQ from {} and {}...", raw[0], raw[1]);
+    let [r1, r2] = whole_sample_paths(output_dir, prefix);
     let status = std::process::Command::new("bash")
         .arg(Path::new(output_dir).join("fastq.sh"))
         .args([&raw[0], &raw[1]])
-        .args([out(1), out(2)])
+        .args([&r1, &r2])
         .arg(threads.to_string())
         .status()?;
     if !status.success() {
         bail!("fastq.sh failed with exit code {:?}; its message is above", status.code());
     }
-    log::info!("Full FASTQ: {} and {}", out(1).display(), out(2).display());
+    log::info!("{}", whole_sample_message(&r1, &r2));
     Ok(())
 }
 
@@ -2276,6 +2342,7 @@ fn write_readme(
     flank: u64,
     dropped_unreplaced: usize,
     edit_origin: bool,
+    whole_sample: Option<&str>,
 ) -> Result<()> {
     use std::fmt::Write as FmtWrite;
     use std::io::Write as IoWrite;
@@ -2495,7 +2562,11 @@ fn write_readme(
     writeln!(md)?;
     writeln!(md, "| File | Description |")?;
     writeln!(md, "|------|-------------|")?;
-    writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | Simulated read pairs (total: {}) |", total_pairs)?;
+    writeln!(md, "| `R1.fq.gz`, `R2.fq.gz` | spike's reads around the events only, not the whole sample: the originals it kept unchanged and its own new reads ({} pairs) |", total_pairs)?;
+    match whole_sample {
+        Some(prefix) => writeln!(md, "| `{p}_R1.fastq.gz`, `{p}_R2.fastq.gz` | The whole sample, spiked: the pair for a pipeline that starts from FASTQ. Written at the end of this run (`--into-fastq`) |", p = prefix)?,
+        None => writeln!(md, "| The whole sample as FASTQ | Not written in this run: `--into-fastq RAW_R1 RAW_R2` writes it at the end of a run, or run `fastq.sh` (below) |")?,
+    }
     writeln!(md, "| `truth.vcf` | Ground-truth VCF of introduced variants |")?;
     writeln!(md, "| `events.bed` | Extraction regions (event ± {}bp flank) used to build the spike-in |", flank)?;
     writeln!(md, "| `replaced_reads.txt` | Names of the originals spike took out of the BAM, plus any pair dropped for unusable quality and the duplicates of every pair it removed; `merge.sh` removes exactly these |")?;
@@ -2516,10 +2587,11 @@ fn write_readme(
     writeln!(md, "# Step 2b: produce a full modified BAM (original + spiked reads)")?;
     writeln!(md, "bash merge.sh  # produces merged.bam")?;
     writeln!(md)?;
-    writeln!(md, "# Or: a full FASTQ pair for a pipeline that starts from raw FASTQ")?;
+    let prefix = whole_sample.unwrap_or(DEFAULT_FASTQ_PREFIX);
+    writeln!(md, "# Or: the whole sample as spiked FASTQ, for a pipeline that starts from FASTQ")?;
     writeln!(md, "#   (needs no align.sh; RAW_R1/RAW_R2 = the sample's raw FASTQ, every lane;")?;
-    writeln!(md, "#   spike --raw-fastq RAW_R1 RAW_R2 runs this itself, into spiked_R1/R2.fastq.gz)")?;
-    writeln!(md, "bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz")?;
+    writeln!(md, "#   spike --into-fastq RAW_R1 RAW_R2 runs this itself at the end of a run)")?;
+    writeln!(md, "bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz {p}_R1.fastq.gz {p}_R2.fastq.gz", p = prefix)?;
     writeln!(md, "```")?;
 
     let readme_path = Path::new(output_dir).join("README.md");
@@ -4682,7 +4754,7 @@ cat "$root/validation_summary.tsv""#,
             &stats,
             4300,
             10_000,
-            412, false,
+            412, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4729,7 +4801,7 @@ cat "$root/validation_summary.tsv""#,
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 3258, 10_000, 0, false,
+            &events, &stats, 3258, 10_000, 0, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4765,7 +4837,7 @@ cat "$root/validation_summary.tsv""#,
         }];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 4300, 10_000, 0, false,
+            &events, &stats, 4300, 10_000, 0, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4805,7 +4877,7 @@ cat "$root/validation_summary.tsv""#,
         let stats = vec![stat(100, 50), stat(200, 4)];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 800, 10_000, 0, false,
+            &events, &stats, 800, 10_000, 0, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4853,7 +4925,7 @@ cat "$root/validation_summary.tsv""#,
         let stats = vec![stat(3.73, "chr20:38410000-38411000", 10.0), stat(1.12, "", 40.0)];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 600, 10_000, 0, false,
+            &events, &stats, 600, 10_000, 0, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4901,7 +4973,7 @@ cat "$root/validation_summary.tsv""#,
             std::fs::create_dir_all(&dir).unwrap();
             write_readme(
                 dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-                &events, &stats, 800, 10_000, 0, origin,
+                &events, &stats, 800, 10_000, 0, origin, None,
             )
             .unwrap();
             let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -4971,7 +5043,7 @@ cat "$root/validation_summary.tsv""#,
         ];
         write_readme(
             dir.to_str().unwrap(), "spike -b x.bam", "x.bam", "ref.fa",
-            &events, &stats, 4355, 10_000, 0, false,
+            &events, &stats, 4355, 10_000, 0, false, None,
         )
         .unwrap();
         let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
@@ -5066,36 +5138,72 @@ cat "$root/validation_summary.tsv""#,
     }
 
     #[test]
-    fn test_raw_fastq_takes_a_pair_of_paths() {
+    fn test_into_fastq_takes_a_pair_of_paths_and_raw_fastq_is_gone() {
         let base = ["spike", "--bam", "x.bam", "--reference", "x.fa"];
-        let args = Args::try_parse_from(base.iter().chain(&["--raw-fastq", "a.fq.gz", "b.fq.gz"])).unwrap();
-        assert_eq!(args.raw_fastq, Some(vec!["a.fq.gz".to_string(), "b.fq.gz".to_string()]));
-        assert!(Args::try_parse_from(base.iter().chain(&["--raw-fastq", "a.fq.gz"])).is_err(), "one path is not a pair");
-        assert_eq!(Args::try_parse_from(base).unwrap().raw_fastq, None);
+        let args = Args::try_parse_from(base.iter().chain(&["--into-fastq", "a.fq.gz", "b.fq.gz"])).unwrap();
+        assert_eq!(args.into_fastq, Some(vec!["a.fq.gz".to_string(), "b.fq.gz".to_string()]));
+        assert!(Args::try_parse_from(base.iter().chain(&["--into-fastq", "a.fq.gz"])).is_err(), "one path is not a pair");
+        assert_eq!(Args::try_parse_from(base).unwrap().into_fastq, None);
+        // The old name said only what goes in, so it is not kept as an alias.
+        assert!(Args::try_parse_from(base.iter().chain(&["--raw-fastq", "a.fq.gz", "b.fq.gz"])).is_err());
     }
 
     #[test]
-    fn test_raw_fastq_paths_must_be_files_before_any_work() {
-        let dir = scratch_dir("raw_fastq_check");
+    fn test_into_fastq_paths_must_be_files_before_any_work() {
+        let dir = scratch_dir("into_fastq_check");
         let present = dir.join("r1.fq.gz");
         std::fs::write(&present, b"").unwrap();
         let (p, missing) = (present.to_str().unwrap().to_string(), dir.join("nope.fq.gz").to_str().unwrap().to_string());
-        validate_raw_fastq(None).unwrap();
-        validate_raw_fastq(Some(&[p.clone(), p.clone()])).unwrap();
-        let err = validate_raw_fastq(Some(&[p.clone(), missing.clone()])).unwrap_err().to_string();
-        assert!(err.contains(&missing), "{err}");
-        assert!(validate_raw_fastq(Some(&[missing, p])).is_err());
+        validate_into_fastq(None).unwrap();
+        validate_into_fastq(Some(&[p.clone(), p.clone()])).unwrap();
+        let err = validate_into_fastq(Some(&[p.clone(), missing.clone()])).unwrap_err().to_string();
+        assert!(err.contains(&missing) && err.contains("--into-fastq"), "{err}");
+        assert!(validate_into_fastq(Some(&[missing, p])).is_err());
     }
 
     #[test]
-    fn test_run_fastq_writes_the_spiked_pair_into_the_output() {
+    fn test_fastq_prefix_needs_into_fastq_and_defaults_to_spiked() {
+        let base = ["spike", "--bam", "x.bam", "--reference", "x.fa"];
+        let into = ["--into-fastq", "a.fq.gz", "b.fq.gz"];
+        let args = Args::try_parse_from(base.iter().chain(&into)).unwrap();
+        assert_eq!(fastq_prefix(&args), "spiked");
+        let args = Args::try_parse_from(base.iter().chain(&into).chain(&["--fastq-prefix", "S1"])).unwrap();
+        assert_eq!(fastq_prefix(&args), "S1");
+        assert!(
+            Args::try_parse_from(base.iter().chain(&["--fastq-prefix", "S1"])).is_err(),
+            "without --into-fastq there is nothing to name"
+        );
+    }
+
+    #[test]
+    fn test_fastq_prefix_must_be_a_plain_name() {
+        validate_fastq_prefix(None).unwrap();
+        validate_fastq_prefix(Some("S1")).unwrap();
+        validate_fastq_prefix(Some("D24-14230_spiked")).unwrap();
+        for bad in ["a/b", "/abs", "..", ".", ""] {
+            let err = validate_fastq_prefix(Some(bad)).unwrap_err().to_string();
+            assert!(err.contains("--fastq-prefix"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn test_whole_sample_paths_take_the_prefix_in_the_output_folder() {
+        assert_eq!(
+            whole_sample_paths("out", "S1"),
+            [Path::new("out/S1_R1.fastq.gz").to_path_buf(), Path::new("out/S1_R2.fastq.gz").to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn test_run_fastq_writes_the_whole_sample_pair_under_its_prefix() {
         let dir = scratch_dir("run_fastq");
         let [r1, r2, _, _] = fastq_paths(&dir, "");
         fastq_fixture(&dir, [&r1, &r2], "comment");
         let raw = [r1.to_str().unwrap().to_string(), r2.to_str().unwrap().to_string()];
-        run_fastq(dir.to_str().unwrap(), &raw, 2).unwrap();
-        assert_eq!(gz_read(&dir.join("spiked_R1.fastq.gz")), fastq_expected(1, "comment"));
-        assert_eq!(gz_read(&dir.join("spiked_R2.fastq.gz")), fastq_expected(2, "comment"));
+        run_fastq(dir.to_str().unwrap(), &raw, "S1", 2).unwrap();
+        assert_eq!(gz_read(&dir.join("S1_R1.fastq.gz")), fastq_expected(1, "comment"));
+        assert_eq!(gz_read(&dir.join("S1_R2.fastq.gz")), fastq_expected(2, "comment"));
+        assert!(!dir.join("spiked_R1.fastq.gz").exists());
     }
 
     #[test]
@@ -5105,8 +5213,46 @@ cat "$root/validation_summary.tsv""#,
         fastq_fixture(&dir, [&r1, &r2], "comment");
         std::fs::write(dir.join("fastq_removed_reads.txt"), "M:1:FC:2:1101:99:99\n").unwrap();
         let raw = [r1.to_str().unwrap().to_string(), r2.to_str().unwrap().to_string()];
-        assert!(run_fastq(dir.to_str().unwrap(), &raw, 2).is_err());
+        assert!(run_fastq(dir.to_str().unwrap(), &raw, "spiked", 2).is_err());
         assert!(!dir.join("spiked_R1.fastq.gz").exists() && !dir.join("spiked_R2.fastq.gz").exists());
+    }
+
+    #[test]
+    fn test_the_run_log_says_which_fastq_pair_is_the_whole_sample() {
+        let spikes = spike_reads_message("out/R1.fq.gz", "out/R2.fq.gz");
+        assert!(
+            spikes.contains("out/R1.fq.gz") && spikes.contains("out/R2.fq.gz") && spikes.contains("not the whole sample"),
+            "{spikes}"
+        );
+        let [r1, r2] = whole_sample_paths("out", "S1");
+        let whole = whole_sample_message(&r1, &r2);
+        assert!(
+            whole.contains("out/S1_R1.fastq.gz") && whole.contains("out/S1_R2.fastq.gz") && whole.contains("whole sample"),
+            "{whole}"
+        );
+        let later = next_steps_message("out", false);
+        assert!(later.contains("--into-fastq") && later.contains("out/fastq.sh"), "{later}");
+        let now = next_steps_message("out", true);
+        assert!(now.contains("out/align.sh") && !now.contains("--into-fastq RAW_R1"), "{now}");
+    }
+
+    #[test]
+    fn test_the_run_readme_says_which_fastq_pair_is_the_whole_sample() {
+        let readme = |label: &str, whole: Option<&str>| {
+            let dir = scratch_dir(label);
+            write_readme(dir.to_str().unwrap(), "spike", "x.bam", "ref.fa", &[], &[], 10, 10_000, 0, false, whole)
+                .unwrap();
+            let md = std::fs::read_to_string(dir.join("README.md")).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            md
+        };
+        let md = readme("readme_whole_s1", Some("S1"));
+        assert!(md.contains("not the whole sample"), "{md}");
+        assert!(md.contains("| `S1_R1.fastq.gz`, `S1_R2.fastq.gz` | The whole sample, spiked"), "{md}");
+        assert!(md.contains("S1_R1.fastq.gz S1_R2.fastq.gz") && !md.contains("spiked_R1"), "{md}");
+        let md = readme("readme_whole_none", None);
+        assert!(md.contains("not the whole sample") && md.contains("Not written in this run"), "{md}");
+        assert!(md.contains("--into-fastq RAW_R1 RAW_R2") && !md.contains("--raw-fastq"), "{md}");
     }
 
     #[test]

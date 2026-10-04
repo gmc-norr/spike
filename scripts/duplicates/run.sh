@@ -1,6 +1,6 @@
 #!/bin/bash
 # The duplicates check (docs/superpowers/plans/2026-10-04-duplicates.md): spike a full FASTQ with
-# --raw-fastq, then align and mark duplicates the way raredisease does, beside the unspiked stand-in
+# --into-fastq, then align and mark duplicates the way raredisease does, beside the unspiked stand-in
 # and C1's stand-in. Every step's stderr goes to a log next to its output.
 #
 # Usage: run.sh SPIKE SOURCE_BAM REFERENCE CALLS_VCF STANDIN_DIR PICARD_JAR OUT
@@ -37,7 +37,7 @@ echo "events: $(grep -vc '^#' "$OUT/events.vcf")"
 mkdir -p "$OUT/spike"
 (cd "$OUT/spike" && "$SPIKE" --bam "$SRC" --reference "$REF" --vcf "$OUT/events.vcf" --seed 1 --threads 16 \
     --aligner "bwa-mem2 mem -M -K 100000000 -t 16 -R '$RG'" --align \
-    --raw-fastq "$STANDIN/raw_R1.fastq.gz" "$STANDIN/raw_R2.fastq.gz" -o out > spike.log 2>&1)
+    --into-fastq "$STANDIN/raw_R1.fastq.gz" "$STANDIN/raw_R2.fastq.gz" -o out > spike.log 2>&1)
 echo "spike: done"
 
 align "$STANDIN/raw_R1.fastq.gz" "$STANDIN/raw_R2.fastq.gz" "$OUT/baseline.sorted.bam"

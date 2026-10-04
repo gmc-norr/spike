@@ -1322,8 +1322,8 @@ The `clean` rows were measured again on 2026-10-04, after `clean` began reading 
 
 | File | Description |
 |------|-------------|
-| `R1.fq.gz` | Forward reads (gzipped FASTQ) |
-| `R2.fq.gz` | Reverse reads (gzipped FASTQ) |
+| `R1.fq.gz` | spike's reads around the events only, read 1 (gzipped FASTQ): the originals it kept and its own new reads, **not the whole sample** |
+| `R2.fq.gz` | The same, read 2 |
 | `truth.vcf` | VCF with simulated variant records and AF annotations |
 | `events.bed` | Extraction regions (event ± flank) used to build the spike-in |
 | `replaced_reads.txt` | Names of the originals spike extracted, including pairs dropped for unusable quality, the duplicates of every pair it removed, and under `--edit-model origin` every read `origin` removed; `merge.sh` removes exactly these |
@@ -1334,23 +1334,30 @@ The `clean` rows were measured again on 2026-10-04, after `clean` began reading 
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
 | `fastq_removed_reads.txt` | The originals spike removed and does not write back, their duplicates among them: `replaced_reads.txt` minus the pairs in R1/R2. `fastq.sh` removes exactly these from the raw FASTQ |
 | `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair (see [Full FASTQ](#full-fastq)) |
+| `NAME_R1.fastq.gz`, `NAME_R2.fastq.gz` | With `--into-fastq`: **the whole sample, spiked**, the pair for a pipeline that starts from FASTQ. `NAME` is `--fastq-prefix`, default `spiked` (see [Full FASTQ](#full-fastq)) |
 
 ### Full FASTQ
 
-A pipeline that starts from raw FASTQ, such as nf-core/raredisease, needs the whole sample as a FASTQ pair. `fastq.sh` builds it from the sample's own raw FASTQ:
+A pipeline that starts from raw FASTQ, such as nf-core/raredisease, needs the whole sample as a FASTQ pair. `--into-fastq` spikes the events into the sample's own raw FASTQ:
 
 ```bash
-bash output/fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz [THREADS]
+spike --bam sample.bam --reference ref.fa --vcf variants.vcf -o output/S1 \
+      --into-fastq RAW_R1.fastq.gz RAW_R2.fastq.gz --fastq-prefix S1
 ```
 
-Or let spike run it at the end of the run, writing `output/spiked_R1.fastq.gz` and `output/spiked_R2.fastq.gz`:
+This writes `output/S1/S1_R1.fastq.gz` and `output/S1/S1_R2.fastq.gz`: the whole sample, spiked. These are the pair to give the pipeline.
+- **The prefix.** Without `--fastq-prefix` the pair is `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`. With many samples, a prefix per sample keeps the pairs apart. It is a plain name, with no `/`, because `-o` picks the folder.
+- **Not `R1.fq.gz` and `R2.fq.gz`.** Those hold only spike's reads around the events (the originals it kept and its own new ones), not the whole sample.
+- **Checks.** spike checks that both raw files exist, and that the prefix is a plain name, before it starts.
+- **At the end** it runs the output's `fastq.sh`, and fails if `fastq.sh` refuses the raw files.
+
+`fastq.sh` can also be run by hand on a finished run:
 
 ```bash
-spike --bam sample.bam --reference ref.fa --vcf variants.vcf -o output \
-      --raw-fastq RAW_R1.fastq.gz RAW_R2.fastq.gz
+bash output/S1/fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz S1_R1.fastq.gz S1_R2.fastq.gz [THREADS]
 ```
 
-spike checks that both raw files exist before it starts, and fails if `fastq.sh` refuses them.
+What `fastq.sh` does:
 
 - **It keeps every raw read exactly as it was** (bases, qualities, order and header), except the originals listed in `fastq_removed_reads.txt`. Those are the pairs spike removed and did not write back, and their duplicates. The originals spike kept stay as the raw reads they are, not as their copies from the BAM. The BAM's copies have been through the pipeline's own trimming and correction (fastp, in raredisease), and the raw reads the pipeline later filtered out are still there too.
 - **It then adds spike's own reads** (`SPIKE_...`) at the end of each file. Their headers take the raw file's style, copied from its first record: for example ` 1:N:0:ACGTACGT+TGCATGCA` after the name, or `/1`.
@@ -1473,8 +1480,11 @@ Options:
       --align
           Automatically run alignment after FASTQ generation
 
-      --raw-fastq <RAW_R1> <RAW_R2>
-          The sample's raw FASTQ pair (every lane concatenated), from the run whose BAM --bam is. At the end spike runs fastq.sh on it, writing the full spiked pair to <output>/spiked_R1.fastq.gz and spiked_R2.fastq.gz
+      --into-fastq <RAW_R1> <RAW_R2>
+          Spike the events into the sample's raw FASTQ pair: the whole sample, spiked, is written to <output>/<NAME>_R1.fastq.gz and <NAME>_R2.fastq.gz (NAME from --fastq-prefix, default spiked), the pair to give a pipeline that starts from FASTQ. RAW_R1/RAW_R2 are every lane concatenated, from the run whose BAM --bam is; spike runs fastq.sh on them at the end. (R1.fq.gz and R2.fq.gz hold only spike's reads around the events.)
+
+      --fastq-prefix <NAME>
+          Name of the whole-sample pair --into-fastq writes: <output>/NAME_R1.fastq.gz and NAME_R2.fastq.gz [default: spiked]. A plain name, so many samples' pairs can sit side by side; -o picks the folder
 
       --indel-error-rate <INDEL_ERROR_RATE>
           Indel error rate per base in synthetic reads (fraction of total error that is indel rather than substitution). Default 0.0 means substitution-only. Typical Illumina: 0.0 to 0.05

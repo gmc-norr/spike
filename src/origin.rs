@@ -1665,7 +1665,10 @@ mod tests {
         let cases = [
             (twin_bam(&dir), Span::new("chrT", 20_000, 25_000)),
             (lost_contig_bam(&dir), Span::new("chrT", 20_000, 25_000)),
-            (empty_lookalike_bam(&dir), Span::new("chrT", 20_500, 25_000)),
+            // Not 20_500: the warning gather logs here would then read exactly
+            // like test_gather_warns_when_a_lookalike_region_holds_no_read's,
+            // and that test counts its line in the one log every test shares.
+            (empty_lookalike_bam(&dir), Span::new("chrT", 20_400, 25_000)),
         ];
         for (bam, footprint) in &cases {
             let one = on_threads(1, || gather(bam, "", footprint, 100, &bases_pool()).unwrap());

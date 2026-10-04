@@ -279,3 +279,10 @@ what was claimed, what the claim actually rested on, and which gate would have c
 - **What it rested on.** One newly added test failed on the unmutated code: its N-flank window was 500 bp too wide. With `-x`, every mutant "failed" on that one test.
 - **What caught it.** Reading the per-mutant lines. Each showed the same `1 failed, 16 passed`, and the suite on its own was red.
 - **What would have caught it earlier.** The runner runs the unmutated suite first and refuses to score unless it is green. Also report which test each mutant reddens, not only that something did.
+
+## 2026-10-04 into-fastq: a test that counts lines in the shared log failed 5 runs in 30
+
+- **Seen.** `origin::tests::test_gather_warns_when_a_lookalike_region_holds_no_read` failed once after the `--into-fastq` change, and passed on the rerun.
+- **What it rested on.** Every test writes to one captured log, which is never cleared. That test counts its warning there and expects 1. `test_gather_on_one_thread_is_gather_on_four` ran `gather` on the same fixture and the same span, so it logged the same text. Which of the two ran first was up to the scheduler, and the five new tests changed the order.
+- **Measured.** Master 0 runs in 30; the branch 5 in 30, each `left: 2, right: 1`. After giving the second test its own span (20,400), 0 runs in 60.
+- **What would have caught it earlier.** A test that counts lines in the shared capture must match a text no other test can log. Rerunning a red test until it passes is not a fix; run the suite many times and read the failure message.
