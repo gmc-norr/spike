@@ -2982,7 +2982,7 @@ fn count_depth_in_region(
             }
             if let Some(p) = buf.alignment_start() {
                 let s = usize::from(p) as u64 - 1;
-                spans.push((s, s + ref_span(CigarTrait::iter(&buf.cigar()))));
+                spans.extend(aligned_blocks(s, CigarTrait::iter(&buf.cigar())));
             }
         }
     } else {
@@ -3013,7 +3013,7 @@ fn count_depth_in_region(
             }
             if let Some(Ok(p)) = record.alignment_start() {
                 let s = usize::from(p) as u64 - 1;
-                spans.push((s, s + ref_span(record.cigar().iter())));
+                spans.extend(aligned_blocks(s, record.cigar().iter()));
             }
         }
     }
@@ -3021,7 +3021,7 @@ fn count_depth_in_region(
     Ok(mean_depth(&spans, start, end))
 }
 
-/// Mean depth over [start, end) from read reference spans [s, e).
+/// Mean depth over [start, end) from aligned blocks [s, e).
 fn mean_depth(spans: &[(u64, u64)], start: u64, end: u64) -> f64 {
     if start >= end {
         return 0.0;
@@ -3033,19 +3033,28 @@ fn mean_depth(spans: &[(u64, u64)], start: u64, end: u64) -> f64 {
     bases as f64 / (end - start) as f64
 }
 
-/// Reference bases covered by an alignment's CIGAR.
-fn ref_span(
+/// A read's aligned blocks on the reference, for depth: its M, = and X ops
+/// from `start` (0-based), each as [s, e). A D or N moves along the
+/// reference and adds no block: a read across a deletion has no base on the
+/// bases it deletes (review finding 5), as `samtools depth` counts without `-J`.
+fn aligned_blocks(
+    start: u64,
     ops: impl Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>>,
-) -> u64 {
-    ops.filter_map(|op| op.ok())
-        .filter(|op| {
-            matches!(
-                op.kind(),
-                Kind::Match | Kind::Deletion | Kind::Skip | Kind::SequenceMatch | Kind::SequenceMismatch
-            )
-        })
-        .map(|op| op.len() as u64)
-        .sum()
+) -> Vec<(u64, u64)> {
+    let mut blocks = Vec::new();
+    let mut ref_pos = start;
+    for op in ops.filter_map(|op| op.ok()) {
+        let len = op.len() as u64;
+        match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                blocks.push((ref_pos, ref_pos + len));
+                ref_pos += len;
+            }
+            Kind::Deletion | Kind::Skip => ref_pos += len,
+            Kind::Insertion | Kind::SoftClip | Kind::HardClip | Kind::Pad => {}
+        }
+    }
+    blocks
 }
 
 /// Names of reads in [start, end) whose SA:Z tag has an alignment within
@@ -3820,6 +3829,36 @@ chr20\t42000000\tsim_ins_3\tA\t<INS>\t999\tPASS\tSVTYPE=INS;SVLEN=500\tGT\t0/1
         assert_eq!(events[0].partner, Some(("chr20".to_string(), 41010000)));
         assert_eq!(events[1].partner, Some(("chr20".to_string(), 44999999)));
         assert_eq!(events[2].partner, None);
+    }
+
+    fn cigar_ops(ops: &[(Kind, usize)]) -> impl Iterator<Item = std::io::Result<noodles::sam::alignment::record::cigar::Op>> {
+        ops.iter().map(|&(k, n)| Ok(noodles::sam::alignment::record::cigar::Op::new(k, n))).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn test_depth_counts_aligned_bases_not_the_bases_a_read_deletes() {
+        // Review finding 5: a read across a deletion covered the bases it deletes.
+        let blocks = aligned_blocks(100, cigar_ops(&[(Kind::Match, 10), (Kind::Deletion, 50), (Kind::Match, 10)]));
+        assert_eq!(blocks, [(100, 110), (160, 170)]);
+        assert_eq!(mean_depth(&blocks, 110, 160), 0.0);
+        assert_eq!(mean_depth(&blocks, 100, 110), 1.0);
+        assert_eq!(mean_depth(&blocks, 160, 170), 1.0);
+    }
+
+    #[test]
+    fn test_soft_clips_and_skips_add_no_aligned_bases_and_eq_and_x_do() {
+        assert_eq!(aligned_blocks(100, cigar_ops(&[(Kind::SoftClip, 5), (Kind::Match, 20)])), [(100, 120)]);
+        assert_eq!(
+            aligned_blocks(100, cigar_ops(&[(Kind::Match, 5), (Kind::Skip, 100), (Kind::Match, 5)])),
+            [(100, 105), (205, 210)]
+        );
+        assert_eq!(
+            aligned_blocks(
+                100,
+                cigar_ops(&[(Kind::SequenceMatch, 5), (Kind::SequenceMismatch, 1), (Kind::Insertion, 3), (Kind::SequenceMatch, 4)])
+            ),
+            [(100, 105), (105, 106), (106, 110)]
+        );
     }
 
     #[test]

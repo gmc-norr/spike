@@ -783,7 +783,11 @@ it is easy to read into it. What each one settles, and what it leaves open:
 
 `coverage_ratio` establishes that the event's **mean** depth over its whole
 span, divided by the mean of its two flanks (`--flank` bp on each side, default
-5000), is within 0.30 of `1 - VAF` for a DEL or `1 + VAF` for a DUP. It does
+5000), is within 0.30 of `1 - VAF` for a DEL or `1 + VAF` for a DUP. Depth
+here is aligned bases (M, = and X), as `samtools depth` counts without `-J`: a
+read whose `D` crosses a short deletion has no base on the bases it deletes.
+Until review finding 5 it counted each read's whole span, so a short
+homozygous deletion read about 1.0 instead of 0.00. It does
 not establish that the depth is right anywhere in particular: one average over
 the whole span hides a local error the rest of the span cancels. Measured by
 the review's reproduction script (`scripts/review_sv_model.py`) on a synthetic
