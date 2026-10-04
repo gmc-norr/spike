@@ -104,3 +104,37 @@ The other findings' numbers are reported, not judged; nothing here fixes them.
 **G4: time.** The new script's wall time on the stand-in, 8 threads, best of 3, is at most 1.5 times the old script's, best of 3, measured in the same session. Above 1.5 times, the change is not ready: at the hospital's 380,000,000 reads per mate, the old script is about 800 times the stand-in.
 
 **Verdict.** Supported if G1, G2, G3 and G4 all pass. Any failure is reported as measured, and nothing is merged.
+
+## Result (2026-10-04): supported
+
+Code `92b45ee`. Binaries: new release `5a157245`, new debug `44b32f10`, master release `91f8fbab`. Runs: `scratchpad/fs/g_run.sh` (log `fs/g_run.log`) and `scratchpad/fs/g2/`.
+
+**Tests.** 685 pass (11 new), 0 fail, 1 ignored (bcftools on the PATH). The `fastq` tests also pass with mawk 1.3.4 as `awk`, and with no `pigz` on the PATH. Mutation run: the unmutated tests are green first, then **17 of 17** mutants are caught (the 12 planned, plus a count-only removed-name check, the `@` check, the `+` check and the output mode). Each one reddens the test named for it. clippy gives the same warnings as master.
+
+**The spike runs.** The new and master binaries were run with F1's arguments (shift 0). They wrote the same `R1.fq.gz`, `R2.fq.gz`, `fastq_removed_reads.txt` and `replaced_reads.txt`. The removed list has 684 names: F1 had 654, and the duplicates fix added the rest.
+
+**G1: PASS.** Decompressed, the new run's `spiked_R1/R2.fastq.gz` are the same as `old.sh`'s, for both mates. The new script under mawk gives the same bytes too. Control: the new R1 against the raw R1 says "differs". The new script's last line: `Done: read 478815 raw pairs, removed 684 original pairs, added 648 of spike's pairs.`
+
+**G2: PASS.** The reviewer's script, unchanged, stopped with a `FileNotFoundError`. It reads the mismatched-mates run's outputs, and the fixed script refuses that run, so it writes none. A scratch copy (`fs/g2/scripts/`) reads them only if they exist, and also compares the alias file's bytes. Its results:
+- `mismatched_mates`: exit 1, no outputs, `Error: record 1: RAW_R1 has a and RAW_R2 has b; the mates are not in the same order.`
+- `input_output_alias`: exit 1, `raw_input_still_exists` true, `raw_input_unchanged` true, `... are the same file; an output must not be one of fastq.sh's inputs.`
+- Not fixed here, and unchanged:
+  - `existing_event` 0 REF / 25 ALT;
+  - `hom_only` 5 / 0;
+  - `asymmetric_mates` 150 / 150;
+  - `indel_rate` NaN, 2.0 and -0.5 all exit 0;
+  - `true_del_validate` exit 1;
+  - origin 111 tiled against clean 148;
+  - `low_fraction` 2 pairs, 0 ALT, `SIM_VAF=0.014`.
+
+**G3: PASS.** Every case exited 1, left no output and no hidden temporary file, and left the raw md5s unchanged:
+- (a) R2 with records 200,000 and 200,001 swapped: 1.34 s. `record 200000: RAW_R1 has ...:2227:24482:5708 and RAW_R2 has ...:1114:52051:1801; the mates are not in the same order.`
+- (b) R2 without its last record: 3.16 s. `RAW_R2 ends after line 1915256 but RAW_R1 goes on`.
+- (c) OUT_R1 a hard link to RAW_R1: 0.01 s, `... are the same file`. The linked raw file was unchanged, with 2 links.
+- (d) `spike --into-fastq out/S1_R1... --fastq-prefix S1`: 0.00 s, `--into-fastq ... is the same file as ..., which this run writes`. The raw pair and the folder were unchanged.
+
+**G4: PASS.** Best of 3, alternating, 8 threads: old 2.45 s (2.45, 2.48, 2.52), new 3.18 s (3.18, 3.24, 3.19). That is 1.30 times, under 1.5.
+
+**Seen, not judged.**
+- Each mate's `pigz` now gets half of THREADS, because both mates are compressed at once.
+- The output is now one gzip member for the raw records, plus one for spike's reads. Decompressed, it is the same.
