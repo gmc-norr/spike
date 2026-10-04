@@ -182,3 +182,16 @@ The message: `RAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, con
 - **Controls:**
   - with the F1 control stand-in (chr20:20-21 Mb), spike exits non-zero, the log holds fastq.sh's `found 0 of the`, and no `spiked_R*.fastq.gz` is left;
   - with a raw path that does not exist, spike exits non-zero before any `Extracting read pairs` log line.
+
+### `--raw-fastq` result (2026-10-04): supported
+
+**Setup.**
+- Binary `8ae6e449` (code `58a1ed8`).
+- 663 tests; clippy has master's 14 warnings.
+- The 4 planned mutants are caught. Two more mutants, where `main` skips the up-front check or never runs `fastq.sh`, survive the unit tests and are caught below.
+- Log: `scratchpad/rawfq/g.log`.
+
+**Check G.**
+- **Main run:** the F1 run's command plus `--raw-fastq` on the F1 stand-in. spike exits 0, and `spiked_R1.fastq.gz` and `spiked_R2.fastq.gz`, decompressed, are byte-identical to F1's verified output.
+- **Control stand-in (chr20:20-21 Mb):** spike exits 1, the log holds fastq.sh's `found 0 of the ...`, and no `spiked_R*.fastq.gz` is left.
+- **A raw R2 that does not exist:** spike exits 1 with `--raw-fastq ... is not a file`, and there is no `Extracting read pairs` line in the log.
