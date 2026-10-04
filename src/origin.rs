@@ -389,19 +389,50 @@ impl OriginSite {
     /// never flagged (R3). The removable set is built here, once: the depth
     /// fold asks once per 1 kb bin, and rebuilding it per bin made a 1 Mb
     /// event four times slower than under `clean` (PD-26).
+    ///
+    /// A read adds back what its fragment is removed by (review finding 2).
+    /// [`decide`] draws a duplicate family's fate against its surest
+    /// member's `p_origin`, so each read's placements inside the footprint
+    /// are scaled to sum to that, not to the read's own chance: a MAPQ 0 mate
+    /// of a uniquely placed read came from where that read did. Placements
+    /// outside the footprint keep their own chance.
     pub fn depth(&self) -> OriginDepth<'_> {
-        let removable: BTreeSet<String> = self.removable_names().into_iter().collect();
-        let placements: Vec<&Placement> = self
+        let removable: Vec<(&str, Vec<FivePrime>, f64)> = self
+            .fragments()
+            .into_iter()
+            .filter(|f| f.removable(&self.footprint))
+            .map(|f| (f.name, f.family(), f.chance(&self.footprint)))
+            .collect();
+        let mut family_chance: HashMap<&[FivePrime], f64> = HashMap::new();
+        for (_, family, chance) in &removable {
+            let surest = family_chance.entry(family.as_slice()).or_insert(0.0);
+            *surest = surest.max(*chance);
+        }
+        let fragment_chance: HashMap<&str, f64> = removable
+            .iter()
+            .map(|(name, family, _)| (*name, family_chance[family.as_slice()]))
+            .collect();
+        let placements: Vec<(&Span, f64)> = self
             .records
             .iter()
-            .filter(|r| !r.duplicate && !r.qc_fail && removable.contains(&r.name))
-            .flat_map(|r| r.placements.iter())
+            .filter(|r| !r.duplicate && !r.qc_fail)
+            .filter_map(|r| fragment_chance.get(r.name.as_str()).map(|&chance| (r, chance)))
+            .flat_map(|(r, chance)| {
+                // The ratio first: where the read's own chance is the
+                // fragment's, it is exactly 1 and the depth stays bit-equal.
+                let own = chance_within(&r.placements, &self.footprint);
+                let scale = if own > 0.0 { chance / own } else { 1.0 };
+                r.placements.iter().map(move |p| {
+                    let inside = self.footprint.holds(&p.span);
+                    (&p.span, if inside { p.chance * scale } else { p.chance })
+                })
+            })
             .collect();
         let mut by_chrom: HashMap<&str, ContigStarts> = HashMap::new();
-        for (i, &p) in placements.iter().enumerate() {
-            let contig = by_chrom.entry(p.span.chrom.as_str()).or_default();
-            contig.starts.push((p.span.start, i));
-            contig.longest = contig.longest.max(p.span.end.saturating_sub(p.span.start));
+        for (i, &(span, _)) in placements.iter().enumerate() {
+            let contig = by_chrom.entry(span.chrom.as_str()).or_default();
+            contig.starts.push((span.start, i));
+            contig.longest = contig.longest.max(span.end.saturating_sub(span.start));
         }
         for contig in by_chrom.values_mut() {
             contig.starts.sort_unstable();
@@ -411,9 +442,9 @@ impl OriginSite {
 }
 
 /// The placements an [`OriginSite`]'s depth is summed from, in record order,
-/// and its `f`. Made by [`OriginSite::depth`].
+/// each with the depth it adds, and its `f`. Made by [`OriginSite::depth`].
 pub struct OriginDepth<'a> {
-    placements: Vec<&'a Placement>,
+    placements: Vec<(&'a Span, f64)>,
     /// A query checks only the placements that start close enough to reach
     /// its window; checking all of them per 1 kb bin made the depth fold grow
     /// with the square of the event (103 s of a 3 Mb DUP on the 35x chr20 BAM).
@@ -432,12 +463,12 @@ struct ContigStarts {
 impl OriginDepth<'_> {
     /// Read depth that came from around `pos` on `chrom`. At the points
     /// [`crate::simulate::coverage_sample_points`] gives -- the ones the pool's
-    /// depth is sampled at -- sum the chances of every placement covering the
-    /// point, then average.
+    /// depth is sampled at -- sum what every placement covering the point
+    /// adds, then average.
     pub fn read_coverage_at(&self, chrom: &str, pos: u64, window: u64) -> f64 {
         let points = crate::simulate::coverage_sample_points(pos, window);
         let (first, last) = (points[0], points[points.len() - 1]);
-        let placed: Vec<&Placement> = match self.by_chrom.get(chrom) {
+        let placed: Vec<&(&Span, f64)> = match self.by_chrom.get(chrom) {
             None => Vec::new(),
             Some(ContigStarts { starts, longest }) => {
                 // Sorted by start: entries from `hi` on start after the last
@@ -447,12 +478,12 @@ impl OriginDepth<'_> {
                 let mut picked: Vec<usize> = starts[lo..hi]
                     .iter()
                     .map(|&(_, i)| i)
-                    .filter(|&i| first < self.placements[i].span.end)
+                    .filter(|&i| first < self.placements[i].0.end)
                     .collect();
                 // Back in record order, so the sums below add in the order
                 // they always did and every depth stays bit-equal.
                 picked.sort_unstable();
-                picked.into_iter().map(|i| self.placements[i]).collect()
+                picked.into_iter().map(|i| &self.placements[i]).collect()
             }
         };
         // Folded from +0.0: an empty f64 sum is -0.0 (PD-32).
@@ -460,8 +491,8 @@ impl OriginDepth<'_> {
             total
                 + placed
                     .iter()
-                    .filter(|p| p.span.start <= at && at < p.span.end)
-                    .map(|p| p.chance)
+                    .filter(|(span, _)| span.start <= at && at < span.end)
+                    .map(|(_, adds)| adds)
                     .sum::<f64>()
         });
         total / points.len() as f64
@@ -1260,6 +1291,68 @@ mod tests {
         let depth = site.depth().read_coverage_at("chr1", 40_000, 2000);
         assert_eq!(depth, 0.0);
         assert!(depth.is_sign_positive(), "{:?}", depth);
+    }
+
+    /// A site over `fp()` holding `records`, with `f` 1.
+    fn site_of(records: Vec<OriginRecord>) -> OriginSite {
+        OriginSite { footprint: fp(), lookalikes: vec![], records, f: 1.0 }
+    }
+
+    #[test]
+    fn test_an_unsure_mate_counts_its_pairs_chance_not_its_own() {
+        // Review finding 2: the pair is removed at its surest mate's chance,
+        // about 1 here, so its MAPQ 0 mate must add that much depth back, not
+        // its own 1/2.
+        let site = site_of(vec![
+            record("p", true, 100, 60, &[]),
+            record("p", false, 500, 0, &[Span::new("chr1", 5000, 5100)]),
+        ]);
+        let sure = 1.0 - 1e-6;
+        assert!(close(site.depth().read_coverage_at("chr1", 150, 0), sure));
+        assert!(close(site.depth().read_coverage_at("chr1", 550, 0), sure));
+        let removal = site.removal_chances(&HashMap::new(), 1.0);
+        assert!(close(removal[0].chance, sure), "{:?}", removal);
+    }
+
+    #[test]
+    fn test_two_unsure_mates_each_count_their_shared_chance() {
+        // Both MAPQ 0 with one hit outside: the pair's chance is 1/2, and so
+        // is each read's. Their hits outside keep their 1/2.
+        let site = site_of(vec![
+            record("p", true, 100, 0, &[Span::new("chr1", 5000, 5100)]),
+            record("p", false, 500, 0, &[Span::new("chr1", 6000, 6100)]),
+        ]);
+        for at in [150, 550, 5050, 6050] {
+            assert!(close(site.depth().read_coverage_at("chr1", at, 0), 0.5), "at {}", at);
+        }
+    }
+
+    #[test]
+    fn test_an_unsure_mates_hit_on_another_contig_keeps_its_own_chance() {
+        // The MAPQ 0 mate counts the pair's chance at the spot; its hit on
+        // chr2, outside the footprint, keeps its own 1/2.
+        let site = site_of(vec![
+            record("p", true, 100, 60, &[]),
+            record("p", false, 500, 0, &[Span::new("chr2", 300, 400)]),
+        ]);
+        assert!(close(site.depth().read_coverage_at("chr1", 550, 0), 1.0 - 1e-6));
+        assert!(close(site.depth().read_coverage_at("chr2", 350, 0), 0.5));
+    }
+
+    #[test]
+    fn test_a_duplicate_familys_unflagged_reads_count_its_surest_members_chance() {
+        // `decide` draws a family's fate against its surest member. Here that
+        // is the flagged copy, whose R1 is MAPQ 60, so the unflagged pair's
+        // reads (each MAPQ 0 with one hit outside, 1/2) count about 1.
+        let original = vec![
+            record("o", true, 100, 0, &[Span::new("chr1", 5000, 5100)]),
+            record("o", false, 500, 0, &[Span::new("chr1", 6000, 6100)]),
+        ];
+        let flagged = [record("d", true, 100, 60, &[]), record("d", false, 500, 0, &[Span::new("chr1", 6000, 6100)])]
+            .map(|r| OriginRecord { duplicate: true, ..r });
+        let site = site_of(original.into_iter().chain(flagged).collect());
+        assert!(close(site.depth().read_coverage_at("chr1", 150, 0), 1.0 - 1e-6));
+        assert!(close(site.depth().read_coverage_at("chr1", 550, 0), 1.0 - 1e-6));
     }
 
     #[test]

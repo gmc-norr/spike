@@ -3843,7 +3843,9 @@ mod tests {
         // reach the window, then sums them in record order, so each depth is
         // bit-equal to summing every placement: the same additions, in the
         // same order. Placements: MAPQ 0 and 30, 0-2 XA hits, every 97th hit
-        // 40 kb long, on chr1 and chr2.
+        // 40 kb long, on chr1 and chr2. Each read has its own 5' end: reads
+        // that shared one would be a duplicate family, whose reads count its
+        // surest member's chance, not their own.
         let mut rng = StdRng::seed_from_u64(11);
         let records: Vec<OriginRecord> = (0..1500u64)
             .map(|i| {
@@ -3860,7 +3862,7 @@ mod tests {
                 OriginRecord {
                     placements: origin::placements(primary, mapq, &alts),
                     mate_unmapped: true,
-                    ..origin_read(&format!("z{}", i), true, start)
+                    ..origin_read(&format!("z{}", i), true, i)
                 }
             })
             .collect();
