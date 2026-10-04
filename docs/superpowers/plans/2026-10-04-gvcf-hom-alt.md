@@ -92,7 +92,7 @@ Code `7d6e605`. Binaries: new release `920d2b7c`, new debug `b553389e`, master `
 - (c) with `--gvcf`, at `snp:chr20:5237028:C:G`, the first window with hom-alt calls, no het call and no miss, where master ran.
 
 **H3: PASS.** R's missed sites, taken in order:
-- The first 8 (chr20:26.7-28.2 Mb) were skipped, because master refused their events. Four times this was RF8. Three times the donor reads were too few: 3, 5 and 6 pairs, against the 30 needed. The plan's rule says to skip those. So at those sites, spike does not run an event at all.
+- The first 8 (chr20:26.7-28.2 Mb) were skipped, because master refused their events. At 5 sites (3 windows: 21, 97, and 167 three times) this was RF8. At 3 the donor reads were too few: 3, 5 and 6 pairs, against the 30 needed. The plan's rule says to skip those. So at those sites, spike does not run an event at all.
 - At the 9th, `chr20:4767379 A>G` (window 181, event `snp:chr20:4768371:A:C`), the pileup sees 26 reads, not 90% G, so it misses the call. There, every one of spike's 13 reads that cover the site carries **G** with the new binary. With master, all 13 carry **A**.
 
 **What this means at the hospital.** With `--gvcf`, a hom-alt call that the pileup misses no longer turns into REF on spike's reads. In R's sample that happened at 17 of 377 hom-alt calls in affected windows. Most of them lie where spike refuses to run anyway, but not all: chr20:4767379 is one where it does run. Without `--gvcf`, nothing changes.
