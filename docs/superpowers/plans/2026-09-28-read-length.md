@@ -286,3 +286,31 @@ Also reported: the four forward DUP J widths against round 2b's limit of
 - **Widens:** no merge. Look at junction reads under the new length model.
 - **A draw:** K2a's flip was the draw. Merge on the user's word.
 - **Unclear:** report it, and the user decides.
+
+## The look's result (2026-10-04): a draw
+
+The new seed-2 run planted 305 events (the same accepted events as the old
+seed-2 replant), in 6m03s, exit 0. Raw output is in the session scratchpad,
+`readlen/seed2/` and `readlen/look.log`. Before the widths were trusted, the
+script reproduced round 2b's forward and reverse DUP J widths (0.327 and
+0.482) and K2's (0.423).
+
+d's 10th-90th width:
+
+| Cell | old seed 1 | old seed 2 | new seed 1 | new seed 2 |
+|---|---|---|---|---|
+| forward DUP J | 0.327 | 0.410 | 0.423 | 0.337 |
+| reverse DUP J | 0.482 | 0.369 | 0.428 | 0.401 |
+| forward INS20-49 A | 0.367 | 0.372 | 0.341 | 0.372 |
+| reverse INS20-49 A | 0.339 | 0.349 | 0.394 | 0.283 |
+| forward INS20-49 E | 0.394 | 0.370 | 0.391 | 0.404 |
+| reverse INS20-49 E | 0.297 | 0.349 | 0.318 | 0.317 |
+
+The new binary is wider in **0 of 6** cells, and narrower in 0 of 6. By the
+locked rule, that is **a draw**.
+- Forward DUP J crosses round 2b's limit of 0.350 under either binary, by
+  seed. The old binary with seed 2 gives 0.410, the new binary with seed 2
+  gives 0.337.
+- So K2a's flip came from the new random numbers, not the change.
+- Round 2b's spread test on 54 duplications cannot hold one seed's verdict
+  steady (seen, not judged).
