@@ -871,6 +871,29 @@ mod tests {
     }
 
     #[test]
+    fn test_bwa_options_reads_the_bam_header_s_own_program_line() {
+        let dir = scratch_dir("bwa_options_header");
+        let path = dir.join("pg.bam");
+        let text = format!(
+            "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chrT\tLN:10000\n\
+             @PG\tID:bwa-mem2\tPN:bwa-mem2\tVN:2.2.1\tCL:{}\n\
+             @PG\tID:samtools\tPN:samtools\tPP:bwa-mem2\tCL:samtools sort -o x.bam -\n",
+            HOSPITAL_CL
+        );
+        let header: noodles::sam::Header = text.parse().unwrap();
+        let mut writer = noodles::bam::io::writer::Builder.build_from_path(&path).unwrap();
+        writer.write_header(&header).unwrap();
+        writer.try_finish().unwrap();
+
+        let options = bwa_options(path.to_str().unwrap(), None)
+            .unwrap()
+            .expect("the header's @PG names bwa-mem2");
+        assert_eq!(options.copied, ["-M", "-K", "100000000"]);
+        assert_eq!(options.program, "bwa-mem2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_a_header_without_a_bwa_program_gives_nothing() {
         let programs = [program("minimap2", Some("minimap2"), Some("minimap2 -ax sr ref.fa r1 r2"))];
         assert!(pick_bwa_options(&programs).is_none());
