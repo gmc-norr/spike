@@ -119,3 +119,37 @@ D18	README.md	FORMAT `GT`
 D30	README.md	of the input BAM's bwa @PG line
 D30	src/main.rs	of the input BAM's bwa @PG line
 ```
+
+## Result (2026-10-06): supported
+
+The fix is `0c4e406`. Master `97aa3b4`'s release binary is `4265ba92`; the new one is `e21d282b`. Scratch: `scratchpad/ddp/`.
+
+**K1: PASS.** All 32 stale strings have 0 hits. All 6 new strings have at least 1 hit. Before the plan commit, on `97aa3b4`, every stale string had exactly 1 hit and every new string 0, so the check can fail.
+
+**K2: PASS.** The README's CLI block (116 lines) equals the new `spike --help` byte for byte. **Control:** master's block differs from the new help in one line, `--aligner`'s.
+
+**K3: PASS.** Every number written is in the run's saved output:
+
+| Item | Written | From |
+|---|---|---|
+| D4 | `728 passed; 2 failed; 1 ignored`, the two being the bcftools tests | M1: the suite with `PATH` = `~/.cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin`. On that PATH, samtools, bwa-mem2, bcftools, minimap2, bgzip, tabix, delly, truvari and bowtie2 are all missing. `/usr/local/bin` holds a samtools too, so dropping `.pixi` alone would not have done it |
+| D9 | `[global] sampled 1976 records from chr20:38899901-38910100`, `[global] sample: 1976 records over 1 of 1 event regions (up to 200000 each)` | M2b |
+| D11 | advisory `coverage_any_mapq`, `split_reads`, `split_reads_each_end`; `Advisory: 3 checks, 3 PASS, 0 FAIL` | M2 (`8/8 PASS`, exit 0) |
+| D14 | `ins_planted` 20, `ins_reads` 16, `15/15 PASS`, exit 0, `Advisory: 9 checks, 9 PASS, 0 FAIL` | M3 |
+| D15 | `12/12 PASS`, exit 0, `allele_freq` 0.49, 0.36 and 0.58, `Advisory: 6 checks, 6 PASS, 0 FAIL` | M4 |
+
+**K4: PASS.**
+- Every changed line in `src/` starts with `//`.
+- The one changed line in `scripts/` is `--skip-to`'s error message.
+- `cargo test --release`: `730 passed; 0 failed; 1 ignored`.
+- `del:chr20:14530000-14531000 --seed 1` on the 35x BAM: `R1.fq.gz`, `R2.fq.gz`, `truth.vcf`, `replaced_reads.txt`, `fastq_removed_reads.txt` and `align.sh` are byte-identical between the two binaries.
+
+**K5: PASS.** With rustc `1.82.0 (f6e511eec 2024-10-15)`, `cargo +1.82 build --release --locked` exits 0. `cargo +1.82 test --release --locked` gives `730 passed; 0 failed; 1 ignored`, both on `97aa3b4`'s code and again on `0c4e406`. The first build was started before the plan commit; its logs were read after it.
+
+**K6: PASS.** Every code line in the items table was read on this branch, either while the plan was written or while the fix was made.
+
+**Beyond the plan.**
+- The output-file table also gains `align.log` and `merged.bam.bai`, because a real run directory (M3's) holds both.
+- Line 32's "suppressed at the target VAF rate" stays. It is an overview, and the per-copy rates average to the VAF (`synth.rs:995-996`).
+
+**Side effects on this machine.** rustup installed toolchain 1.82 and updated itself from 1.29.0 to 1.29.1.
