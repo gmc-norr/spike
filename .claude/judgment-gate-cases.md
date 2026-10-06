@@ -299,3 +299,15 @@ what was claimed, what the claim actually rested on, and which gate would have c
 - **Claimed.** an offline comparison of quality models said real reads pile errors into their last 20 cycles (1.51% of reads with >= 5, against 0.48-0.68% for statistical models), that a "bad end" process was missing, and that copying each donor pair's error positions matched real soft clips (2.62% against 2.34%), so copying was the fix.
 - **What it rested on.** mismatches counted over clipped bases placed where they would align, with no look at what the clipped bases were. In the HG002 chr20 slice, only about 35-40% of soft-clipped reads are reference sequence read badly. The rest: adapter read-through 0.48% of reads, sequence that maps nowhere 0.63%, clips shared by >= 3 reads at one spot (the sample's own variants) 0.28%. With those tails masked from learning and scoring, real error-type clips are 0.97% and >= 5 errors 0.53%; the fqzcomp-style model gives 1.07% and 0.38%, copied error spots 1.28% and 0.63%. Copying matched the total only by turning adapter and foreign sequence into random substitutions.
 - **What would have caught it earlier.** Gate D1, again on the aligner's output. Before calling clipped bases "errors", classify the clips by cause (adapter prefix, shared boundary, maps elsewhere, identity to the reference). The previous entry fixed survivorship by adding the clipped bases; this one is the next step: the added bases are not all sequencing errors. The user asked "are you sure it is a bad end?".
+
+## 2026-10-07 -- quality model: an offline test learned from 200,000 pairs; spike learns from one event's ~2,800
+
+- **Claimed.** The plan for the context quality model and error table expected the bad-end soft clips back: offline 1.18% against the real 1.15%. A Gate B check said 5,000 donor pairs were enough, and the README gave 4,595 pairs for a 10 kb DEL's pool.
+- **What it rested on.**
+  - The offline generator learned its quality strings from 200,000 pairs, and its error table from 25 windows pooled.
+  - The Gate B data check covered the quality strings only, never the error table's fine cells.
+  - Nobody measured the pools of the events actually run. They were 2,278-3,778 pairs (median 2,829).
+  - In spike the crashed-tail error cells held 14-98 bases against the 200 needed, so they backed off to averages. Crashed tails then erred half as often as the sample's (0.177 against 0.357 at Q < 15), and K2 failed: 0.30% against 1.38%.
+- **What would have caught it earlier.**
+  - Gate A step 5: measure the inputs the code will actually see, here the donor pools of the K-check events, not a number from the README.
+  - Gate B: run the data-amount check on every learned table, the error table's cells included, at that pool size.

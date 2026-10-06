@@ -202,3 +202,108 @@ Tests of the removed internals go: the chunk tests, `test_markov_*`, `test_quali
 **Tests and speed.**
 - The whole suite passes, and the 5 mutants are caught.
 - Speed: `dup:chr20:14550000-15550000` on the 35x BAM, `--seed 1 --threads 8`, 3 runs each. The new binary's median wall time is at most 1.25x master's.
+
+## Result (2026-10-07): refuted as built
+
+- Code: `85838e5`.
+- Release binaries: new `2aa4a748`, master `e21d282b` (50ae8e1, the same as the docs-drift binary).
+- Scratch in the session scratchpad:
+  - `qtq/`: `k1.py`, `k2.py`, `diag.py`, `cells.py`, `runs_new.sh`, `k6.sh`, `speed.txt`, `k4.out`, and the runs;
+  - `qmp/mutate.py`.
+
+The quality strings come out much closer to the sample's. But the clips do not come back, and three locked checks and the speed check fail.
+
+**Tests: 735 pass** (2 ignored). clippy's warnings are master's.
+- The spread and mate-link tests were red against master's model first: read-mean SD 1.35 against the pool's 5.05, and mate correlation −0.02.
+- Tests 3-6 use the new API, so they were written with it. Each is shown to bite by a mutant below.
+- **Test 3 first failed** (poor reads erring at 0.231, then 0.240, against 0.30).
+  - The cause: at the test's 3x, the variant rule took a position where one poor read erred among 5-10 reads for the sample's own variant. That masked 12% of donor bases. The class split itself was clean: classes 0-4 at 0.24, classes 5-7 at 0.015.
+  - The test now runs at 0.5x, with two pairs in five poor.
+  - At a real ~30x, one error is ~3% of a position's reads.
+- **Mutation: 5 of 5 caught.** The unmutated suite is green first.
+  - 1 (a class per mate) reddens the mate test.
+  - 2 (class out of the context) reddens the spread, mate and errors-by-read tests.
+  - 3 (errors at 10^(-Q/10)) reddens the errors-by-read test.
+  - 4 (every clipped end counted) reddens the error-learning test.
+  - 5 (one-quality history) survived the planned tests. It is caught by a test added for it, `test_generated_qualities_follow_the_pools_pattern_over_more_than_one_base` (a Q37 Q37 Q11 Q11 pattern from a random phase).
+
+**K1: FAIL.** The 25-SNV run on the 35x slice; spike's reads against the real reads in the same windows.
+
+| | spike, new | spike, master | real |
+|---|---|---|---|
+| read-mean SD | 1.951 (ratio 0.930, pass) | 0.516 (0.248) | 2.097 |
+| perfect reads | 5.10% (z −1.45, pass) | 0.02% (z −27.17) | 5.46% |
+| crashed reads | **0.55% (z −5.56, fail)** | 0.01% (z −11.88) | 1.13% |
+| R1-R2 corr (reported) | 0.542 | 0.034 | 0.550 |
+| mean below Q33 (reported) | 7.97% | 0% | 8.49% |
+
+The control fires: master's run fails all three.
+
+**K2: FAIL.** The 22 events of the read-level look, re-planted on the hospital BAM; flank reads at MAPQ ≥ 20. The master column is `inspect/` (`bdd568a`, the same quality code, the same aligner command).
+
+| | spike, new | spike, master | sample's own |
+|---|---|---|---|
+| reads | 7,609 | 7,636 | 8,899 |
+| bad-end clip | **0.30% (z −7.39, fail)** | 0.17% (z −8.60) | 1.38% |
+| any soft clip | 0.32% | 0.17% | 2.42% |
+| crash | 0.84% (z −3.80) | 0.04% | 1.48% |
+| mismatches per 100 aligned bases | 0.288 | 0.243 | 0.308 |
+
+**Why the clips did not come back.** Two causes:
+
+1. **Half as many crashed reads.** In the K2 flanks spike has 64, against the sample's 132.
+2. **Their tails err half as often.** Mismatch rate in crashed tails, clipped bases placed where they would align:
+
+   | | Q < 15 | Q 15-29 | Q ≥ 30 |
+   |---|---|---|---|
+   | spike, new | 0.177 | 0.041 | 0.009 |
+   | sample's own | 0.357 | 0.157 | 0.110 |
+
+   So only 20% of spike's crashed reads clip, against 61% of the sample's.
+
+Both come from the pool's size.
+- **The pools were smaller than planned.** The 47 donor pools of these runs hold 2,278-3,778 pairs (median 2,829). The plan took 4,595 from the README, and the offline test learned from far more: 200,000 pairs for the quality strings, and the 25 windows pooled for the error table.
+- **The crashed-tail cells stay thin.** In aa1's pool (2,602 pairs, hospital BAM), the low-quality bases with a run of ≥ 4 within 30 cycles of the 3′ end number 14-98 per class, before they are split further into run and end bins. The table needs 200 per cell, so it backs off to (quality, class), whose rate is mostly not tail bases.
+- **The quality model is short of crashes even with plenty of pairs.** K4 found it 3.8 z short of the held-out reads at 5,000 pairs, and offline it was 0.80-0.93% against 1.04% at 200,000.
+
+**K3 (reported).** P(both crash) / (P(R1) · P(R2)) among spike's pairs at the K2 events: new 10.16 (4,792 pairs), master 0, the sample 11.6.
+
+**K4 (reported).** `measure_quality_pool_size`, 35x BAM, chr20:38,402,500-38,602,500 (train 14,902 and held-out 14,557 pairs), medians of 20:
+
+| pairs | SD ratio | perfect z | crash z | |
+|---|---|---|---|---|
+| 500 | 0.955 | 1.03 | −5.23 | fail |
+| 1,000 | 0.973 | 1.20 | −5.23 | fail |
+| 2,000 | 1.000 | −0.46 | −3.80 | fail |
+| 5,000 | 1.002 | 0.33 | −3.80 | fail |
+
+- No size passes, because of the crash share. The spread and perfect reads are inside from 500 pairs.
+- `MIN_PROFILE_PAIRS` stays at 1,000, since this change is not taken as it stands.
+
+**K5, base dependence (reported).** The share below Q15 by called base, in the K2 flanks:
+
+| | A | C | G | T |
+|---|---|---|---|---|
+| sample's own | 0.0189 | 0.0185 | 0.0156 | 0.0124 |
+| spike, new | 0.0126 | 0.0138 | 0.0135 | 0.0131 |
+
+Lost, as expected: the base is not in the context.
+
+**K6, a large alphabet (reported).** `HG002.GRCh38.chr20.bam` (novoalign), one SNV and the 10 kb DEL.
+- The run finishes. All 31 of the BAM's quality values come out, and only those.
+- Spike's 650 reads against the 5,115 real reads in the two windows: read-mean SD 3.81 against 3.60 (ratio 1.06), crashed 13.4% against 14.1% (z −0.52). No read is perfect in either.
+
+**K7: FAIL, by the locked rule.**
+- DEL+INS 15/15, small indels 12/12 and hom DEL 10/10 are row for row as on master.
+- The 25 SNVs give 69/78 against 71/78. Two `allele_freq` rows flip, against an allowance of one:
+  - chr20:39,870,000 (af 0.50) reads 0.27 (14 alt of 51 fragments), against 0.40 on master (17 of 43);
+  - chr20:39,510,000 (af 0.25) is too shallow (2 of 30), against 0.12 (4 of 34).
+- Both differ in how many of the sample's own reads were kept (37 against 26 at the first). That is the random draw of removal, which the new stream reorders. No spike read has a base below Q15 at either site, and `spike validate` has no base-quality filter.
+- The allowance of one flip was too tight for a change that reorders the random stream.
+
+**Speed: FAIL.** `dup:chr20:14550000-15550000`, 35x BAM, `--threads 8`, 3 runs each. Median new 13.5 s against master 8.9 s (1.51x; the limit is 1.25x).
+
+**What this means.**
+- The context model gives spike's reads the sample's read-to-read spread, perfect reads, poor reads and mate link (K1, K3, K6). This was the visible gap in the deck's Figure 12.
+- It does not bring back the bad-end soft clips. One event's donor pool, about 2,800 pairs, is too thin for crashed reads and for the errors of their tails.
+- **The next step would learn both tables from more of the sample than the event's pool**, for example a fixed sample of the input BAM at startup, as the read length already is. It would also need speed work: the contexts are hash-map lookups.
