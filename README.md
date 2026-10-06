@@ -384,7 +384,16 @@ Where the gVCF has no het call around an event, spike still finds het SNPs from 
 
 ### Configurable aligner
 
-The generated `align.sh` script uses `bwa-mem2` by default. Override with `--aligner`:
+The generated `align.sh` script uses `bwa-mem2` by default. It aligns with the input BAM's own bwa-mem2 options, read from the header's bwa `@PG` line. The point is that spike's reads are aligned the way the sample's were. `-M` alone decides whether the shorter part of a split read is marked SECONDARY or SUPPLEMENTARY, and the rest of the BAM already uses one of the two.
+- The hospital BAM's `@PG` reads `bwa-mem2 mem -M -K 100000000 ...`, so its `align.sh` runs `bwa-mem2 mem -M -K 100000000 -t ...`.
+- A BAM whose `@PG` has none of these options gets the plain command.
+- Options that set threads, the read group, output, logging or extra header lines (`-t -R -o -v -H`) are not copied.
+- Neither are `-p`, which would ignore R2, and `-C`, which would turn FASTQ comments into SAM tags.
+- spike warns about an option it does not know, and does not copy it.
+- `align.sh` names the copied options in a comment.
+- The other presets and a custom `--aligner` are used as given.
+
+Override with `--aligner`:
 
 ```bash
 # Use minimap2

@@ -305,12 +305,9 @@ fn pick_sample_name(rg_samples: &[String]) -> Option<String> {
     Some(safe)
 }
 
-/// Read the sample name (`@RG` `SM`) of an alignment file, for reuse as the
-/// sample of the simulated read group.
-pub fn sample_name(alignment_path: &str, ref_path: Option<&str>) -> Result<Option<String>> {
-    use noodles::sam::header::record::value::map::read_group::tag;
-
-    let header = if crate::extract::is_cram(alignment_path) {
+/// The header of a BAM or CRAM file.
+fn read_header(alignment_path: &str, ref_path: Option<&str>) -> Result<noodles::sam::Header> {
+    Ok(if crate::extract::is_cram(alignment_path) {
         let rp = ref_path.ok_or_else(|| {
             anyhow::anyhow!("CRAM input requires a reference FASTA (--reference)")
         })?;
@@ -325,8 +322,15 @@ pub fn sample_name(alignment_path: &str, ref_path: Option<&str>) -> Result<Optio
             .build_from_path(alignment_path)
             .with_context(|| format!("Failed to open BAM file: {}", alignment_path))?
             .read_header()?
-    };
+    })
+}
 
+/// Read the sample name (`@RG` `SM`) of an alignment file, for reuse as the
+/// sample of the simulated read group.
+pub fn sample_name(alignment_path: &str, ref_path: Option<&str>) -> Result<Option<String>> {
+    use noodles::sam::header::record::value::map::read_group::tag;
+
+    let header = read_header(alignment_path, ref_path)?;
     let rg_samples: Vec<String> = header
         .read_groups()
         .values()
@@ -339,6 +343,105 @@ pub fn sample_name(alignment_path: &str, ref_path: Option<&str>) -> Result<Optio
         .collect();
 
     Ok(pick_sample_name(&rg_samples))
+}
+
+/// The alignment options of the input's own bwa `@PG`, for align.sh.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct BwaOptions {
+    /// Options, each followed by its value where it takes one, in the input's order.
+    pub copied: Vec<String>,
+    /// Options spike does not know, so did not pass on.
+    pub unknown: Vec<String>,
+    /// The `@PG` ID they came from.
+    pub program: String,
+}
+
+/// bwa-mem2 2.2.1 `mem` options that shape the alignment, so align.sh copies
+/// them: these take a value...
+const BWA_COPIED_WITH_VALUE: &[&str] = &[
+    "-k", "-w", "-d", "-r", "-y", "-c", "-D", "-W", "-m", "-A", "-B", "-O", "-E", "-L", "-U", "-T",
+    "-h", "-I", "-K", "-x",
+];
+/// ...and these do not.
+const BWA_COPIED_FLAGS: &[&str] = &["-S", "-P", "-j", "-5", "-q", "-a", "-V", "-Y", "-M"];
+/// Options align.sh sets itself or that do not shape the alignment: threads,
+/// spike's own read group, output, log level, extra header lines.
+const BWA_SKIPPED_WITH_VALUE: &[&str] = &["-t", "-R", "-o", "-v", "-H"];
+/// `-p` would read spike's R1 as interleaved and ignore R2; `-C` would turn
+/// spike's FASTQ comments into SAM tags.
+const BWA_SKIPPED_FLAGS: &[&str] = &["-p", "-C"];
+
+/// The options of a `bwa-mem2 mem` (or `bwa mem`) command line that align.sh
+/// copies, and the ones it does not know: `None` when `cl` is not such a
+/// command. The program may be given as a path. Words that are not options
+/// (the index, the FASTQs) are skipped, and so is each skipped option's value.
+fn bwa_options_from_command_line(cl: &str) -> Option<(Vec<String>, Vec<String>)> {
+    let tokens: Vec<&str> = cl.split_whitespace().collect();
+    let program = tokens
+        .iter()
+        .position(|t| matches!(t.rsplit('/').next(), Some("bwa-mem2") | Some("bwa")))?;
+    if tokens.get(program + 1) != Some(&"mem") {
+        return None;
+    }
+    let (mut copied, mut unknown) = (Vec::new(), Vec::new());
+    let mut i = program + 2;
+    while i < tokens.len() {
+        let token = tokens[i];
+        if BWA_COPIED_WITH_VALUE.contains(&token) {
+            copied.extend(tokens[i..].iter().take(2).map(|t| t.to_string()));
+            i += 2;
+        } else if BWA_COPIED_FLAGS.contains(&token) {
+            copied.push(token.to_string());
+            i += 1;
+        } else if BWA_SKIPPED_WITH_VALUE.contains(&token) {
+            i += 2;
+        } else if BWA_SKIPPED_FLAGS.contains(&token) {
+            i += 1;
+        } else {
+            if token.len() > 1 && token.starts_with('-') {
+                unknown.push(token.to_string());
+            }
+            i += 1;
+        }
+    }
+    Some((copied, unknown))
+}
+
+/// The options of the first `@PG` (as `(ID, PN, CL)`, in header order) that
+/// names bwa-mem2 or bwa -- by `PN`, or by `ID`, which samtools numbers
+/// `bwa-mem2.1` on a repeat -- and whose `CL` is a `mem` command.
+fn pick_bwa_options(programs: &[(String, Option<String>, Option<String>)]) -> Option<BwaOptions> {
+    let is_bwa = |name: &str| matches!(name.split('.').next(), Some("bwa-mem2") | Some("bwa"));
+    programs.iter().find_map(|(id, name, cl)| {
+        if !(is_bwa(id) || name.as_deref().is_some_and(is_bwa)) {
+            return None;
+        }
+        let (copied, unknown) = bwa_options_from_command_line(cl.as_deref()?)?;
+        Some(BwaOptions { copied, unknown, program: id.clone() })
+    })
+}
+
+/// The bwa options of an alignment file's own `@PG`, for align.sh; `None`
+/// when no `@PG` records a `bwa-mem2 mem` or `bwa mem` run.
+pub fn bwa_options(alignment_path: &str, ref_path: Option<&str>) -> Result<Option<BwaOptions>> {
+    use noodles::sam::header::record::value::map::program::tag;
+
+    let header = read_header(alignment_path, ref_path)?;
+    let programs: Vec<(String, Option<String>, Option<String>)> = header
+        .programs()
+        .as_ref()
+        .iter()
+        .map(|(id, program)| {
+            let field = |t| {
+                program
+                    .other_fields()
+                    .get(&t)
+                    .map(|v| String::from_utf8_lossy(v.as_ref()).into_owned())
+            };
+            (String::from_utf8_lossy(id.as_ref()).into_owned(), field(tag::NAME), field(tag::COMMAND_LINE))
+        })
+        .collect();
+    Ok(pick_bwa_options(&programs))
 }
 
 #[cfg(test)]
@@ -688,5 +791,89 @@ mod tests {
             err
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The hospital BAM's bwa-mem2 @PG CL, and the 35x GIAB HG002 BAM's, as
+    // `samtools view -H` prints them (file names shortened).
+    const HOSPITAL_CL: &str = "bwa-mem2 mem -M -K 100000000 -R @RG\\tID:D24_L002\\tPL:ILLUMINA\\tSM:D24 \
+                               -t 12 ./bwamem2Index/genome.fa D24_1.fastp.fastq.gz D24_2.fastp.fastq.gz";
+    const GIAB_35X_CL: &str = "/home/x/.pixi/envs/default/bin/bwa-mem2 mem -t 36 \
+                               -R @RG\\tID:HG002\\tPL:ILLUMINA\\tSM:HG002 ref.fasta r1.fq.gz r2.fq.gz";
+
+    #[test]
+    fn test_the_hospital_command_line_gives_its_alignment_options() {
+        let (copied, unknown) = bwa_options_from_command_line(HOSPITAL_CL).unwrap();
+        assert_eq!(copied, ["-M", "-K", "100000000"]);
+        assert!(unknown.is_empty(), "{:?}", unknown);
+    }
+
+    #[test]
+    fn test_a_command_line_without_them_gives_none_even_with_a_path_to_the_program() {
+        let (copied, unknown) = bwa_options_from_command_line(GIAB_35X_CL).unwrap();
+        assert!(copied.is_empty(), "{:?}", copied);
+        assert!(unknown.is_empty(), "{:?}", unknown);
+    }
+
+    #[test]
+    fn test_options_that_do_not_shape_the_alignment_are_not_copied() {
+        let cl = "bwa-mem2 mem -t 8 -R @RG\\tID:x -o out.sam -v 1 -H @CO\\thi -p -C -Y -k 21 ref.fa r1 r2";
+        let (copied, unknown) = bwa_options_from_command_line(cl).unwrap();
+        assert_eq!(copied, ["-Y", "-k", "21"]);
+        assert!(unknown.is_empty(), "{:?}", unknown);
+    }
+
+    #[test]
+    fn test_a_value_is_not_read_as_an_option() {
+        // An output file named `-M` is -o's value, not bwa's -M.
+        let (copied, _) = bwa_options_from_command_line("bwa-mem2 mem -o -M -K 5 ref.fa r1 r2").unwrap();
+        assert_eq!(copied, ["-K", "5"]);
+    }
+
+    #[test]
+    fn test_an_unknown_option_is_reported_and_not_copied() {
+        let (copied, unknown) = bwa_options_from_command_line("bwa-mem2 mem -Z -M ref.fa r1 r2").unwrap();
+        assert_eq!(copied, ["-M"]);
+        assert_eq!(unknown, ["-Z"]);
+    }
+
+    #[test]
+    fn test_a_bwa_mem_command_line_is_read_too() {
+        let (copied, _) = bwa_options_from_command_line("bwa mem -M -t 4 ref.fa r1 r2").unwrap();
+        assert_eq!(copied, ["-M"]);
+    }
+
+    #[test]
+    fn test_a_command_line_that_is_not_bwa_mem_gives_nothing() {
+        assert!(bwa_options_from_command_line("bwa-mem2 index ref.fa").is_none());
+        assert!(bwa_options_from_command_line("samtools sort -@ 12 -o x.bam -").is_none());
+    }
+
+    fn program(id: &str, name: Option<&str>, cl: Option<&str>) -> (String, Option<String>, Option<String>) {
+        (id.to_string(), name.map(String::from), cl.map(String::from))
+    }
+
+    #[test]
+    fn test_the_first_bwa_program_in_the_header_gives_the_options() {
+        let programs = [
+            program("samtools", Some("samtools"), Some("samtools sort -@ 12 -o x.bam -")),
+            program("bwa-mem2", Some("bwa-mem2"), Some(HOSPITAL_CL)),
+            program("bwa-mem2.1", None, Some("bwa-mem2 mem -Y ref.fa r1 r2")),
+        ];
+        let options = pick_bwa_options(&programs).unwrap();
+        assert_eq!(options.copied, ["-M", "-K", "100000000"]);
+        assert_eq!(options.program, "bwa-mem2");
+    }
+
+    #[test]
+    fn test_a_renumbered_bwa_program_id_is_recognised() {
+        let programs = [program("bwa-mem2.1", None, Some("bwa-mem2 mem -Y ref.fa r1 r2"))];
+        assert_eq!(pick_bwa_options(&programs).unwrap().copied, ["-Y"]);
+    }
+
+    #[test]
+    fn test_a_header_without_a_bwa_program_gives_nothing() {
+        let programs = [program("minimap2", Some("minimap2"), Some("minimap2 -ax sr ref.fa r1 r2"))];
+        assert!(pick_bwa_options(&programs).is_none());
+        assert!(pick_bwa_options(&[]).is_none());
     }
 }

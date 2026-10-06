@@ -561,6 +561,24 @@ fn main() -> Result<()> {
             "SIM".to_string()
         });
     log::info!("Simulated read group: @RG ID:sim SM:{}", sample);
+    let bwa = crate::bam_stats::bwa_options(&args.bam, Some(args.reference.as_str()))?;
+    if let (Some(b), "bwa-mem2") = (&bwa, args.aligner.as_str()) {
+        if !b.copied.is_empty() {
+            log::info!(
+                "align.sh's bwa-mem2 takes the input's own options, from @PG ID:{}: {}",
+                b.program,
+                b.copied.join(" ")
+            );
+        }
+        if !b.unknown.is_empty() {
+            log::warn!(
+                "align.sh does not copy {} from the input's @PG ID:{}: spike does not know {}",
+                b.unknown.join(" "),
+                b.program,
+                if b.unknown.len() == 1 { "it" } else { "them" }
+            );
+        }
+    }
 
     let config = SimConfig {
         bam_path: args.bam.clone(),
@@ -927,6 +945,7 @@ fn main() -> Result<()> {
         &args.aligner,
         &args.samtools,
         &sample,
+        bwa.as_ref(),
     )?;
 
     // Write events BED (extraction regions, for inspection).
@@ -1266,6 +1285,17 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
+/// `value` as one shell word: as it is when the shell leaves every character
+/// of it alone, quoted otherwise.
+fn sh_word(value: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "-_.,:=+/@%".contains(c);
+    if !value.is_empty() && value.chars().all(plain) {
+        value.to_string()
+    } else {
+        sh_quote(value)
+    }
+}
+
 /// Resolve a path for the generated scripts. They are run from whatever
 /// directory the user happens to be in, so a relative `--reference` or
 /// `--bam` would resolve against the wrong one -- or nothing at all. Falls
@@ -1309,6 +1339,7 @@ fn write_align_script(
     aligner: &str,
     samtools: &str,
     sample: &str,
+    bwa: Option<&crate::bam_stats::BwaOptions>,
 ) -> Result<()> {
     let script_file = Path::new(output_dir).join("align.sh");
 
@@ -1317,8 +1348,28 @@ fn write_align_script(
     // as one word with those characters intact.
     let rg_arg = sh_quote(&format!("@RG\\tID:sim\\tSM:{sample}\\tPL:ILLUMINA"));
     let rg_sm = sh_quote(&format!("SM:{sample}"));
+    // The bwa-mem2 preset aligns with the input's own options, from its @PG,
+    // so spike's reads are aligned the way the sample's were: -M alone decides
+    // whether a split read's shorter part is SECONDARY or SUPPLEMENTARY. The
+    // header is not trusted text, so each word is quoted where it needs it.
+    let bwa = bwa.filter(|b| !b.copied.is_empty());
+    let bwa_words: String = bwa
+        .map(|b| b.copied.iter().map(|w| format!("{} ", sh_word(w))).collect())
+        .unwrap_or_default();
+    let bwa_note = bwa
+        .filter(|_| aligner == "bwa-mem2")
+        .map(|b| {
+            let note = format!(
+                "# bwa-mem2 options copied from the input's @PG ID:{}: {}",
+                b.program,
+                b.copied.join(" ")
+            );
+            let note: String = note.chars().map(|c| if c.is_control() { '_' } else { c }).collect();
+            format!("{note}\n")
+        })
+        .unwrap_or_default();
     let align_cmd = match aligner {
-        "bwa-mem2" => format!("bwa-mem2 mem -t \"$THREADS\" \\\n    -R {rg_arg} \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
+        "bwa-mem2" => format!("bwa-mem2 mem {bwa_words}-t \"$THREADS\" \\\n    -R {rg_arg} \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
         "minimap2" => format!("minimap2 -a -x sr -t \"$THREADS\" \\\n    -R {rg_arg} \\\n    \"$REF\" \\\n    \"$DIR/R1.fq.gz\" \"$DIR/R2.fq.gz\" \\\n    2>\"$DIR/align.log\""),
         "bowtie2" => format!("bowtie2 -x \"$REF\" \\\n    -1 \"$DIR/R1.fq.gz\" -2 \"$DIR/R2.fq.gz\" \\\n    -p \"$THREADS\" \\\n    --rg-id sim --rg {rg_sm} --rg PL:ILLUMINA \\\n    2>\"$DIR/align.log\""),
         custom => format!(
@@ -1350,7 +1401,7 @@ THREADS="${{2:-{threads}}}"
 SAMTOOLS={samtools_default}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ("{aligner_echo}", $THREADS threads)..."
+{bwa_note}echo "Aligning $DIR/R1.fq.gz + R2.fq.gz ("{aligner_echo}", $THREADS threads)..."
 {align_cmd} | \
     "$SAMTOOLS" sort -@ "$THREADS" -o "$DIR/sim.bam" -
 
@@ -3731,7 +3782,7 @@ esac
         for aligner in ["bwa-mem2", "minimap2", "bowtie2"] {
             let dir = scratch_dir(&format!("align_script_{}", aligner));
 
-            write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002")
+            write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002", None)
                 .unwrap();
 
             let script = std::fs::read_to_string(dir.join("align.sh")).unwrap();
@@ -3760,7 +3811,7 @@ esac
         let dir = scratch_dir("align_custom_aligner_echo");
         let aligner = r#"al --preset 'a"b'"#;
 
-        write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002")
+        write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002", None)
             .unwrap();
 
         let output = std::process::Command::new("bash")
@@ -3867,6 +3918,7 @@ esac
             "bwa-mem2",
             samtools.to_str().unwrap(),
             "Patient 123",
+            None,
         )
         .unwrap();
 
@@ -3913,6 +3965,7 @@ esac
             "bwa-mem2",
             samtools.to_str().unwrap(),
             "HG002",
+            None,
         )
         .unwrap();
 
@@ -3935,6 +3988,75 @@ esac
         );
     }
 
+    fn bwa_options(copied: &[&str]) -> crate::bam_stats::BwaOptions {
+        crate::bam_stats::BwaOptions {
+            copied: copied.iter().map(|s| s.to_string()).collect(),
+            unknown: vec![],
+            program: "bwa-mem2".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_the_bwa_mem2_preset_aligns_with_the_samples_own_options() {
+        let (dir, argv_out, samtools) = align_script_fixture("align_bwa_options", "bwa-mem2");
+        let options = bwa_options(&["-M", "-K", "100000000"]);
+
+        write_align_script(dir.to_str().unwrap(), "ref.fa", 4, "bwa-mem2", samtools.to_str().unwrap(),
+                           "HG002", Some(&options))
+            .unwrap();
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(output.status.success(), "align.sh failed: {}", String::from_utf8_lossy(&output.stderr));
+        let argv = argv_lines(&argv_out);
+        assert_eq!(&argv[..4], ["mem", "-M", "-K", "100000000"], "the sample's options come right after mem: {:?}", argv);
+        assert_eq!(argv.iter().filter(|a| *a == "-t").count(), 1, "spike's own -t only: {:?}", argv);
+        let script = std::fs::read_to_string(dir.join("align.sh")).unwrap();
+        assert!(script.contains("# bwa-mem2 options copied from the input's @PG ID:bwa-mem2: -M -K 100000000"),
+                "align.sh must say where the options came from:\n{}", script);
+    }
+
+    #[test]
+    fn test_a_copied_value_with_shell_metacharacters_reaches_bwa_as_one_word() {
+        let (dir, argv_out, samtools) = align_script_fixture("align_bwa_hostile_option", "bwa-mem2");
+        let hostile = "a b;touch pwned$(touch pwned)'";
+        let options = bwa_options(&["-x", hostile]);
+
+        write_align_script(dir.to_str().unwrap(), "ref.fa", 4, "bwa-mem2", samtools.to_str().unwrap(),
+                           "HG002", Some(&options))
+            .unwrap();
+        let output = run_generated_script(&dir, "align.sh", &[("ARGV_OUT", argv_out.to_str().unwrap())]);
+
+        assert!(output.status.success(), "align.sh failed: {}", String::from_utf8_lossy(&output.stderr));
+        let argv = argv_lines(&argv_out);
+        assert!(argv.iter().any(|a| a == hostile), "the value must arrive whole: {:?}", argv);
+        assert!(!dir.join("pwned").exists(), "the header's text must not run");
+    }
+
+    #[test]
+    fn test_other_presets_do_not_take_bwa_options() {
+        let options = bwa_options(&["-M", "-K", "100000000"]);
+        for aligner in ["minimap2", "bowtie2", "my_aligner --fast"] {
+            let dir = scratch_dir(&format!("align_no_bwa_options_{}", aligner.len()));
+            write_align_script(dir.to_str().unwrap(), "ref.fa", 4, aligner, "samtools", "HG002", Some(&options))
+                .unwrap();
+            let script = std::fs::read_to_string(dir.join("align.sh")).unwrap();
+            assert!(!script.contains("100000000"), "{} must not get bwa's options:\n{}", aligner, script);
+        }
+    }
+
+    #[test]
+    fn test_no_options_leaves_the_script_as_it_was() {
+        let a = scratch_dir("align_bwa_none");
+        let b = scratch_dir("align_bwa_empty");
+        write_align_script(a.to_str().unwrap(), "ref.fa", 4, "bwa-mem2", "samtools", "HG002", None).unwrap();
+        write_align_script(b.to_str().unwrap(), "ref.fa", 4, "bwa-mem2", "samtools", "HG002", Some(&bwa_options(&[])))
+            .unwrap();
+        let (sa, sb) = (std::fs::read_to_string(a.join("align.sh")).unwrap(),
+                        std::fs::read_to_string(b.join("align.sh")).unwrap());
+        assert_eq!(sa, sb);
+        assert!(sa.contains("bwa-mem2 mem -t \"$THREADS\" \\\n"), "the line master writes:\n{}", sa);
+    }
+
     #[test]
     fn test_align_script_passes_a_sample_name_with_a_space_as_one_argument() {
         // bowtie2's `--rg SM:...` is the one read-group argument that is not
@@ -3948,6 +4070,7 @@ esac
             "bowtie2",
             samtools.to_str().unwrap(),
             "Patient 123",
+            None,
         )
         .unwrap();
 
@@ -3982,6 +4105,7 @@ esac
             "bwa-mem2",
             samtools.to_str().unwrap(),
             "O'Brien",
+            None,
         )
         .unwrap();
 
@@ -4081,6 +4205,7 @@ esac
             "bwa-mem2",
             samtools.to_str().unwrap(),
             "HG002",
+            None,
         )
         .unwrap();
 
