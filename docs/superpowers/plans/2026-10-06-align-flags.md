@@ -78,3 +78,35 @@ This touches only the BAM route (`align.sh`, then `merge.sh`), which is how the 
 **K3, a BAM without these options.** The 35x HG002 BAM, `del:chr20:14530000-14531000`, seed 1. The new binary's `align.sh` is byte-identical to master's.
 
 **B, the reads do not change.** In K1 and K3, `R1.fq.gz`, `R2.fq.gz`, `truth.vcf` and `replaced_reads.txt` are byte-identical to master's. `truth.vcf` is compared without its `##reference` temp-path line, if that differs.
+
+## Result (2026-10-06): supported
+
+The code is `025874d`, plus `b0f9341`, which adds a header test. New release binary: `4265ba92`. Master `bdd568a`'s release binary: `d260eda7`. Scratch: `scratchpad/afp/`.
+
+**Tests.** 730 pass (15 new), 0 fail, 1 ignored. clippy's warnings are the same 12 lines as master's.
+
+**Mutation.** The runner first checks that the unmutated suite (730) is green. It then catches **5 of 5** mutants:
+- 1 (`-t` copied) reddens 6 tests;
+- 2 (a value lost) reddens 5;
+- 3 (the `@PG` ignored) reddens 1: the header test of `b0f9341`;
+- 4 (`-p` copied) reddens 1;
+- 5 (not quoted) reddens 1, the shell-metacharacter test.
+
+Mutant 3 shows why `b0f9341` was needed. The parser's tests fed it strings, and nothing read a real header, so before that test a `bwa_options` that ignored the `@PG` passed every test.
+
+**Two code details the plan did not name.**
+- The program picked is the first bwa `@PG` whose `CL` is a `mem` command, not simply the first bwa `@PG`. They are the same on every header seen here.
+- `sample_name` and `bwa_options` now share one header reader.
+
+**K1: PASS.**
+- `align.sh` reads `bwa-mem2 mem -M -K 100000000 -t "$THREADS"`, after the comment `# bwa-mem2 options copied from the input's @PG ID:bwa-mem2: -M -K 100000000`.
+- spike logs the same.
+- `sim.bam` has 6,144 records: 0 SUPPLEMENTARY and 22 SECONDARY, all 22 with SA. Master gave 22 SUPPLEMENTARY.
+
+**K2: PASS.** K1's `sim.bam` equals the hospital command's (`inspect/ld2/run/sim.bam`, `-t 4`) record for record, all 6,144 of them, with the RG tag removed.
+
+**K3: PASS.** On the 35x HG002 BAM, whose `@PG` has no `-M`, `align.sh` is byte-identical to master's: `bwa-mem2 mem -t "$THREADS"`.
+
+**B: PASS.** In K1 and K3, `R1.fq.gz`, `R2.fq.gz`, `replaced_reads.txt`, `fastq_removed_reads.txt` and `truth.vcf` (with its `##reference` line too) are byte-identical to master's. Besides `align.sh` in K1, only the run README differs, in its date and command line.
+
+**What this means.** In the BAM route, spike's split reads now carry the flag the sample's own reads carry. The FASTQ route was never affected.
