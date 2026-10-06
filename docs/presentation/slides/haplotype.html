@@ -1,0 +1,52 @@
+<section id="haplotype" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Variant haplotypes as ordered reference segments</h2>
+<div style="display:flex;flex-direction:column;gap:16px">
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px;color:#4A5160">Reference</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<p style="width:300px;background:#ECEDEF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">event span</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px">Deletion</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px">Duplication</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<p style="width:300px;background:#F3DCCF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">event span</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#F3DCCF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">event span</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px">Inversion</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#F3DCCF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">span, reverse complement</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px">Insertion</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:200px;background:#D5EBDF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">new bases</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+<div style="display:flex;gap:4px;align-items:stretch">
+<p style="width:250px;font-size:26px;font-weight:600;line-height:60px">SNV or indel</p>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">left flank</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:110px;background:#D5EBDF;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">ALT</p>
+<div style="width:6px;background:#C4501F"></div>
+<p style="width:300px;background:#DCE3EB;padding:15px 0;font-size:24px;line-height:1.25;text-align:center">right flank</p>
+</div>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 3.</b> Schematic of the haplotype layouts. Each flank is 2 kb of reference. Dark orange bars mark junctions absent from the reference: a read spanning one aligns as a split read, its pair as a discordant pair, with no type-specific breakpoint code. In a duplication only the span-to-span junction is new. A fusion joins segments of two genes the same way.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 7 / 25</p>
+<aside>spike never edits a read in place. It writes the variant as a new sequence built from reference segments, in a new order, reverse-complemented, or with new bases between them, and tiles reads across it. Structural-variant evidence such as split reads and discordant pairs then arises from the aligner, as it does for real reads.</aside>
+</section>

@@ -1,0 +1,25 @@
+<section id="routes" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Two routes from simulated reads to variant calls</h2>
+<div style="display:flex;gap:64px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:30px;font-weight:600;color:#1F4E79">A. BAM route: targeted tests</h3>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">align.sh: align spike's reads → sim.bam</p>
+<x-shape kind="arrow-down" style="width:24px;height:32px;background:#7A8594;align-self:center"></x-shape>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">merge.sh: replace them in the sample's BAM → merged.bam</p>
+<x-shape kind="arrow-down" style="width:24px;height:32px;background:#7A8594;align-self:center"></x-shape>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">Call variants on merged.bam</p>
+<p style="font-size:24px;line-height:1.4;color:#4A5160">Only the reads near the event are aligned, with the bwa-mem2 options read from the sample's @PG header line.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:30px;font-weight:600;color:#1F4E79">B. FASTQ route: full pipeline</h3>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">spike --into-fastq runs fastq.sh on the raw FASTQ pair</p>
+<x-shape kind="arrow-down" style="width:24px;height:32px;background:#7A8594;align-self:center"></x-shape>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">Whole-sample FASTQ with the replaced reads and their duplicates swapped out</p>
+<x-shape kind="arrow-down" style="width:24px;height:32px;background:#7A8594;align-self:center"></x-shape>
+<p style="border:1px solid #B8C2CE;padding:16px 24px;font-size:26px;line-height:1.35">Run the clinical pipeline (e.g. nf-core/raredisease) from FASTQ</p>
+<p style="font-size:24px;line-height:1.4;color:#4A5160">The pipeline aligns, marks duplicates and calls exactly as it does for any sample.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 13 / 25</p>
+<aside>Route A is for quick, focused tests: align only spike's reads and swap them into the existing BAM. Route B is for full validation: the whole sample's FASTQ with spike's reads in place of the ones they replace, run through the clinical pipeline from the start. The results in this talk use route A.</aside>
+</section>

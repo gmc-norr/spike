@@ -1,0 +1,29 @@
+<section id="validate" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:30px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Round trips through spike validate</h2>
+<div style="display:flex;gap:56px;align-items:start">
+<div style="width:760px;display:flex;flex-direction:column;gap:14px">
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:38%;text-align:left">Event type</th><th style="width:62%;text-align:left">Deciding checks</th></tr>
+<tr><td>Deletion</td><td>coverage_ratio, del_planted</td></tr>
+<tr><td>Duplication</td><td>coverage_ratio, split_reads</td></tr>
+<tr><td>Inversion, fusion</td><td>split_reads</td></tr>
+<tr><td>Insertion</td><td>ins_planted</td></tr>
+<tr><td>SNV, indel, MNV</td><td>allele_freq (slide 12)</td></tr>
+<tr><td>Every run</td><td>insert_size, dup_rate, mean_mapq</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 5.</b> del_planted and ins_planted count spike's own reads for the event that carry its junction. Advisory rows are reported but do not set the exit status.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:14px">
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:52%;text-align:left">Run</th><th style="width:32%;text-align:left">Checks</th><th style="width:16%;text-align:right">Exit</th></tr>
+<tr><td>10 kb DEL + 300 bp INS</td><td>15 / 15 PASS</td><td style="text-align:right">0</td></tr>
+<tr><td>2 bp DEL, 4 bp INS, MNV</td><td>12 / 12 PASS</td><td style="text-align:right">0</td></tr>
+<tr><td>Hom 10 kb DEL</td><td>10 / 10 PASS</td><td style="text-align:right">0</td></tr>
+<tr><td>25 SNVs, five fractions</td><td>71 / 78 PASS</td><td style="text-align:right">1</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 6.</b> GIAB HG002 35×, chr20, spike at master 97aa3b4, align.sh and merge.sh. The SNV run's 7 non-passing rows: the five sites too shallow to grade, which count as failures, and two advisory rows (resistant 0.113 at one site, depth_fold 1.61 at another).</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 21 / 25</p>
+<aside>Round trips: plant events, align, merge, and let spike validate check that they are there. The three structural and small-indel runs pass every row. The SNV run exits 1 by design: a site too shallow to grade is reported as a failure rather than a pass, and two advisory rows flag a site where 11 percent of reads could not be edited and a site whose local depth departs 1.61-fold from the depth used to scale it.</aside>
+</section>

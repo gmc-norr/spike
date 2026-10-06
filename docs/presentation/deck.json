@@ -1,0 +1,66 @@
+{
+ "v": 4,
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-10-06T19:00:00Z"
+ },
+ "lists": "css",
+ "title": "How spike works",
+ "cover": "cover",
+ "order": [
+  "cover",
+  "why",
+  "inout",
+  "pipeline",
+  "models",
+  "learn",
+  "haplotype",
+  "copies",
+  "tiling",
+  "markov",
+  "errors",
+  "vstats",
+  "routes",
+  "guards",
+  "depth",
+  "snv",
+  "insert",
+  "quality",
+  "qspread",
+  "lowtail",
+  "validate",
+  "realism",
+  "next",
+  "method",
+  "close"
+ ],
+ "sections": {
+  "s1": {
+   "description": "Introduction: background, aim, inputs and outputs",
+   "start": "cover"
+  },
+  "s2": {
+   "description": "Methods: the simulation steps and their statistical models",
+   "start": "pipeline"
+  },
+  "s3": {
+   "description": "Results: measurements from real runs",
+   "start": "depth"
+  },
+  "s4": {
+   "description": "Discussion: limitations, next steps, practice and summary",
+   "start": "next"
+  }
+ },
+ "faces": {
+  "noto-sans": {
+   "family": "Noto Sans",
+   "href": "https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+  },
+  "jetbrains-mono": {
+   "family": "JetBrains Mono",
+   "href": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
+  }
+ },
+ "designSystems": []
+}

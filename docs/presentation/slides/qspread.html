@@ -1,0 +1,22 @@
+<section id="qspread" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Spread of base quality: per cycle and per read</h2>
+<img src="../figures/chart_qspread.png" alt="A and B: standard deviation of base quality per cycle for read 1 and read 2; real and spike's lines overlap, rising from about 3.5 to 6-7 at cycle 151. C: share of reads by mean base quality, log scale; real reads spread from Q20 to Q37 with 5.5% at exactly Q37, spike's reads lie between Q33 and Q37" style="width:1664px;height:384px;object-fit:contain">
+<div style="display:flex;gap:56px;align-items:start">
+<div style="width:740px;display:flex;flex-direction:column;gap:14px">
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 12.</b> The reads of Figure 11. A, B: standard deviation (SD) of base quality at each cycle. C: each read's mean base quality, both mates (0.5 Q bins, log scale; zero counts not drawn; 7 real reads below Q20 in the first bin).</p>
+<p style="font-size:24px;line-height:1.4;color:#2B323B">Control: a first-order chain fitted to the real reads in this window set gives SD 0.55 for C. Shuffling real qualities across reads within each cycle gives 0.46.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:10px">
+<table style="font-size:22px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:34%;text-align:left">Measure</th><th style="width:33%;text-align:left">Real (n = 23,832)</th><th style="width:33%;text-align:left">spike (n = 13,016)</th></tr>
+<tr><td>SD, all bases</td><td>4.96 (4.91–5.01)</td><td>4.82 (4.80–4.84)</td></tr>
+<tr><td>SD of read means</td><td>2.08 (2.03–2.13)</td><td>0.52 (0.51–0.52)</td></tr>
+<tr><td>Reads all Q37</td><td>5.5% (5.2–5.8%)</td><td>0.02% (0.01–0.07%)</td></tr>
+<tr><td>Read mean below Q33</td><td>8.4% (8.0–8.7%)</td><td>0% (0–0.03%)</td></tr>
+</table>
+<p style="font-size:22px;line-height:1.4;color:#4A5160"><b>Table 4.</b> 95% CIs: bootstrap over reads for SDs, Wilson for shares.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 19 / 25</p>
+<aside>The previous slide showed only the mean. Here is the spread. Panels A and B: at each cycle, the standard deviation of base quality across reads is the same for real and spike's reads, about 3.5 at the start rising to 6 or 7 at the end. Panel C asks a different question: how much does quality vary from one read to the next? Real reads differ a lot. One in eighteen is a perfect read, Q37 at every base, and one in twelve has a mean below Q33. spike's reads are all alike, between Q33 and Q37, with almost no perfect reads and no poor ones. The cause is the chain's one-base memory: it cannot know that a read is a good or a bad read overall. A first-order chain fitted directly to the real reads gives the same narrow spread as spike, 0.55, close to the 0.46 of real qualities shuffled between reads. The crashed 3′ ends on the next slide are one form of this. The reads spike replaced had the same spread as the rest of the real reads (SD 2.03), so the gap is not caused by which reads were compared.</aside>
+</section>

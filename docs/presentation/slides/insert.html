@@ -1,0 +1,19 @@
+<section id="insert" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Fragment length distribution</h2>
+<div style="display:flex;gap:56px;align-items:start">
+<img src="../figures/chart_insert.png" alt="Fragment length distributions of real read pairs and spike's read pairs in 20 bp bins from 0 to 1000 bp; the two step lines overlap closely; medians 382 and 385 bp" style="width:930px;height:558px;object-fit:contain">
+<div style="flex:1;display:flex;flex-direction:column;gap:18px">
+<table style="font-size:26px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:40%;text-align:left"></th><th style="width:30%;text-align:right">Real</th><th style="width:30%;text-align:right">spike</th></tr>
+<tr><td>Pairs</td><td style="text-align:right">11,757</td><td style="text-align:right">6,508</td></tr>
+<tr><td>Median (bp)</td><td style="text-align:right">382</td><td style="text-align:right">385</td></tr>
+<tr><td>Mean (bp)</td><td style="text-align:right">421.1</td><td style="text-align:right">423.4</td></tr>
+</table>
+<p style="font-size:26px;line-height:1.45;color:#2B323B">Two-sample Kolmogorov–Smirnov: <i>D</i> = 0.013, <i>p</i> ≈ 0.50 (asymptotic).</p>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Pairs from overlapping windows are not fully independent, so <i>p</i> is approximate.</p>
+</div>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 10.</b> |TLEN| of properly paired read 1, ≤ 1,500 bp, in the 25 windows of the SNV run, as share of pairs per 20 bp bin. Synthetic lengths are resampled from the donor pool's observed lengths.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 17 / 25</p>
+<aside>Fragment length matters for structural-variant callers, which judge discordant pairs against the library's insert-size distribution. Because spike resamples observed lengths rather than assuming a distribution, its pairs and the sample's are statistically indistinguishable here.</aside>
+</section>

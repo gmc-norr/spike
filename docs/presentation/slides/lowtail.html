@@ -1,0 +1,18 @@
+<section id="lowtail" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Low-quality runs at the 3′ end</h2>
+<div style="display:flex;gap:56px;align-items:start">
+<img src="../figures/chart_lowtail.png" alt="Share of reads (log scale) by number of bases below Q15 among the last 20 cycles; real reads decline slowly out to 20, spike's reads fall off steeply after 5 and stop at 11" style="width:997px;height:558px;object-fit:contain">
+<div style="flex:1;display:flex;flex-direction:column;gap:18px">
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:30%;text-align:left">Crashed end</th><th style="width:70%;text-align:left">Share of reads (95% CI)</th></tr>
+<tr><td>Real</td><td>1.10% (0.97–1.24%); 261 / 23,832</td></tr>
+<tr><td>spike</td><td>0.008% (0.001–0.044%); 1 / 13,016</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.45;color:#2B323B">A first-order chain remembers one base back, so the chance of staying low falls off geometrically. Real reads stay low far longer.</p>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Copying whole donor quality strings reached 1.26% vs 1.48% real on the hospital BAM, but not the real reads' soft-clip rate; not merged.</p>
+</div>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 13.</b> Number of bases below Q15 among each read's last 20 cycles, real vs spike's reads (log scale; zero counts not drawn). Crashed end: ≥ 10 of 20. CIs: Wilson.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 20 / 25</p>
+<aside>This is where the Markov chain falls short. About one real read in a hundred ends in a long run of low-quality bases, a crash; in spike's reads the run length falls off geometrically, as a first-order chain implies, and crashes almost never occur. Aligners soft-clip such ends, so spike's reads are clipped less often than real ones. A fix that copies whole quality strings from real reads restored the crash rate on the hospital BAM, but real crashed ends also carry far more errors than their qualities say, so clipping did not follow; that change is kept on a separate branch.</aside>
+</section>

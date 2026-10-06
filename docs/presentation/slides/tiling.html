@@ -1,0 +1,26 @@
+<section id="tiling" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Number of synthetic fragments</h2>
+<p style="font-size:44px;line-height:1.3;text-align:center;color:#1F2328"><i>n</i> = round( <i>C</i> · <i>f</i> · <i>S</i> / <i>L</i> )</p>
+<div style="display:flex;gap:64px;align-items:start">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;line-height:1.45"><i>C</i>: fragment depth of the donor pool in a 2 kb window at the first breakpoint</p>
+<p style="font-size:26px;line-height:1.45"><i>f</i>: requested allele fraction</p>
+<p style="font-size:26px;line-height:1.45"><i>S</i>: usable start positions, haplotype length minus <i>L</i>, minus starts wholly inside new sequence</p>
+<p style="font-size:26px;line-height:1.45"><i>L</i>: mean fragment length of the pool</p>
+</div>
+<div style="width:720px;display:flex;flex-direction:column;gap:12px">
+<table style="font-size:26px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:60%;text-align:left">Example run</th><th style="width:40%;text-align:right">Value</th></tr>
+<tr><td><i>C</i></td><td style="text-align:right">71.8</td></tr>
+<tr><td><i>f</i></td><td style="text-align:right">0.5</td></tr>
+<tr><td><i>S</i> (4,000 bp haplotype)</td><td style="text-align:right">3,576</td></tr>
+<tr><td><i>L</i> (bp)</td><td style="text-align:right">423.7</td></tr>
+<tr><td><i>n</i></td><td style="text-align:right">303</td></tr>
+<tr><td>Original pairs removed</td><td style="text-align:right">1,039 of 4,623</td></tr>
+</table>
+</div>
+</div>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">The count gives the event the depth that the removed reads had: <i>C</i> · <i>f</i> on average across the haplotype. Additive events (fusions, junction-model duplications) keep every original read and add <i>n</i> = <i>C</i> · <i>f</i> / (1 − <i>f</i>) per breakpoint, <i>f</i> ≤ 0.95. One depth <i>C</i> scales the whole event; the largest local departure from it is recorded as SIM_DEPTH_FOLD.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 9 / 25</p>
+<aside>The example values are from the run's own log: fragment depth 71.8 near the breakpoint, f = 0.5, a 4,000 bp haplotype because the 10 kb are deleted and 2 kb of flank remain on each side, 3,576 start positions, mean fragment 423.7 bp: 303 new pairs. In the same run 1,039 of the 4,623 pool pairs were removed in step 4.</aside>
+</section>

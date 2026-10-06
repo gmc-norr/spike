@@ -1,0 +1,37 @@
+<section id="copies" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Copy-aware removal of original reads</h2>
+<div style="display:flex;gap:64px;align-items:start">
+<div style="width:820px;display:flex;flex-direction:column;gap:16px">
+<div style="position:relative;width:820px;height:460px">
+<div style="position:absolute;left:0px;top:0px;width:818px;height:210px;border:1px solid #B8C2CE"></div>
+<div style="position:absolute;left:300px;top:1px;width:220px;height:208px;background:#F3DCCF"></div>
+<p style="position:absolute;left:24px;top:14px;width:560px;font-size:24px;font-weight:600">Event copy (carries the deletion)</p>
+<p style="position:absolute;left:640px;top:14px;width:150px;font-size:24px;color:#4A5160;text-align:right">SNP allele A</p>
+<div style="position:absolute;left:60px;top:90px;width:280px;height:14px;background:#2A78D6;opacity:0.22;border-radius:7px"></div>
+<div style="position:absolute;left:430px;top:90px;width:300px;height:14px;background:#2A78D6;opacity:0.22;border-radius:7px"></div>
+<div style="position:absolute;left:210px;top:128px;width:300px;height:14px;background:#2A78D6;opacity:0.22;border-radius:7px"></div>
+<p style="position:absolute;left:24px;top:164px;width:760px;font-size:24px;color:#4A5160">f = 0.5: removed with probability 1</p>
+<div style="position:absolute;left:0px;top:248px;width:818px;height:210px;border:1px solid #B8C2CE"></div>
+<p style="position:absolute;left:24px;top:262px;width:560px;font-size:24px;font-weight:600">Other copy</p>
+<p style="position:absolute;left:640px;top:262px;width:150px;font-size:24px;color:#4A5160;text-align:right">SNP allele G</p>
+<div style="position:absolute;left:80px;top:338px;width:280px;height:14px;background:#2A78D6;border-radius:7px"></div>
+<div style="position:absolute;left:450px;top:338px;width:300px;height:14px;background:#2A78D6;border-radius:7px"></div>
+<div style="position:absolute;left:240px;top:376px;width:300px;height:14px;background:#2A78D6;border-radius:7px"></div>
+<p style="position:absolute;left:24px;top:412px;width:760px;font-size:24px;color:#4A5160">f = 0.5: removed with probability 0</p>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 4.</b> Schematic, not data: original read pairs inside the event's footprint at f = 0.5. Faded: removed.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:24px">
+<table style="font-size:26px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:48%;text-align:left">Copy of the pair</th><th style="width:52%;text-align:left">P(removed)</th></tr>
+<tr><td>Event copy</td><td>min(1, 2f)</td></tr>
+<tr><td>Other copy</td><td>max(0, 2f − 1)</td></tr>
+<tr><td>Unknown</td><td>f</td></tr>
+</table>
+<p style="font-size:26px;line-height:1.45;color:#2B323B">Averaged over the two copies, the expected share removed is f. At f = 0.5 the het SNPs inside a deletion become single-allele, as in a real carrier.</p>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Copy assignment: het SNPs are phased into blocks from fragments spanning two or more (strongest links first); a fragment takes the copy most of its SNP alleles match.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 8 / 25</p>
+<aside>Removing reads at random would leave both alleles of every heterozygous SNP inside a deletion, which no real carrier shows. spike instead removes reads by copy. Each original pair inside the event's footprint is removed with a probability that depends on which copy it came from. Averaged over both copies the share removed equals the requested fraction, but at f equals 0.5 the event copy loses all its reads and the other copy keeps all of its own.</aside>
+</section>

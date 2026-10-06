@@ -1,0 +1,17 @@
+<section id="snv" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Allele fraction: requested versus measured</h2>
+<div style="display:flex;gap:56px;align-items:start">
+<img src="../figures/chart_snv.png" alt="Scatter of 25 SNVs: allele fraction requested against allele fraction measured, with a 95% confidence interval per site; points lie along the diagonal; the five at 0.1 are hollow, not graded" style="width:824px;height:560px;object-fit:contain">
+<div style="flex:1;display:flex;flex-direction:column;gap:18px">
+<ul style="font-size:26px;line-height:1.45;color:#2B323B">
+<li>25 SNVs, 60 kb apart on chr20, five each at <i>f</i> = 0.1, 0.25, 0.5, 0.75 and 1.0, in one run</li>
+<li>28–52 voting fragments per site</li>
+<li>Requested <i>f</i> lies inside the site's 95% CI at 23 of 25 sites. Both others are at <i>f</i> = 1 (34 of 36 and 40 of 41 fragments), where any non-alt fragment puts 1.0 outside</li>
+<li>20 of 20 graded sites pass the validate test; the five at <i>f</i> = 0.1 are too shallow to grade</li>
+</ul>
+</div>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 9.</b> Measured fraction = alt fragments / all voting fragments, counted independently from merged.bam (MAPQ ≥ 20, one vote per pair) and identical to spike validate at all 25 sites. Bars: Wilson 95% CI. Points offset horizontally by up to ±0.024 for visibility.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 16 / 25</p>
+<aside>Twenty-five SNVs planted in one run at five allele fractions, then aligned, merged and counted. The error bars are binomial confidence intervals from each site's own fragment count, so the scatter around the diagonal can be read against sampling noise at this depth. The requested fraction falls inside the interval at 23 of 25 sites. The two exceptions are homozygous sites with 34 of 36 and 40 of 41 fragments carrying the variant: at a requested fraction of 1, a single fragment without it is enough to exclude 1.0 from the interval.</aside>
+</section>

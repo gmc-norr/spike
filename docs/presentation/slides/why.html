@@ -1,0 +1,37 @@
+<section id="why" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Background and aim</h2>
+<div style="display:flex;gap:64px;align-items:start">
+<ul style="flex:1;font-size:28px;line-height:1.45;color:#2B323B">
+<li>Benchmarking a variant caller requires variants known to be present in realistic data.</li>
+<li>Carriers of a given pathogenic variant are rare, and seldom sequenced with the laboratory's own protocol.</li>
+<li>Fully simulated reads lack the sample's depth profile, error profile, library and alignment behaviour.</li>
+<li><b>Aim:</b> modify only the reads overlapping a chosen variant in a real sample, and record exactly what was planted.</li>
+</ul>
+<div style="width:700px;display:flex;flex-direction:column;gap:16px">
+<div style="position:relative;width:700px;height:520px;border:1px solid #D5DAE0">
+<div style="position:absolute;left:290px;top:0px;width:120px;height:518px;background:#E6E9EE"></div>
+<div style="position:absolute;left:20px;top:30px;width:240px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:430px;top:72px;width:240px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:140px;top:114px;width:150px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:290px;top:119px;width:120px;height:2px;background:#EB6834;opacity:0.6"></div>
+<div style="position:absolute;left:410px;top:114px;width:90px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:230px;top:156px;width:240px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:10px;top:198px;width:230px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:200px;top:240px;width:90px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:290px;top:245px;width:120px;height:2px;background:#EB6834;opacity:0.6"></div>
+<div style="position:absolute;left:410px;top:240px;width:150px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:450px;top:282px;width:232px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:280px;top:324px;width:240px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:20px;top:366px;width:240px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:110px;top:408px;width:180px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:290px;top:413px;width:120px;height:2px;background:#EB6834;opacity:0.6"></div>
+<div style="position:absolute;left:410px;top:408px;width:60px;height:12px;background:#EB6834;border-radius:6px"></div>
+<div style="position:absolute;left:420px;top:450px;width:240px;height:12px;background:#2A78D6;border-radius:6px"></div>
+<div style="position:absolute;left:440px;top:480px;width:240px;height:12px;background:#EB6834;border-radius:6px"></div>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 1.</b> Schematic, not data: reads at a heterozygous deletion after spike. Blue: the sample's reads. Orange: synthetic reads, split across the deleted interval (grey).</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Introduction · 2 / 25</p>
+<aside>The problem spike addresses: to validate a caller you need variants you know are there, in data that looks like your own. Real carriers are rare; fully simulated data is too clean. spike keeps everything about a real sample except the variant you plant. Figure 1 is a drawing of the idea, not data: the synthetic reads that cross the deleted interval are the split reads a caller looks for.</aside>
+</section>

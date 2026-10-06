@@ -1,0 +1,16 @@
+<section id="realism" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:30px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Comparison with real carriers of the same deletions</h2>
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:40%;text-align:left">Property</th><th style="width:22%;text-align:left">spike</th><th style="width:22%;text-align:left">Real reads</th><th style="width:16%;text-align:left">Assessment</th></tr>
+<tr><td>Depth inside a het deletion (× normal)</td><td>0.47</td><td>0.52 (carrier)</td><td>similar</td></tr>
+<tr><td>Clip offsets from the breakpoint</td><td>match carrier in 16 of 18</td><td>reference</td><td>consistent</td></tr>
+<tr><td>Minor-allele share of het SNPs inside</td><td>0.00–0.16</td><td>loss expected</td><td>consistent</td></tr>
+<tr><td>MAPQ, XA/SA tags, length, per-base quality</td><td>match</td><td>reference</td><td>consistent</td></tr>
+<tr><td>Reads with a crashed 3′ end</td><td>0.04%</td><td>1.48%</td><td>differs</td></tr>
+<tr><td>Soft-clipped reads</td><td>0.2%</td><td>2.4%</td><td>differs</td></tr>
+<tr><td>Duplicates among synthetic reads</td><td>none made</td><td>present</td><td>differs</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 7.</b> Twenty deletions carried by GIAB HG001 were planted into HG002 with spike and compared with HG001's own reads at the same sites, plus two LDLR deletions; read-level inspection, October 2026, with the hospital's aligner settings. "Reference": the real reads are the comparison standard.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 22 / 25</p>
+<aside>An independent check: deletions that HG001 really carries were planted into HG002, and spike's reads were compared read by read with HG001's real reads at the same places. Depth, clipping positions at the breakpoints, loss of heterozygosity and alignment tags agree. Three properties differ: crashed read ends and the soft clips that follow from them, and the absence of duplicates among spike's reads. The quality row means the distribution of base qualities; how quality varies from read to read differs (Figure 12).</aside>
+</section>

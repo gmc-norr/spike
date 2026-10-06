@@ -1,0 +1,14 @@
+<section id="guards" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Conditions under which spike refuses an event</h2>
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:56%;text-align:left">Condition</th><th style="width:44%;text-align:left">Reason</th></tr>
+<tr><td>More than half the reads over the event cannot be edited (below --min-mapq, not properly paired, mate failing a filter)</td><td>The planted event would be weaker than the truth file states (override: --allow-resistant)</td></tr>
+<tr><td>The sample already carries another allele at a small variant: ≥ 10 reads span it and ≥ 1 in 5 carry another allele</td><td>The requested fraction cannot be reached</td></tr>
+<tr><td>Fewer than 30 donor read pairs</td><td>No data to estimate the library model</td></tr>
+<tr><td>Two events closer than 7,000 bp</td><td>Their replaced reads would overlap (override: --allow-overlap)</td></tr>
+<tr><td>Most common read length above 1,500 bp</td><td>Only short paired-end reads are modelled</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 3.</b> Refusals stop the run before anything is written, and list every affected event. The truth file also records, per event, the share of reads that could not be edited (SIM_RESIST), the largest depth departure (SIM_DEPTH_FOLD) and how many planted pairs show the event (SIM_ALT_FRAGS).</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 14 / 25</p>
+<aside>spike prefers to stop rather than write a truth file that claims more than the reads hold. The most consequential case is the first: reads it cannot edit, mostly with low mapping quality, stay in the BAM unchanged, so an event in a hard region would come out weaker than requested.</aside>
+</section>

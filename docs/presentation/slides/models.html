@@ -1,0 +1,17 @@
+<section id="models" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:30px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Statistical components of the simulation</h2>
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:19%;text-align:left">Component</th><th style="width:51%;text-align:left">Model</th><th style="width:30%;text-align:left">Estimated from</th></tr>
+<tr><td>Fragment length</td><td>Resampled from observed insert sizes, [read length, 1,500] bp</td><td>Donor pool</td></tr>
+<tr><td>Fragment start</td><td>Uniform over usable start positions on the haplotype</td><td>Haplotype length</td></tr>
+<tr><td>Fragment count</td><td>n = C · f · S / L, rounded (next slides)</td><td>Pool depth C, mean length L</td></tr>
+<tr><td>Copy of origin</td><td>Majority vote of a fragment's het SNP alleles; tie: unknown</td><td>Het SNPs, read-backed phasing</td></tr>
+<tr><td>Read removal</td><td>Bernoulli per pair, at a rate set by copy and fraction f</td><td>Copy of origin</td></tr>
+<tr><td>Base quality</td><td>First-order Markov chain by cycle, base and previous quality</td><td>Donor pool, per mate</td></tr>
+<tr><td>Sequencing error</td><td>Bernoulli per base, p = 10^(−Q/10); uniform substitute base</td><td>The read's own quality</td></tr>
+<tr><td>Orientation</td><td>Bernoulli(0.5): which end of the fragment is read 1</td><td>None</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 1.</b> Every random choice in a run. All are drawn from one pseudo-random generator (Rust StdRng) seeded by --seed. The empirical models resample observed values rather than fit parametric distributions.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 5 / 25</p>
+<aside>This table is the statistical core of spike. Where a model is estimated, it is estimated from the donor pool, the sample's own reads around the event, and it is non-parametric: spike draws from observed values rather than fitting, say, a normal fragment-length distribution. The quality model is a first-order Markov chain, described on slide 10.</aside>
+</section>

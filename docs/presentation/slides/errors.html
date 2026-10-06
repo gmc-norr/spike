@@ -1,0 +1,21 @@
+<section id="errors" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Sequencing errors drawn from base quality</h2>
+<div style="display:flex;gap:56px;align-items:start">
+<div style="width:720px;display:flex;flex-direction:column;gap:20px">
+<p style="font-size:26px;line-height:1.45">Each synthetic base is wrong with probability <i>p</i> = 10^(−<i>Q</i>/10), <i>Q</i> being the quality drawn for it. A wrong base becomes one of the three others with equal probability. Indel errors are off by default (--indel-error-rate).</p>
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:22%;text-align:left">Quality</th><th style="width:26%;text-align:right">Real reads</th><th style="width:26%;text-align:right">spike</th><th style="width:26%;text-align:right">10^(−Q/10)</th></tr>
+<tr><td>Q11</td><td style="text-align:right">9.45%</td><td style="text-align:right">8.11%</td><td style="text-align:right">7.94%</td></tr>
+<tr><td>Q25</td><td style="text-align:right">0.318%</td><td style="text-align:right">0.296%</td><td style="text-align:right">0.316%</td></tr>
+<tr><td>Q37</td><td style="text-align:right">0.011%</td><td style="text-align:right">0.020%</td><td style="text-align:right">0.020%</td></tr>
+</table>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Mismatch rate on aligned bases, MAPQ ≥ 20; 249 positions where ≥ 10% of reads mismatch (variants) excluded. spike follows the nominal rate by construction; real Q37 bases err about half as often as nominal.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:14px">
+<img src="../figures/chart_errors.png" alt="Mismatch rate (log scale) against base quality 11, 25 and 37, for real reads and spike's reads, with 95% confidence intervals and the dashed nominal line 10^(-Q/10)" style="width:888px;height:497px;object-fit:contain">
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 6.</b> Mismatch rate by base quality with Wilson 95% CIs (some narrower than the dots); dashed: 10^(−Q/10). Soft-clipped bases are not counted, so the error rate of the poorest bases is underestimated in both groups.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 11 / 25</p>
+<aside>The error model is the Phred definition itself: a base of quality Q is wrong with probability ten to the minus Q over ten. Counts behind the table: real Q11 8,648 of 91,530 aligned bases, Q25 518 of 163,031, Q37 369 of 3,306,944; spike Q11 4,277 of 52,754, Q25 265 of 89,594, Q37 367 of 1,819,605. One caveat: the aligner soft-clips the worst read ends, and those bases have no reference position, so they are missing from this count. An earlier inspection found that real reads with a crashed tail carry far more errors than their qualities say.</aside>
+</section>

@@ -1,0 +1,32 @@
+<section id="inout" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Inputs and outputs</h2>
+<div style="display:flex;gap:64px;align-items:start">
+<div style="width:700px;display:flex;flex-direction:column;gap:20px">
+<h3 style="font-size:32px;font-weight:600;color:#1F4E79">Input</h3>
+<ul style="font-size:28px;line-height:1.45;color:#2B323B">
+<li>A sample's BAM or CRAM, coordinate-sorted and indexed</li>
+<li>The reference FASTA it was aligned to</li>
+<li>One or more events, each with an allele fraction (or a VCF)</li>
+</ul>
+<div style="display:flex;flex-direction:column;gap:4px;background:#F1F3F5;border-left:4px solid #1F4E79;padding:20px 24px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5">del:LDLR:exon4-exon8</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5">dup:chr20:30000000-30005000;af=het</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5">snp:chr17:7577120:C:T;af=0.15</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5">fusion:BCR:exon14:ABL1:exon2</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:20px">
+<h3 style="font-size:32px;font-weight:600;color:#1F4E79">Output</h3>
+<table style="font-size:24px;color:#2B323B">
+<tr style="background:#E8EDF3"><th style="width:34%;text-align:left">File</th><th style="width:66%;text-align:left">Content</th></tr>
+<tr><td>R1.fq.gz, R2.fq.gz</td><td>Reads around each event: originals kept, plus synthetic reads</td></tr>
+<tr><td>truth.vcf</td><td>Each planted event, its simulated fraction and census fields</td></tr>
+<tr><td>align.sh, merge.sh</td><td>Align the reads; replace them in the sample's BAM</td></tr>
+<tr><td>fastq.sh</td><td>The whole sample's FASTQ pair with the reads replaced</td></tr>
+<tr><td>README.md</td><td>Run log: command, per-event counts</td></tr>
+</table>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Introduction · 3 / 25</p>
+<aside>An event is a short specification: a type, a location and optionally an allele fraction. Locations can be coordinates or gene and exon names, or come from a VCF. spike writes the reads around each event, a truth VCF and three scripts to use them.</aside>
+</section>

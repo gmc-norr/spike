@@ -1,0 +1,86 @@
+{
+ "real": {
+  "n_reads": 23832,
+  "sd_all_bases": 4.96,
+  "sd_all_ci": [
+   4.91,
+   5.01
+  ],
+  "pooled_cycle_sd": 4.945,
+  "sd_read_mean": 2.081,
+  "sd_read_mean_ci": [
+   2.031,
+   2.134
+  ],
+  "read_mean_pct": [
+   26.25,
+   31.38,
+   35.62,
+   36.44,
+   36.76,
+   37.0,
+   37.0
+  ],
+  "within_read_sd_mean": 3.657,
+  "within_read_sd_ci": [
+   3.628,
+   3.69
+  ],
+  "within_read_sd_pct": [
+   3.0,
+   7.6,
+   11.61
+  ],
+  "share_reads_all37": 5.53,
+  "share_reads_mean_lt30": 3.34,
+  "share_reads_mean_lt33": 8.388,
+  "share_reads_mean_lt33_n": 1999,
+  "R1_sd_c1_10": 3.637,
+  "R1_sd_c142_151": 5.791,
+  "R2_sd_c1_10": 4.344,
+  "R2_sd_c142_151": 6.705,
+  "between_read_share_of_var_pct": 17.61
+ },
+ "spike": {
+  "n_reads": 13016,
+  "sd_all_bases": 4.817,
+  "sd_all_ci": [
+   4.798,
+   4.837
+  ],
+  "pooled_cycle_sd": 4.803,
+  "sd_read_mean": 0.516,
+  "sd_read_mean_ci": [
+   0.509,
+   0.523
+  ],
+  "read_mean_pct": [
+   34.38,
+   34.83,
+   35.42,
+   35.82,
+   36.11,
+   36.51,
+   36.68
+  ],
+  "within_read_sd_mean": 4.671,
+  "within_read_sd_ci": [
+   4.653,
+   4.69
+  ],
+  "within_read_sd_pct": [
+   4.7,
+   6.09,
+   7.16
+  ],
+  "share_reads_all37": 0.02,
+  "share_reads_mean_lt30": 0.0,
+  "share_reads_mean_lt33": 0.0,
+  "share_reads_mean_lt33_n": 0,
+  "R1_sd_c1_10": 3.656,
+  "R1_sd_c142_151": 5.613,
+  "R2_sd_c1_10": 4.238,
+  "R2_sd_c142_151": 6.463,
+  "between_read_share_of_var_pct": 1.15
+ }
+}
