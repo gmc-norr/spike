@@ -29,7 +29,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Variant haplotype model**: Every variant — from a single SNP to a multi-kilobase structural rearrangement — is represented as an ordered list of *segments*, each drawn from a reference region (possibly reverse-complemented) or from novel sequence. These segments are concatenated into a single linear haplotype sequence. Reads tiled uniformly across this linear sequence become automatically chimeric when they span a segment boundary. This single mechanism handles all SV types without any per-type breakpoint logic.
 
-**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top. By default a non-additive event removes only reads from its donor pool; the experimental `--edit-model origin` removes reads by their chance of having come from the event, at the event and at its look-alikes elsewhere in the genome.
+**Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top. By default a non-additive event removes reads from its donor pool, and the duplicates of the pairs it removes; the experimental `--edit-model origin` removes reads by their chance of having come from the event, at the event and at its look-alikes elsewhere in the genome.
 
 **Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a first-order Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
 
@@ -52,7 +52,7 @@ All types support per-event allele fraction control.
 
 ### Prerequisites
 
-- **Rust** (edition 2021 or later)
+- **Rust** 1.82 or newer (measured: 1.82.0 builds it and passes the suite)
 - **Reference FASTA** with `.fai` index (e.g., from `samtools faidx`). May be
   plain or bgzip-compressed (`.gz`/`.bgz`, detected by extension); a
   bgzipped FASTA also needs the matching `.gzi` index that `samtools faidx`
@@ -73,12 +73,14 @@ needs:
   `.vcf.gz` the way spike does, through `bcftools view`. Without bcftools both
   fail, by name and on purpose: a missing test dependency is a broken
   environment, not a test to skip.
-- **bash**, for the tests that run the generated `align.sh` / `merge.sh` and
-  `scripts/validate_pipeline.sh`. Those tests write their own stub `samtools`
-  and stub aligner and put them on the script's PATH, so a *real* `samtools`,
-  aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not** needed — measured:
-  with all of them off PATH the suite is `667 passed; 2 failed; 1 ignored`, the
-  two failures being the bcftools tests above.
+- **bash**, for the tests that run the generated `align.sh` / `merge.sh` /
+  `fastq.sh` and `scripts/validate_pipeline.sh`. Those tests write their own
+  stub `samtools` and stub aligner and put them on the script's PATH, so a
+  *real* `samtools`, aligner, `bgzip`, `tabix`, `delly` or `truvari` is **not**
+  needed — measured: with all of them off PATH the suite is `728 passed; 2
+  failed; 1 ignored`, the two failures being the bcftools tests above.
+  `fastq.sh` does need `gzip` (or `pigz`), `awk`, `mkfifo`, `realpath` and
+  `mktemp`.
 
 No reference FASTA, BAM or CRAM is needed for `cargo test`: the tests build
 the tiny inputs they need. The one `#[ignore]`d measurement
@@ -255,7 +257,7 @@ spike --bam sample.bam --reference GRCh38.fasta \
 
 **A site the sample already carries is refused.** spike edits one copy of the sample and keeps the other copy's reads as they were. If the sample already has another allele at the bases a small variant changes, those reads keep it, and the requested fraction cannot be reached. Asked for at 0.5, a site where the sample is hom-alt for the same change came out 25 ALT and 0 REF reads, while `truth.vcf` said 0.5 (review finding 3).
 
-So before any other work, spike counts the reads at each small variant's own bases. It uses the pileup's filter: primary, not duplicate, not QC-fail, MAPQ at least `--min-mapq`. A read that spans the site carries another allele when it has, inside the changed bases, a base other than the reference, a deletion, or an insertion at either edge.
+So before it extracts any reads, spike counts the reads at each small variant's own bases. It uses the pileup's filter: primary, not duplicate, not QC-fail, MAPQ at least `--min-mapq`. A read that spans the site carries another allele when it has, inside the changed bases, a base other than the reference, a deletion, or an insertion at either edge.
 - spike refuses the event when at least 10 reads span the site and at least a fifth of them carry another allele. These are the pileup's own floor and its het bound.
 - Every refused event is listed in one error, and nothing is written.
 - With fewer than 10 spanning reads, spike warns that it could not check, and goes on.
@@ -483,7 +485,7 @@ Under `--edit-model origin`, `replaced_reads.txt` also names every read `origin`
 
 The records kept because spike never extracted them (duplicates of the pairs it kept, non-proper pairs, low-MAPQ or orphaned-mate reads) are real original reads that now sit inside an event's footprint, so an event's residual depth/allele fraction in `merged.bam` is no longer exactly the simulated value. Measured on an HG002 chr20 run: `validate.rs` only skips secondary/supplementary/duplicate/QC-fail and low-MAPQ reads — it has no proper-pair or mate-unmapped filter — so of the 1,436 records recovered by this change, the 87 non-proper-pair and 39 orphaned-mate records (126 total, 1.2% of the 10,501 in-BED records) reached an AF or depth measurement in `spike validate`; a consumer that counts duplicates rather than skipping them could see the residual shift by up to the full recovered fraction (13.7%).
 
-`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the original BAM's first `@RG` line, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
+`align.sh` tags the simulated reads `@RG ID:sim SM:<sample>`, where `<sample>` is the `SM` of the first `@RG` line in the original BAM that has one, so `merged.bam` stays single-sample. If the original BAM's read groups carry different `SM` values it is already multi-sample; the first one still wins and spike logs a warning. A BAM with no `@RG SM` at all falls back to `SM:SIM`. The generated scripts quote the sample name, so one holding a space or an apostrophe (`SM:Patient 123`) reaches the aligner intact and keeps matching the original read groups; control characters and a backslash are replaced with `_`, because a tab ends the `SM` field and a newline ends the `@RG` line whatever the quoting, and bwa-mem2/minimap2 unescape `\t`/`\n` inside the `-R` string themselves -- a shell cannot quote against that.
 
 `merged.bam` is appropriate for end-to-end testing where the caller needs to see the full genome (e.g., tools that estimate background noise from off-target regions). `sim.bam` is sufficient for targeted callers or focused benchmarking.
 
@@ -580,9 +582,8 @@ spike validate --bam <BAM> --truth <VCF> --reference <FASTA> [OPTIONS]
   --help, -h       Show this help
 ```
 
-`spike validate --help` prints the same table of checks-by-event-type, with the
-real checks alone: the advisory rows below are described here and in the
-report itself, not in the usage text.
+`spike validate --help` prints the same table of checks-by-event-type, then
+lists the advisory rows, which are described below.
 
 The three `[global]` checks — `insert_size`, `dup_rate` and `mean_mapq` — are
 computed from one sample of the reads in the truth events' own windows (event
@@ -591,20 +592,25 @@ from the head of the file: the first 100k records of a whole-genome BAM are
 chr1's telomere, mean MAPQ 10.0, which fails a check the rest of the file
 passes. The sample is capped at 200,000 records and **every** event gets an
 equal share of that cap (200,000 / number of events, at least one record each),
-so no event is left out however many the truth VCF holds. `spike validate`
+so no event is left out unless the truth VCF holds more than 200,000. Past
+that, each event gets one record, the cap runs out before the last events, and
+spike warns how many went unsampled. `spike validate`
 therefore needs the BAM's `.bai` / the CRAM's `.crai`, which its per-event
 checks already required.
 
 Each region's contribution and the size of the whole sample are logged at
-`INFO` (`[global] sampled 117 records from chr20:37500081-37500320`,
-`[global] sample: 117 records over 1 of 1 event regions`): a check computed
-over 117 records prints exactly like one computed over 200,000, so read the log
+`INFO`. For one 10 kb DEL with `--flank 100`:
+`[global] sampled 1976 records from chr20:38899901-38910100` and
+`[global] sample: 1976 records over 1 of 1 event regions (up to 200000 each)`.
+A check computed over 1,976 records prints exactly like one computed over
+200,000, so read the log
 before trusting a global number from a narrow `--flank`. Within one window the
 sample is that window's first records in coordinate order, not a spread over
 it, so an event longer than its share covers (above roughly 1 Mb at 35x with
 one event) is represented by its start. A region that cannot be queried — a
 truth event on a contig the alignment file does not have — is logged as a `WARN`
-and skipped; the sample fails only if no region could be read at all.
+and skipped. `spike validate` stops with an error only when no record was
+sampled and at least one region could not be queried.
 
 A global check whose sample cannot answer it **fails** rather than passing on a
 default. `dup_rate` distinguishes three cases when no sampled record carries the
@@ -775,15 +781,18 @@ they were before either row existed -- an older spike's truth VCF is not a FAIL.
 The advisory rows that do not read the census still print beside them, so such a
 report does still carry an `Advisory:` line: measured on a one-DEL truth VCF with
 both census INFO fields and both census header lines stripped, the report prints
-`coverage_any_mapq` and `split_reads_each_end` and the line reads `Advisory: 2
-checks, 2 PASS, 0 FAIL`. In `--json` every check object carries `"advisory":
+`coverage_any_mapq`, `split_reads` and `split_reads_each_end` (a DEL's
+`split_reads` is advisory since RF14), and the line reads `Advisory: 3 checks,
+3 PASS, 0 FAIL`. In `--json` every check object carries `"advisory":
 true` or `"advisory": false` beside its `"pass"`, and the `summary` object
 carries `counted_total`, `counted_pass`, `counted_fail` and `strict` beside
 `total`, `pass` and `fail`: the three original keys are over every row printed,
 while the `counted_*` trio is over the rows the exit status is computed from --
 the non-advisory rows, or every row under `--strict` -- so a consumer can tell
-which rows that status counted. `scripts/validate_pipeline.sh` is such a
-consumer: its step-5 guard insists on at least one *non-advisory* check passing,
+which rows that status counted. `scripts/validate_pipeline.sh` does not read
+the trio: it counts the same rows itself, from each check's `"advisory"` flag
+(it never passes `--strict`), and its step-5 guard insists on at least one
+*non-advisory* check passing,
 because `resistant` and `depth_fold` are read back from the truth VCF and pass
 whatever the BAM holds.
 
@@ -1066,7 +1075,9 @@ the counting rule that fits its shape, and fails outright when none does:
 | `A` > `ACCGG` (a small insertion) | reads whose bases over the site are nearer the reference with the insertion made, against reads whose bases are nearer the reference | a fraction |
 | `AT` > `GC` (an MNV) | reads whose bases are the *whole* alt run, against reads whose bases are the whole ref run | a fraction |
 | `AC` > `GTT` (a complex allele) | nothing -- no single operation or allele run to count | `N/A (complex allele)` FAIL |
+| depth 0 | nothing | `no coverage` FAIL |
 | depth below 5 | nothing | `low depth (n)` FAIL |
+| a depth at which a correct spike-in would too often show no more alt reads than errors do (power below 0.99) | the fraction, not graded | `too shallow (f at n reads; needs …)` FAIL |
 | an allele that is not A/C/G/T | nothing | `unknown alt base` / `unknown allele base` FAIL |
 
 An indel is read from each read's own bases rather than the pileup, because
@@ -1144,8 +1155,9 @@ design it (chr17-chr19, 25,903 het indels, with GIAB's other records within
 
 SNVs fail at about 0.6-0.8% on the same BAM.
 
-The three rows that measure nothing still push a result row, so the event
-counts as covered, and the row says out loud that nothing was measured. Only a
+The last five rows of that table grade nothing, but each still pushes a result
+row, so the event counts as covered, and the row says out loud that nothing
+was graded. Only a
 **complex** allele -- one that changes length *and* rewrites the anchor base,
 such as `AC` > `GTT` or `A` > `CG` -- is left unmeasured.
 
@@ -1244,25 +1256,28 @@ and the new `validate` were run on the same merged BAMs, 178 saved runs:
   carries the deletion (RF12).
 
 Measured on a DEL+INS run on the HG002 chr20 slice, aligned with `align.sh`
-and merged with `merge.sh`: **14** reads carry the planted 300 bp insertion at
-chr20:39000000. Before this check existed, spike's own round trip could not
-succeed for insertions -- the same recipe scored `5/6 PASS` and exited **1** on
-the `event_checked` row -- and this run scores `13/13 PASS` and exits 0. The
-total rose because seven of those thirteen rows are the advisory rows the two
-events now carry beside their own checks: the same run prints `Advisory: 7
-checks, 7 PASS, 0 FAIL`. Its control is from an **earlier** run of the same
-recipe, which read **21** reads at chr20:39000000 against **0, 0, 0, 0 and 1**
-at five control positions in the same BAM where nothing was planted; the
-re-measured run above was not re-run against those five positions, so the 14 and
-the `13/13` are one run, and the 21 and those five controls are the other.
+and merged with `merge.sh` (`del:chr20:38900000-38910000` and
+`ins:chr20:39000000:300`, re-measured on `97aa3b4`): `ins_planted` finds **20**
+of spike's reads carrying the planted 300 bp insertion at chr20:39000000, and
+`ins_reads` counts **16**. Before `validate` had a real INS check (N8), spike's
+own round trip could not succeed for insertions -- the same recipe scored `5/6
+PASS` and exited **1** on the `event_checked` row -- and this run scores `15/15
+PASS` and exits 0. The total rose because nine of those fifteen rows are the
+advisory rows the two events now carry beside their own checks: the same run
+prints `Advisory: 9 checks, 9 PASS, 0 FAIL`. Its control is from an **earlier**
+run of the same recipe, which read **21** reads at chr20:39000000 against **0,
+0, 0, 0 and 1** at five control positions in the same BAM where nothing was
+planted; the re-measured run above was not re-run against those five positions,
+so the 20 and the `15/15` are one run, and the 21 and those five controls are
+the other.
 
 The same round trip works for small indels and MNVs. A run of
 `snp:chr20:39000000:TGG:T` (a 2 bp deletion), `snp:chr20:39100000:T:TCCGG` (a
 4 bp insertion) and `snp:chr20:39200000:AT:GC` (an MNV) on the same slice,
 aligned and merged the same way, scored **3/6 PASS and exited 1** with all
 three rows reading `N/A (indel or MNV)` -- a verdict reached before the BAM was
-opened -- and now scores **12/12 PASS, exit 0** at **0.50, 0.53 and 0.42**
-against a `SIM_VAF` of 0.50, the total again rising because six of the twelve
+opened -- and now scores **12/12 PASS, exit 0** at **0.49, 0.36 and 0.58**
+against a `SIM_VAF` of 0.50 (re-measured on `97aa3b4`), the total again rising because six of the twelve
 rows are advisory (`Advisory: 6 checks, 6 PASS, 0 FAIL`). Those three fractions
 and that total are one run, measured together. The controls beside them are from
 an **earlier** run of the same three records, which read 0.40, 0.41 and 0.46
@@ -1361,7 +1376,10 @@ The `clean` rows were measured again on 2026-10-04, after `clean` began reading 
 | `merge.sh` | Merges `sim.bam` into the original BAM → `merged.bam` (full genome) |
 | `README.md` | Run log: command, events table (a **Requested VAF** and a **Simulated VAF** column per event -- the same pair `truth.vcf` records as `SIM_REQ_VAF` and `SIM_VAF` -- then kept, chimeric and suppressed reads, pairs dropped for unusable quality, **Resistant reads** and **Depth fold**), the pairs dropped in total, read counts, next-step instructions |
 | `sim.bam` | Aligned BAM covering event regions (produced by `align.sh`) |
+| `sim.bam.bai` | Index of `sim.bam` (produced by `align.sh`) |
+| `align.log` | The aligner's log (produced by `align.sh`) |
 | `merged.bam` | Original BAM with spiked reads substituted (produced by `merge.sh`) |
+| `merged.bam.bai` | Index of `merged.bam` (produced by `merge.sh`) |
 | `fastq_removed_reads.txt` | The originals spike removed and does not write back, their duplicates among them: `replaced_reads.txt` minus the pairs in R1/R2. `fastq.sh` removes exactly these from the raw FASTQ |
 | `fastq.sh` | Builds the full spiked FASTQ pair from the sample's raw FASTQ pair (see [Full FASTQ](#full-fastq)) |
 | `NAME_R1.fastq.gz`, `NAME_R2.fastq.gz` | With `--into-fastq`: **the whole sample, spiked**, the pair for a pipeline that starts from FASTQ. `NAME` is `--fastq-prefix`, default `spiked` (see [Full FASTQ](#full-fastq)) |
@@ -1418,7 +1436,7 @@ The tile, x and y come from a hash of the read's name, not from the run's random
 
 ### Truth VCF
 
-The truth VCF contains one record per simulated event with:
+The truth VCF contains one record per simulated event, and two for a fusion (one per breakend, `sim_fus_N` and `sim_fus_N_mate`), with:
 - Standard VCF fields (CHROM, POS, REF, ALT)
 - `SVTYPE` and `END` / `SVLEN` for structural variants
 - A sequence-resolved `ALT` for an insertion (the anchor base at `POS` plus the inserted bases, not a symbolic `<INS>`), so the file grows by roughly one byte per inserted base
@@ -1429,7 +1447,9 @@ The truth VCF contains one record per simulated event with:
 - `SIM_DEPTH_FOLD` with the largest fold between the donor's depth in any ~1 kb bin the event's synthetic fragments are drawn from and the one depth they are all scaled by. Where the two differ, the event's depth there is off by about that fold. Under `--edit-model origin` both depths are origin depths. `spike validate` reports it as the advisory `depth_fold` row. See [One depth for the whole event](#one-depth-for-the-whole-event)
 - Under `--edit-model origin` only, a header line `##spike_edit_model=origin (experimental).` followed by a note that the `SIM_RESIST` and `SIM_DEPTH_FOLD` thresholds were set for `clean` and are not yet checked for `origin`
 - `SIM_GENE` with the associated gene name
-- BND records for fusions (with `]`/`[` notation reflecting orientation)
+- `SIM_EXONS` on a DEL record, with the exons it removes (`.` when it names none)
+- BND records for fusions (with `]`/`[` notation reflecting orientation), each naming the other in `MATEID`
+- FORMAT `GT`: `1/1` when the requested fraction (`SIM_REQ_VAF`) is 0.9 or more, `0/1` otherwise
 
 The run's own `README.md` prints the same two fractions per event, as the
 **Requested VAF** and **Simulated VAF** columns of its events table, so the two
@@ -1505,7 +1525,7 @@ Options:
           [default: 20]
 
       --aligner <ALIGNER>
-          Aligner for alignment script. Presets: "bwa-mem2" (default), "minimap2", "bowtie2", or a custom command that accepts <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout
+          Aligner for alignment script. Presets: "bwa-mem2" (default), "minimap2", "bowtie2", or a custom command that accepts <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout. The bwa-mem2 preset copies the alignment options (such as -M and -K) of the input BAM's bwa @PG line
           
           [default: bwa-mem2]
 
@@ -1576,11 +1596,11 @@ the message is the exact text spike prints, measured by running it.
 | `--region` with a 0 start (it is 1-based) | `region start must be >= 1 (1-based), got 0 in 'chr20:0-1000'` | `parse_region` |
 | `--region` with start after end | `region start > end (5000 > 1000) in 'chr20:5000-1000'; check your interval` | `parse_region` |
 | A long-read BAM (read length above spike's max fragment length) | `input BAM's read length (1501bp, its most common) exceeds spike's max supported fragment length (1500bp); spike simulates short paired-end reads and does not support long-read (PacBio/ONT) libraries` | `validate_read_length` |
-| An event beyond the end of its chromosome | `DEL event start on chr20 is at or beyond chromosome length (99000000 >= 64444167)` | `validate_interval` / `validate_point` |
-| An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `main.rs` |
+| An event beyond the end of its chromosome | `DEL event start on chr20 is at or beyond chromosome length (99000000 >= 64444167)` | `validate_range` / `validate_point` |
+| An `--event` spec whose start is past its end | `del coordinate-based spec has start > end (38422500 > 38412500); check your interval` | `parse_region_spec` (`exon.rs`) |
 | A `snp:` REF that is not what the reference has there | `REF allele mismatch at chr20:38412500-38412500: specified 'A' but reference has 'G'. Check that the position is correct (1-based in event spec) and matches the reference genome.` | `validate_ref_allele` |
 | Two events whose replacement footprints (span ± 3500 bp) intersect, without `--allow-overlap` | `overlapping events detected (default is to reject overlaps).`<br>`Each event replaces reads across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment), and two such replacement footprints may not intersect: two spans on one chromosome must be at least 7000bp apart.`<br>`Use --allow-overlap to override.`<br>`  - events 1 and 2 have intersecting replacement footprints on chrT: spans 10000-11000 and 12000-13000 (footprints 6500-14500 and 8500-16500)` | `main.rs` |
-| A small variant at a site the sample already carries another allele at: at least 10 reads span it, and at least a fifth of them carry another allele there ([SNPs and small indels](#snps-and-small-indels)). Every such event is listed at once. | `the sample already carries another allele at 1 small variant(s): SNV  chr1:5001 T>A (38 of 38 reads). spike edits one copy and keeps the other copy's reads, so those reads keep that allele and the requested fraction cannot be reached (a hom-alt site asked for at 0.5 comes out all ALT). Remove these events from the input` | `carried.rs` |
+| A small variant at a site the sample already carries another allele at: at least 10 reads span it, and at least a fifth of them carry another allele there ([SNPs and small indels](#snps-and-small-indels)). Every such event is listed at once. | `the sample already carries another allele at 1 small variant(s): SNV  chr1:5001 T>A (38 of 38 reads). spike edits one copy and keeps the other copy's reads, so those reads keep that allele and the requested fraction cannot be reached (a hom-alt site asked for at 0.5 comes out all ALT). Remove these events from the input` | `refuse_carried_alleles` (`main.rs`); the rule is in `carried.rs` |
 | An event where more than half the reads over it are ones spike cannot edit (`SIM_RESIST` above 0.5), without `--allow-resistant` ([Reads spike cannot edit](#reads-spike-cannot-edit)). Every such event is listed at once. | `The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):`<br>`  DEL  chr20:27100001-27110000 (10000bp): 5731 of 5749 reads over it (99.7%) are ones spike cannot edit`<br>`Those reads are below --min-mapq, not a proper pair, or have a mate that fails a filter, and they stay in the merged BAM as they are. If most of them are below --min-mapq, lowering it lets spike edit them. Otherwise remove the events from the input, or pass --allow-resistant to simulate them anyway; truth.vcf then records the share as SIM_RESIST.` | `census.rs` |
 | A donor pool under 30 read pairs ([Too few donor reads](#too-few-donor-reads)) | `event DEL  chr20:38412501-38422500 (10000bp) has too few usable donor reads: 0 read pair(s) extracted from chr20:38410500-38424500, fewer than the 30 spike needs (2097 read pair(s) in those windows were dropped for unusable base qualities and are not in that count). ...` | `finish_donor_pool` |
 | No donor coverage at the event's breakpoints ([No donor coverage at the breakpoint](#no-donor-coverage-at-the-breakpoint)) | `event chr20:30000000-30010000 has no donor coverage at any of its breakpoints (chr20:29999999, chr20:30010000): the pool holds 6117 read pair(s) but none of them cover that. ...` | `simulate.rs` |
@@ -1631,7 +1651,8 @@ vcf_input.rs     VCF input parser (DEL/INS/DUP/INV/BND/SNP/indel)
 truth.rs         Truth VCF output
 fastq.rs         Gzipped paired FASTQ writer
 reference.rs     Indexed FASTA reading + in-memory sequence store
-bam_stats.rs     BAM/CRAM read length, adapter trimming, read-name shape and single-end check
+bam_stats.rs     BAM/CRAM read length, adapter trimming, read-name shape, single-end check,
+                 the @RG sample name and the input's bwa @PG options
 read_name.rs     spike's read names: SPIKE_ in the shape of the input's names
 validate.rs      `spike validate` subcommand: automated spike-in quality checks
 ```
@@ -1660,7 +1681,7 @@ ref[start-F .. start]   ref[end .. end+F]
 ```
 where `F` = the haplotype flank (`HAP_FLANK` in `src/main.rs`, 2000bp) — a fixed internal constant, not the user-configurable `--flank` option (which controls how wide a window of *original* reads is extracted around the event, and defaults to 10kb). The deleted region `[start, end)` is absent from the haplotype; the left and right flanking segments are placed adjacent.
 
-**Simulation**: Original read pairs lying entirely within the haplotype footprint `[start-F, end+F)` are suppressed at rate `P = VAF`; pairs that stick out of it are kept. Synthetic reads are tiled uniformly across the two-segment haplotype. Reads that span the junction between left_flank and right_flank are chimeric — when re-aligned to the reference, they produce split reads and discordant pairs that span the deletion breakpoint.
+**Simulation**: Original read pairs lying entirely within the haplotype footprint `[start-F, end+F)` are suppressed by the copy they come from, at a rate that averages `VAF` over the two copies (see [Read suppression details](#read-suppression-details)); pairs that stick out of it are kept. Synthetic reads are tiled uniformly across the two-segment haplotype. Reads that span the junction between left_flank and right_flank are chimeric — when re-aligned to the reference, they produce split reads and discordant pairs that span the deletion breakpoint.
 
 **Observable signals in the output BAM**:
 - Reduced depth in `[start, end)` proportional to VAF (e.g., ~0.5x for het)
@@ -1683,7 +1704,7 @@ ref[S-F .. S]  ref[S .. E]        ref[S .. E]        ref[E .. E+F]
 ```
 where `S` = dup_start, `E` = dup_end, `F` = flank size. The duplicated region appears twice in tandem.
 
-**Simulation**: This model uses the same suppress-and-replace approach as deletions. Original reads within `[S-F, E+F)` are suppressed at the VAF rate, and synthetic reads are tiled *uniformly* across the full 4-segment haplotype. Because the haplotype contains two copies of the duplicated region, tiling naturally produces:
+**Simulation**: This model uses the same suppress-and-replace approach as deletions. Original reads within `[S-F, E+F)` are suppressed by copy, as for deletions, and synthetic reads are tiled *uniformly* across the full 4-segment haplotype. Because the haplotype contains two copies of the duplicated region, tiling naturally produces:
 - ~2x as many reads mapping to `[S, E)` per unit length compared to the flanks
 - Chimeric reads at the copy1-to-copy2 junction (the internal breakpoint at position E in haplotype space, which maps to the E→S join)
 
@@ -1831,7 +1852,7 @@ The number of synthetic reads to tile is:
 - **Non-additive events**: `n = round(coverage * VAF * starts / mean_fragment_length)`, where `starts` is the number of fragment start positions tiling can use: `haplotype_length - mean_fragment_length`, minus starts that would lie wholly inside inserted sequence. Starts are uniform over exactly that set, so the flanks get `VAF * coverage` synthetic depth, replacing what was suppressed.
 - **Additive events** (breakpoint-only tiling): every original read is kept, so `n = round(coverage * VAF / (1 - VAF))` per breakpoint makes junction fragments a `VAF` fraction of the depth there (VAF capped at 0.95 -- a request above it is simulated at 0.95, and the truth VCF records `SIM_VAF=0.950` with the request in `SIM_REQ_VAF`).
 
-`mean_fragment_length` is the library's own mean, taken over the same range the generator samples in -- `[read_length, 1500]` -- so the count is normalised by the distribution that is actually emitted. An observed insert size outside that range can never be generated, so it is left out of the model: on HG002 chr20 that is 38 of 4,595 donor pairs (all of them shorter than one 151 bp read), and it moves the mean from 418.6 to 421.0 and the count planted for `del:chr20:38412500-38422500` from 291 to 289. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth. Under `--edit-model origin` it is the origin depth in the same window instead (see [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental)), because inside a perfect twin the pool holds no read.
+`mean_fragment_length` is the library's own mean, taken over the same range the generator samples in -- `[read_length, 1500]`, or `[1, 1500]` for an adapter-trimmed library -- so the count is normalised by the distribution that is actually emitted. An observed insert size outside that range can never be generated, so it is left out of the model: on HG002 chr20 that is 38 of 4,595 donor pairs (all of them shorter than one 151 bp read), and it moves the mean from 418.6 to 421.0 and the count planted for `del:chr20:38412500-38422500` from 291 to 289. `coverage` is the donor pool's mean fragment depth in a 2 kb window around the first breakpoint, counted only on that breakpoint's own chromosome: a fusion's pool holds both partners, and reads from the far side would otherwise be added to the near side's depth. Under `--edit-model origin` it is the origin depth in the same window instead (see [Editing hard spots](#editing-hard-spots---edit-model-origin-experimental)), because inside a perfect twin the pool holds no read.
 
 ### One depth for the whole event
 
@@ -1843,7 +1864,7 @@ DUP  chrT:10001-28000 (18000bp): the donor's depth over chrT:17000-18000 is 25.0
 
 (The depths are fragment depths, which is why the review's 75x read depth shows as 100x.) On ordinary loci the fold is not 1: measured on 40 seeded 10 kb DUPs inside the HG002 SV benchmark on chr20 (35x), it ran from **1.11** to **2.46**, median **1.27**, and **6 of the 40** warned. `D` comes from the donor pool, which holds only reads at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is; the fold counts it anyway, and some of those six may be that. Under `--edit-model origin`, `D` and `C` are both origin depths, which count low-MAPQ reads by their chance. The 1.5 threshold was set for the pool's fold and is not yet checked for origin's.
 
-Fragment lengths are sampled from the empirical distribution of the donor reads, which holds the observed insert sizes in `[read_length, 1500]` and nothing else: generation draws from exactly that range, so the model and the generator describe one distribution rather than two. If no donor insert size falls in it, spike warns and falls back to a 400 +/- 80 default clamped into the same range (never a distribution it cannot draw from). Each fragment is placed at a random position on the haplotype and a read pair is synthesized with quality scores from the learned Markov model. The fragment's left end is always read forward and its right end reverse (FR), and a coin flip out of the same seeded stream decides which of the two is R1: about half the pairs come out F1R2 and half F2R1, as in a real library, so read-orientation filters (Mutect2's, for one) see a balanced strand mix. Whichever mate is R1 is sampled from the R1 quality model.
+Fragment lengths are sampled from the empirical distribution of the donor reads, which holds the observed insert sizes in `[read_length, 1500]` (`[1, 1500]` for an adapter-trimmed library) and nothing else: generation draws from exactly that range, so the model and the generator describe one distribution rather than two. If no donor insert size falls in it, spike warns and falls back to a 400 +/- 80 default clamped into the same range (never a distribution it cannot draw from). Each fragment is placed at a random position on the haplotype and a read pair is synthesized with quality scores from the learned Markov model. The fragment's left end is always read forward and its right end reverse (FR), and a coin flip out of the same seeded stream decides which of the two is R1: about half the pairs come out F1R2 and half F2R1, as in a real library, so read-orientation filters (Mutect2's, for one) see a balanced strand mix. Whichever mate is R1 is sampled from the R1 quality model.
 
 Each fragment comes from one of the sample's copies and carries its alleles. Up to VAF 0.5 all fragments come from the event copy. Above 0.5 the other copy gives `max(0, 2*VAF - 1) / (2*VAF)` of them, matching what was suppressed from it.
 
@@ -1891,7 +1912,7 @@ Quality scores are sampled using a 4-level fallback hierarchy, from most specifi
 3. **Base-only**: `P(Q_i | cycle, base)` — no Markov (used at cycle 0, or when Markov bins have too few observations)
 4. **Cycle-only**: `P(Q_i | cycle)` — final fallback
 
-The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Each level requires at least 30 observations before it is used; otherwise sampling falls through to the next level.
+The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Levels 1-3 each require at least 30 observations in a bin (`MIN_MARKOV_OBS`, `MIN_BASE_OBS`) before it is used; otherwise sampling falls through to the next level. Level 4 uses any cycle with at least one observation.
 
 Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its Markov chain runs with the cycle counter like the forward mate's instead of against it.
 
@@ -1943,7 +1964,7 @@ causes the message lists are the ones to look at.
 
 Without that check a starved window is silent. spike logs `Built read pool: 0 pairs`, then falls through to every substitute in turn -- the constant Q20 last resort above for every base, the default 400 +/- 80 fragment distribution (clamped into the sampled range) -- and exits **0** with a truth VCF and no reads behind it. (The 2-read tiling floor is no longer part of that fall-through: `compute_tiling_count` returns 0 outright at zero coverage rather than floored to 2, so nothing is invented -- but a truth record with nothing behind it is the same wrong answer, quieter.) An event in a zero-coverage region, an off-target panel BAM and a mistyped `--region` all reach it.
 
-30 is the observation count the quality model itself requires before it will sample from a bin, and a pool of *n* pairs puts *n* observations in each cycle-only bin (level 4 above), so it is the smallest pool at which any level of the model is trained to its own threshold. It is a floor on "measured from this library at all", not a coverage requirement: the 30 kb window of `del:chr20:38412500-38422500` yields 4,595 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
+30 is the observation count levels 1-3 of the quality model require of a bin before they sample from it. It does not make any bin reach that count: a pool of *n* pairs puts at most *n* observations in a cycle-only bin (level 4 above), which has no minimum of its own, and fewer in a bin that is also split by base or by the previous quality. It is a floor on "measured from this library at all", not a coverage requirement: the 30 kb window of `del:chr20:38412500-38422500` yields 4,595 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
 
 ### No donor coverage at the breakpoint
 
@@ -2184,8 +2205,10 @@ the current directory. The script refuses to run when it names a directory
 whose contents git tracks, so it cannot overwrite committed fixtures.
 
 Requires `samtools`, `bwa-mem2`, `bcftools`, `bgzip`, `tabix`, `delly`,
-`truvari` and `python3`. Each is taken from `PATH` and can be overridden with an
-environment variable of the same name (`SAMTOOLS=...`, `DELLY=...`, ...); the
+`truvari` and `python3`. Each tool but `python3` is taken from its environment
+variable if set (`SAMTOOLS`, `BWAMEM2`, `BCFTOOLS`, `BGZIP`, `TABIX`, `DELLY`,
+`TRUVARI`), else from `PATH`, else from the pixi directories the script lists
+in `EXTRA_TOOL_DIRS`; `python3` always comes from `PATH`. The
 GIAB paths default to `<repo>/data/giab_hg38` and can be moved with
 `--giab-dir` or with `GIAB_DIR` / `REFERENCE` / `TRUTH_VCF` / `BENCH_BED`
 (inside a git worktree `data/giab_hg38` is a dangling symlink, so pass
@@ -2201,7 +2224,7 @@ truth events the highest VAF must recover *beyond the background control*
 (default 1). `--min-gain 0` is the weakest setting, not an off switch: the
 highest VAF must still at least match the control, and a run with no control to
 compare against still fails. `--skip-to N` resumes an existing `--outdir` at
-step N (1-8); a value outside that range is refused rather than silently
+step N (1-8; 0, the default, runs every step); any other value is refused rather than silently
 skipping the whole pipeline.
 
 The background BAM must be aligned to the same reference: Delly refuses a BAM
@@ -2246,7 +2269,7 @@ one truth DEL the background does *not* carry, which is the right answer; at
 to TP. Separating those needs replicates or a VAF titration, not a single run.
 
 Note that `spike validate`'s per-event checks are *not* part of the verdict
-beyond "the report parsed and at least one check passed". On a cross-sample
+beyond "the report parsed and at least one non-advisory check passed". On a cross-sample
 spike-in most of them compare against a background that already carries the
 event, so they fail for reasons that have nothing to do with the injection —
 see `N1` in `docs/review/REVIEW.md`.

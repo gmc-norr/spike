@@ -145,7 +145,9 @@ struct Args {
 
     /// Aligner for alignment script. Presets: "bwa-mem2" (default),
     /// "minimap2", "bowtie2", or a custom command that accepts
-    /// <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout.
+    /// <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout. The bwa-mem2
+    /// preset copies the alignment options (such as -M and -K)
+    /// of the input BAM's bwa @PG line.
     #[arg(long, default_value = "bwa-mem2")]
     aligner: String,
 
@@ -1847,16 +1849,15 @@ struct EventStat {
 /// fragment lengths, the coverage the tiling count is scaled by -- and each
 /// of those silently substitutes a constant when the pool runs out.
 ///
-/// 30 is `synth.rs`'s own `MIN_BASE_OBS`, the observation count it requires
-/// before it will sample from a quality bin, and a pool of *n* pairs puts
-/// exactly *n* observations in each cycle-only bin -- the profile's final
-/// fallback, and the only level an ordinary pool always reaches. So 30 pairs
-/// is the smallest pool at which any bin of the profile can meet the
-/// threshold the profile itself sets; below it every bin is unusable by that
-/// rule and, at zero pairs, sampling returns `synth.rs`'s last-resort
-/// constant Q20 byte for every base. This is a floor on "measured from this
-/// library at all", not a claim that 30 pairs is enough coverage for a good
-/// simulation.
+/// 30 is `synth.rs`'s `MIN_BASE_OBS` and `MIN_MARKOV_OBS`, the observation
+/// count levels 1-3 of the quality profile require of a bin before they
+/// sample from it. It does not make any bin reach that count: a pool of *n*
+/// pairs puts at most *n* observations in a cycle-only bin -- the profile's
+/// final fallback, which samples any bin with one observation -- and fewer in
+/// a bin also split by base or by the previous quality. At zero pairs,
+/// sampling returns `synth.rs`'s last-resort constant Q20 byte for every
+/// base. This is a floor on "measured from this library at all", not a claim
+/// that 30 pairs is enough coverage for a good simulation.
 const MIN_DONOR_PAIRS: usize = 30;
 
 /// The event's read generator: its quality profile learned from the donor

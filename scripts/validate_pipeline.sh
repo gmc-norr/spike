@@ -181,7 +181,7 @@ BENCH_BED="${BENCH_BED:-${GIAB_DIR}/HG002/GRCh38_HG2-T2TQ100-V1.1_stvar.benchmar
 # An out-of-range --skip-to skipped every step and still reached the verdict,
 # which then had nothing to judge. 0 is the default (run everything).
 { [[ "$SKIP_TO" =~ ^[0-9]+$ ]] && (( SKIP_TO <= 8 )); } \
-    || { echo "ERROR: --skip-to must be a step number from 1 to 8 (got '$SKIP_TO')" >&2; exit 1; }
+    || { echo "ERROR: --skip-to must be a step number from 0 to 8 (got '$SKIP_TO')" >&2; exit 1; }
 
 # Resolve --outdir once, here, against $PWD like every other path on the
 # command line. check_outdir_not_tracked used to resolve a relative --outdir

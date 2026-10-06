@@ -3723,9 +3723,10 @@ fn print_results_json(
     // rows, or every row under `--strict`, which `strict` names. They come from
     // `counted_rows`, the same filter `failure_message` exits on, so a consumer
     // reading `counted_pass == 0` is reading the number the exit status agrees
-    // with. `scripts/validate_pipeline.sh`'s step-5 guard is that consumer: an
-    // advisory row is read back from the truth VCF and passes whatever the BAM
-    // holds, so `pass` alone cannot tell a working run from a header-only BAM.
+    // with. `scripts/validate_pipeline.sh`'s step-5 guard counts the same rows
+    // itself, from each check's `advisory` flag: an advisory row is read back
+    // from the truth VCF and passes whatever the BAM holds, so `pass` alone
+    // cannot tell a working run from a header-only BAM.
     let n_counted_total = counted_rows(results, strict).count();
     let n_counted_pass = counted_rows(results, strict).filter(|r| r.pass).count();
 
