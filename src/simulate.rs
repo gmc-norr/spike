@@ -1255,6 +1255,7 @@ mod tests {
             ref_end: end,
             insert_size: (end - start) as i64,
             chrom: "chr1".to_string(),
+            align: None,
         }
     }
 
@@ -1781,6 +1782,7 @@ mod tests {
                 ref_end: i as u64 * 500 + 500,
                 insert_size: 500,
                 chrom: "chr1".to_string(),
+                align: None,
             })
             .collect();
         let profile = QualityProfile::from_read_pairs(&pairs, read_length);

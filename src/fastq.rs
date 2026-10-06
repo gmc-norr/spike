@@ -184,6 +184,7 @@ mod tests {
             ref_end: 100,
             insert_size: 100,
             chrom: "chr1".to_string(),
+            align: None,
         }
     }
 

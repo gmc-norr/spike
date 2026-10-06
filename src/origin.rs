@@ -1375,6 +1375,7 @@ mod tests {
             ref_end: start + span,
             insert_size: span as i64,
             chrom: "chr1".to_string(),
+            align: None,
         }
     }
 

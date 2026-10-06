@@ -14,7 +14,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
                   v
     +-----------------------------+
     |  1. Extract read pairs      |  Real reads from the event region
-    |  2. Learn quality           |  Markov chain Q score model from real data
+    |  2. Learn quality           |  Quality and error model from real data
     |  3. Build haplotype         |  Linear variant sequence from ordered segments
     |  4. Read sample's SNPs      |  Het + hom-alt SNPs, phased; pick the event copy
     |  5. Suppress reads          |  Remove reads by copy within the haplotype footprint
@@ -31,7 +31,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top. By default a non-additive event removes reads from its donor pool, and the duplicates of the pairs it removes; the experimental `--edit-model origin` removes reads by their chance of having come from the event, at the event and at its look-alikes elsewhere in the genome.
 
-**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns a first-order Markov chain quality model from the donor reads — capturing both per-cycle quality degradation and the inter-position correlation of quality scores — and generates independent synthetic reads with realistic quality profiles and correlated sequencing errors.
+**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns from the donor reads how they are read: each base's quality given the read's recent qualities, its distance to the 3' end and the kind of read it is (good or poor overall, drawn for both mates of a pair together), and how often a base of that quality in that kind of read is wrong, counted against the reference. It then generates independent synthetic reads with the sample's qualities and errors. See [Quality profile](#quality-profile).
 
 **The sample's two copies**: The event goes on one of the sample's two copies of the region. spike reads the sample's own SNPs around every event (het and hom-alt, via pileup or a pre-called gVCF), phases the het SNPs, and picks the event copy's haplotype. Original reads are removed by copy, and synthetic reads carry the alleles of the copy they come from. So SNPs in the flanks keep their allele balance and hom-alt SNPs stay hom-alt; a het deletion turns het SNPs inside it homozygous (LOH), and a het duplication shifts them to ~33/67. See [The sample's SNPs](#the-samples-snps).
 
@@ -1864,7 +1864,7 @@ DUP  chrT:10001-28000 (18000bp): the donor's depth over chrT:17000-18000 is 25.0
 
 (The depths are fragment depths, which is why the review's 75x read depth shows as 100x.) On ordinary loci the fold is not 1: measured on 40 seeded 10 kb DUPs inside the HG002 SV benchmark on chr20 (35x), it ran from **1.11** to **2.46**, median **1.27**, and **6 of the 40** warned. `D` comes from the donor pool, which holds only reads at `--min-mapq` or above, so a bin of low mappability reads thin whether or not the library is; the fold counts it anyway, and some of those six may be that. Under `--edit-model origin`, `D` and `C` are both origin depths, which count low-MAPQ reads by their chance. The 1.5 threshold was set for the pool's fold and is not yet checked for origin's.
 
-Fragment lengths are sampled from the empirical distribution of the donor reads, which holds the observed insert sizes in `[read_length, 1500]` (`[1, 1500]` for an adapter-trimmed library) and nothing else: generation draws from exactly that range, so the model and the generator describe one distribution rather than two. If no donor insert size falls in it, spike warns and falls back to a 400 +/- 80 default clamped into the same range (never a distribution it cannot draw from). Each fragment is placed at a random position on the haplotype and a read pair is synthesized with quality scores from the learned Markov model. The fragment's left end is always read forward and its right end reverse (FR), and a coin flip out of the same seeded stream decides which of the two is R1: about half the pairs come out F1R2 and half F2R1, as in a real library, so read-orientation filters (Mutect2's, for one) see a balanced strand mix. Whichever mate is R1 is sampled from the R1 quality model.
+Fragment lengths are sampled from the empirical distribution of the donor reads, which holds the observed insert sizes in `[read_length, 1500]` (`[1, 1500]` for an adapter-trimmed library) and nothing else: generation draws from exactly that range, so the model and the generator describe one distribution rather than two. If no donor insert size falls in it, spike warns and falls back to a 400 +/- 80 default clamped into the same range (never a distribution it cannot draw from). Each fragment is placed at a random position on the haplotype and a read pair is synthesized with qualities and errors from the learned quality profile. The fragment's left end is always read forward and its right end reverse (FR), and a coin flip out of the same seeded stream decides which of the two is R1: about half the pairs come out F1R2 and half F2R1, as in a real library, so read-orientation filters (Mutect2's, for one) see a balanced strand mix. Whichever mate is R1 is sampled from the R1 quality model.
 
 Each fragment comes from one of the sample's copies and carries its alleles. Up to VAF 0.5 all fragments come from the event copy. Above 0.5 the other copy gives `max(0, 2*VAF - 1) / (2*VAF)` of them, matching what was suppressed from it.
 
@@ -1903,45 +1903,54 @@ Each fragment is scored by how many het SNPs show the event copy's vs. the other
 
 ## Quality profile
 
-The quality model uses a first-order Markov chain learned from the donor reads: each position's quality score depends on the previous position's quality, capturing the autocorrelation seen in real Illumina data (runs of low quality tend to cluster together).
+The quality model is fqzcomp's quality context (htscodecs `fqzcomp_qual`, the one CRAM uses) used as a generator, plus an error table. Both are learned from the event's donor reads (`src/quality.rs`).
 
-Quality scores are sampled using a 4-level fallback hierarchy, from most specific to least:
+**Qualities.** Each base's quality is drawn from the donor reads' qualities in the same context:
 
-1. **Markov + base**: `P(Q_i | cycle, base, prev_q_bin)` — full model with base-specific effects (e.g., Illumina GG quality dip) and inter-position correlation
-2. **Markov + cycle**: `P(Q_i | cycle, prev_q_bin)` — drops base conditioning when base-specific bins are sparse
-3. **Base-only**: `P(Q_i | cycle, base)` — no Markov (used at cycle 0, or when Markov bins have too few observations)
-4. **Cycle-only**: `P(Q_i | cycle)` — final fallback
+- **History.** The read's last 5 qualities. For a library with more than 4 quality values, the last quality exactly and the two before it in four bins: Q0-9, Q10-19, Q20-29 and Q30+.
+- **Position.** The cycles left to the read's 3' end, in 8 bins.
+- **Changes.** Whether the quality has already changed bin twice in this read.
+- **Read class.** Where the read's mean quality falls among the donor reads', in 8 classes cut at the 1, 3, 8, 20, 40, 60 and 80% quantiles. A pair draws its two classes together from the donor pairs' joint table, so a poor pair is poor in both mates.
 
-The previous quality is quantized into 4 bins (Q0-9, Q10-19, Q20-29, Q30+) to keep transition tables tractable. Levels 1-3 each require at least 30 observations in a bin (`MIN_MARKOV_OBS`, `MIN_BASE_OBS`) before it is used; otherwise sampling falls through to the next level. Level 4 uses any cycle with at least one observation.
+A context is used once it holds 20 observations. Otherwise the draw backs off, in order, to:
+1. the last two qualities with position and class;
+2. the last quality with position and class;
+3. the last quality with position;
+4. position alone;
+5. the whole mate.
 
-Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its Markov chain runs with the cycle counter like the forward mate's instead of against it.
+R1 and R2 have their own tables.
 
-Error rates are derived from the sampled quality scores: `P(error) = 10^(-Q/10)`. When an error occurs, a random incorrect base is substituted.
+**Why not a chain.** The first-order Markov chain this replaced forgot a read's state within a few bases, so its reads were all average. On HG002 35x, the SD of a read's mean quality was 0.52 against the sample's 2.08. It made almost no perfect reads (0.02% against 5.5%) and no poor ones (mean below Q33: 0% against 8.4%).
 
-Every `N` a synthetic read emits is reported at **Q2**, whatever put it there — an `N` in the reference, padding for the part of a read that runs past a contig end, or padding after a deletion sequencing error exhausted the template. An `N` is a no-call, and a real Illumina no-call is always Q2 (all 682 `N` bases in 173,338 HG002 NovaSeq reads on chr20 are Q2); the learned profile knows nothing about `N` and would otherwise hand one an ordinary score, usually Q37. The Q2 is what the Markov chain carries forward, so the base after an `N` is sampled from the after-a-Q2 transition bin.
+**Errors.** A base is wrong at the rate the donor reads show for:
+- its quality;
+- the read's class;
+- the run of qualities below Q15 ending at it (0, 1, 2-3, 4-7, 8+);
+- its distance from the 3' end (1-10, 11-30, 31-60, 61+ cycles).
 
-The profile is still sampled for an `N` and the result discarded, so the *quality* draw stays one per template base — but an `N` skips the `P(error)` draw a called base makes, so it consumes strictly fewer random numbers than a called base. The stream is not unchanged: two runs that differ only in whether one template base is `N` diverge from that base onwards. (Level 4 above has one further last resort, a fixed Q20 for a cycle past the end of the profile, which makes no draw at all.)
+The rate backs off to (quality, class), then to the quality alone, when a cell has fewer than 200 counted bases, and to `10^(-Q/10)` when nothing was counted. A binned quality understates how often a poor read errs: aligned HG002 bases at Q25 err 0.07% in good reads and 0.95% in poor ones. A wrong base becomes one of the other three, or an indel at `--indel-error-rate`.
 
-**A pool under 1,000 read pairs gets a warning** (the run still goes on). The
-Markov levels need 30 observations *after a low-quality base* at each cycle,
-and a small pool rarely has that many. Sampling then falls back to the levels
-with no memory of the previous quality, so low-quality bases come out
-scattered instead of in runs. On HG002 35x this was measured against held-out
-reads from the same window, with a tolerance set by how much real reads from
-ten other chr20 windows differ from them. Pools of 30-500 pairs missed
-low-quality persistence by 0.15 against a tolerance of 0.10; at 1,000 pairs
-it was 0.04. Per-cycle mean quality and the share of bases under Q20 were
-already within tolerance from 60 pairs. The warning names the pool size and
-the bin census, for example:
+**What counts as a donor error.** Each donor mate's bases are compared with the reference where they aligned:
+- **Aligned bases** count.
+- **Inserted bases and `N`s** do not.
+- **A soft-clipped end** is placed where it would have aligned and counts only if it is 1-4 bases, or matches the reference at at least half its bases: a read gone bad, not adapter, chimeric or foreign sequence.
+- **The sample's own variants:** a position where at least 5 donor reads have an aligned base and at least 10% of them differ is not counted.
 
-```
-WARN spike::synth] Quality profile learned from 625 donor pairs; below 1000 its low-quality runs come out shorter than the sample's (measured on HG002 35x). Base-conditioned bins: 1208/1208 usable. Markov bins: base 1200/4832, cycle 445/1208 usable. Widen --flank or --region for a larger pool.
-```
+Of real soft clips on HG002 chr20, 45% are such bad ends; the rest are adapter read-through, the sample's own variants, chimeric fragments and sequence not in the reference, which spike does not reproduce (docs/analysis/soft-clips). The run log gives the counted bases and why the rest were left out.
 
-That is `snp:chr20:38600002:G:A --flank 2000` on the HG002 35x BAM; the
-default 10 kb flank gives 3,032 pairs and no warning.
+Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its history runs with the cycle counter like the forward mate's instead of against it.
 
-Carrying Q2 forward costs the bases *after* an `N` nothing in practice. Measured over 40 seeds at a 1 bp reference gap on chr2 (an `N`-containing read there is 98.3% real sequence), the non-`N` bases of `N`-containing reads average **Q35.621** when the chain carries Q2 and **Q35.615** when it does not — a difference of +0.006 Q against a 0.022 standard error. The reason is that real Illumina Q2 is rare enough (6 of 389,429 donor bases in that window) that the after-Q2 transition bin never reaches the 30-observation threshold, so sampling falls straight through to the non-Markov levels.
+Every `N` a synthetic read emits is reported at **Q2**, whatever put it there:
+- an `N` in the reference;
+- padding for the part of a read that runs past a contig end;
+- padding after a deletion sequencing error exhausted the template.
+
+An `N` is a no-call, and a real Illumina no-call is always Q2: all 682 `N` bases in 173,338 HG002 NovaSeq reads on chr20 are Q2. The learned profile knows nothing about `N` and would otherwise hand one an ordinary score, usually Q37.
+
+The Q2 enters the read's history, and the base after an `N` is drawn in that context. The profile is still drawn for an `N` and the result discarded, so the *quality* draw stays one per template base. But an `N` skips the error draw a called base makes, so two runs that differ only in whether one template base is `N` diverge from that base onwards.
+
+**A pool under 1,000 read pairs gets a warning** (the run still goes on): below that, reads come out more alike than the sample's. The threshold is K4 of `docs/superpowers/plans/2026-10-07-quality-model.md`. The warning names the pool size and how many full contexts reached 20 observations.
 
 ### Too few donor reads
 
@@ -1964,7 +1973,7 @@ causes the message lists are the ones to look at.
 
 Without that check a starved window is silent. spike logs `Built read pool: 0 pairs`, then falls through to every substitute in turn -- the constant Q20 last resort above for every base, the default 400 +/- 80 fragment distribution (clamped into the sampled range) -- and exits **0** with a truth VCF and no reads behind it. (The 2-read tiling floor is no longer part of that fall-through: `compute_tiling_count` returns 0 outright at zero coverage rather than floored to 2, so nothing is invented -- but a truth record with nothing behind it is the same wrong answer, quieter.) An event in a zero-coverage region, an off-target panel BAM and a mistyped `--region` all reach it.
 
-30 is the observation count levels 1-3 of the quality model require of a bin before they sample from it. It does not make any bin reach that count: a pool of *n* pairs puts at most *n* observations in a cycle-only bin (level 4 above), which has no minimum of its own, and fewer in a bin that is also split by base or by the previous quality. It is a floor on "measured from this library at all", not a coverage requirement: the 30 kb window of `del:chr20:38412500-38422500` yields 4,595 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
+30 is a floor on "measured from this library at all", not a coverage requirement. The quality model draws from a context once it holds 20 observations and backs off below that, down to the whole mate, and the error table backs off to `10^(-Q/10)` below 200 counted bases, so a small pool still simulates, from coarser contexts: the 30 kb window of `del:chr20:38412500-38422500` yields 4,595 pairs on the 35x HG002 BAM, so it would have to fall to roughly 0.2x before 30 pairs bound. If a real event does sit in a region that thin, widen `--flank` or `--region`, lower `--min-mapq`, or use a BAM that covers it.
 
 ### No donor coverage at the breakpoint
 

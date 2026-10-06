@@ -236,6 +236,23 @@ pub struct ReadPair {
     /// Template length from BAM.
     pub insert_size: i64,
     pub chrom: String,
+    /// R1's and R2's alignments as the input file had them -- only for donor
+    /// pairs, whose mismatches against the reference teach the error table
+    /// (`quality::learn_errors`). spike's own synthetic pairs carry `None`.
+    pub align: Option<Box<[MateAlignment; 2]>>,
+}
+
+/// One donor mate's alignment, as the input BAM/CRAM record had it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MateAlignment {
+    /// Leftmost aligned reference base, 0-based.
+    pub start: u64,
+    /// Whether the record was reverse-complemented. `ReadPair` stores the
+    /// mate in sequencing order, so walking this CIGAR needs it flipped back.
+    pub reverse: bool,
+    /// The CIGAR in reference order: `b'M'` (M, = and X), `b'I'`, `b'D'`
+    /// (D and N), `b'S'` and `b'H'`; padding is dropped.
+    pub cigar: Vec<(u8, u32)>,
 }
 
 /// Pool of real reads from a genomic region.

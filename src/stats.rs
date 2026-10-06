@@ -225,6 +225,7 @@ mod tests {
             ref_end: 1000 + insert_size.unsigned_abs(),
             insert_size,
             chrom: "chr20".to_string(),
+            align: None,
         }
     }
 

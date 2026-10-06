@@ -16,6 +16,7 @@ mod read_name;
 mod reference;
 mod simulate;
 mod stats;
+mod quality;
 mod synth;
 mod truth;
 mod types;
@@ -1849,26 +1850,25 @@ struct EventStat {
 /// fragment lengths, the coverage the tiling count is scaled by -- and each
 /// of those silently substitutes a constant when the pool runs out.
 ///
-/// 30 is `synth.rs`'s `MIN_BASE_OBS` and `MIN_MARKOV_OBS`, the observation
-/// count levels 1-3 of the quality profile require of a bin before they
-/// sample from it. It does not make any bin reach that count: a pool of *n*
-/// pairs puts at most *n* observations in a cycle-only bin -- the profile's
-/// final fallback, which samples any bin with one observation -- and fewer in
-/// a bin also split by base or by the previous quality. At zero pairs,
-/// sampling returns `synth.rs`'s last-resort constant Q20 byte for every
-/// base. This is a floor on "measured from this library at all", not a claim
-/// that 30 pairs is enough coverage for a good simulation.
+/// 30 is a floor on "measured from this library at all", not a claim that 30
+/// pairs is enough for a good simulation. The quality profile (`quality.rs`)
+/// draws from a context only once it holds 20 observations, and backs off to
+/// coarser contexts below that, down to the whole mate; its error table backs
+/// off to 10^(-Q/10) when a quality has fewer than 200 counted donor bases. At
+/// zero pairs every base is Q20. How many pairs the profile needs before its
+/// reads look like the sample's is `synth.rs`'s `MIN_PROFILE_PAIRS`.
 const MIN_DONOR_PAIRS: usize = 30;
 
-/// The event's read generator: its quality profile learned from the donor
-/// pool, sequencing `config.read_length` cycles, trimmed as the library was,
-/// naming its reads in the input's name shape.
+/// The event's read generator: its quality profile and error table learned
+/// from the donor pool against the reference, sequencing `config.read_length`
+/// cycles, trimmed as the library was, naming its reads in the input's name
+/// shape.
 fn synth_generator<'a>(
     pool: &ReadPool,
     reference: &'a crate::reference::SharedReference,
     config: &SimConfig,
 ) -> synth::SynthReadGenerator<'a> {
-    let quality_profile = synth::QualityProfile::from_read_pairs(&pool.pairs, config.read_length);
+    let quality_profile = synth::QualityProfile::from_donor_pairs(&pool.pairs, config.read_length, reference);
     synth::SynthReadGenerator::new(quality_profile, reference, config.read_length, config.indel_error_rate)
         .with_adapter_trim(config.adapter_trimmed)
         .with_read_names(config.read_names.clone())
@@ -5147,6 +5147,7 @@ cat "$root/validation_summary.tsv""#,
             ref_end: start + 400,
             insert_size: 400,
             chrom: "chr20".to_string(),
+            align: None,
         }
     }
 

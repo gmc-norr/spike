@@ -5,15 +5,16 @@
 //! and correlated sequencing errors.
 //!
 //! The approach:
-//! 1. Learn a `QualityProfile` from real reads: per-cycle quality distributions for R1 and R2
-//! 2. Generate synthetic reads by sampling quality from the profile, reading reference bases,
-//!    and introducing errors at the rate implied by the sampled quality score
+//! 1. Learn a `QualityProfile` (`quality.rs`) from the donor reads: their
+//!    qualities, and the errors they make, counted against the reference
+//! 2. Generate synthetic reads by drawing each base's quality from the profile,
+//!    reading the template base, and making an error at the rate the profile
+//!    gives for that quality in that kind of read
 
 use std::collections::HashMap;
 
 use rand::rngs::StdRng;
 use rand::Rng;
-use rayon::prelude::*;
 
 use crate::extract::reverse_complement;
 use crate::haplotype::VariantHaplotype;
@@ -23,32 +24,20 @@ use crate::reference::SharedReference;
 use crate::stats::FragmentDist;
 use crate::types::{ReadPair, ReadPool};
 
-/// Minimum observations in a (cycle, base) bin before we trust it.
-/// Below this threshold, fall back to the cycle-only distribution.
-const MIN_BASE_OBS: usize = 30;
-
-/// Number of bins for quantizing the previous quality score in the Markov model.
-/// Bins: Q0-9 → 0, Q10-19 → 1, Q20-29 → 2, Q30+ → 3.
-const PREV_Q_BINS: usize = 4;
-
-/// Minimum observations in a Markov transition bin before we trust it.
-const MIN_MARKOV_OBS: usize = 30;
-
 /// Fewest donor pairs the quality model needs before its fake reads look like
-/// the sample's own. Measured (N7, HG002 35x): below this the transition bins
-/// after a low-quality base stay under `MIN_MARKOV_OBS`, sampling falls back to
-/// levels with no memory of the previous quality, and low-quality runs come
-/// out too short -- further from the held-out reads than real reads from other
-/// chr20 windows are. Per-cycle mean quality is fine well below it.
+/// the sample's own. N7 measured 1,000 for the first-order chain this model
+/// replaced; offline, the context model reached the sample's read-to-read
+/// spread at 5,000 pairs but not at 1,000 (HG002 35x). Re-measured by K4 of
+/// docs/superpowers/plans/2026-10-07-quality-model.md.
 const MIN_PROFILE_PAIRS: usize = 1_000;
 
 /// The warning for a quality profile trained on `pairs` donor pairs with the
 /// bin census `census`, or `None` when there are enough pairs.
-fn thin_profile_warning(pairs: usize, census: &str) -> Option<String> {
+pub(crate) fn thin_profile_warning(pairs: usize, census: &str) -> Option<String> {
     (pairs < MIN_PROFILE_PAIRS).then(|| {
         format!(
-            "Quality profile learned from {} donor pairs; below {} its low-quality runs \
-             come out shorter than the sample's (measured on HG002 35x). {}. Widen \
+            "Quality profile learned from {} donor pairs; below {} its reads come out \
+             more alike than the sample's (measured on HG002 35x). {}. Widen \
              --flank or --region for a larger pool.",
             pairs, MIN_PROFILE_PAIRS, census
         )
@@ -66,358 +55,7 @@ const INDEL_SLACK: usize = 10;
 /// an ordinary score (often Q37) instead (L18).
 const N_QUAL: u8 = b'!' + 2; // Q2
 
-/// Empirical per-cycle quality score distributions learned from real reads.
-///
-/// Two levels of conditioning:
-/// 1. **Base-conditioned**: `(read_number, cycle, sequenced_base)` → quality distribution.
-///    Captures base-specific effects like the Illumina GG quality dip.
-/// 2. **Cycle-only fallback**: `(read_number, cycle)` → quality distribution.
-///    Used when a base-conditioned bin has too few observations.
-///
-/// Both levels store sorted Vec<u8> for O(1) CDF sampling.
-#[cfg_attr(test, derive(PartialEq))]
-pub struct QualityProfile {
-    /// Base-conditioned quality for read1.
-    /// `r1_base_quals[cycle][base_idx]` = sorted Vec<u8> of Phred+33 values.
-    /// base_idx: A=0, C=1, G=2, T=3.
-    r1_base_quals: Vec<[Vec<u8>; 4]>,
-
-    /// Base-conditioned quality for read2.
-    r2_base_quals: Vec<[Vec<u8>; 4]>,
-
-    /// Cycle-only fallback for read1.
-    /// `r1_cycle_quals[cycle]` = sorted Vec<u8> of Phred+33 values (all bases pooled).
-    r1_cycle_quals: Vec<Vec<u8>>,
-
-    /// Cycle-only fallback for read2.
-    r2_cycle_quals: Vec<Vec<u8>>,
-
-    /// Markov transition table for read1, conditioned on base.
-    /// `r1_markov_base[cycle][base_idx][prev_q_bin]` = sorted Vec<u8> of Phred+33 values.
-    r1_markov_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
-
-    /// Markov transition table for read2, conditioned on base.
-    r2_markov_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
-
-    /// Markov transition table for read1, cycle-only (all bases pooled).
-    /// `r1_markov_cycle[cycle][prev_q_bin]` = sorted Vec<u8>.
-    r1_markov_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
-
-    /// Markov transition table for read2, cycle-only.
-    r2_markov_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
-}
-
-/// Pairs per chunk when a [`QualityProfile`] is learned on the thread pool.
-const PROFILE_CHUNK: usize = 8192;
-
-/// The unsorted bins a [`QualityProfile`] is learned into.
-struct ProfileBins {
-    r1_base: Vec<[Vec<u8>; 4]>,
-    r2_base: Vec<[Vec<u8>; 4]>,
-    r1_cycle: Vec<Vec<u8>>,
-    r2_cycle: Vec<Vec<u8>>,
-    r1_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
-    r2_mkv_base: Vec<[[Vec<u8>; PREV_Q_BINS]; 4]>,
-    r1_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
-    r2_mkv_cycle: Vec<[Vec<u8>; PREV_Q_BINS]>,
-}
-
-impl ProfileBins {
-    fn new(read_length: usize) -> Self {
-        Self {
-            r1_base: (0..read_length).map(|_| Default::default()).collect(),
-            r2_base: (0..read_length).map(|_| Default::default()).collect(),
-            r1_cycle: (0..read_length).map(|_| Vec::new()).collect(),
-            r2_cycle: (0..read_length).map(|_| Vec::new()).collect(),
-            r1_mkv_base: (0..read_length).map(|_| Default::default()).collect(),
-            r2_mkv_base: (0..read_length).map(|_| Default::default()).collect(),
-            r1_mkv_cycle: (0..read_length).map(|_| Default::default()).collect(),
-            r2_mkv_cycle: (0..read_length).map(|_| Default::default()).collect(),
-        }
-    }
-
-    /// Put one pair's qualities in their bins. Uses the read's own sequence
-    /// bases (seq1/seq2) as the conditioning context.
-    fn add(&mut self, pair: &ReadPair, read_length: usize) {
-        let r1_len = read_length.min(pair.qual1.len()).min(pair.seq1.len());
-        for c in 0..r1_len {
-            let q = pair.qual1[c];
-            self.r1_cycle[c].push(q);
-            if let Some(bi) = base_index(pair.seq1[c]) {
-                self.r1_base[c][bi].push(q);
-            }
-            // Markov: record transition from previous quality (cycle > 0).
-            if c > 0 {
-                let pbin = prev_q_bin(pair.qual1[c - 1]);
-                self.r1_mkv_cycle[c][pbin].push(q);
-                if let Some(bi) = base_index(pair.seq1[c]) {
-                    self.r1_mkv_base[c][bi][pbin].push(q);
-                }
-            }
-        }
-
-        let r2_len = read_length.min(pair.qual2.len()).min(pair.seq2.len());
-        for c in 0..r2_len {
-            let q = pair.qual2[c];
-            self.r2_cycle[c].push(q);
-            if let Some(bi) = base_index(pair.seq2[c]) {
-                self.r2_base[c][bi].push(q);
-            }
-            if c > 0 {
-                let pbin = prev_q_bin(pair.qual2[c - 1]);
-                self.r2_mkv_cycle[c][pbin].push(q);
-                if let Some(bi) = base_index(pair.seq2[c]) {
-                    self.r2_mkv_base[c][bi][pbin].push(q);
-                }
-            }
-        }
-    }
-
-    /// Every bin, in one fixed order.
-    fn each_bin(&mut self) -> Vec<&mut Vec<u8>> {
-        let mut all: Vec<&mut Vec<u8>> = Vec::new();
-        for cycle in self.r1_base.iter_mut().chain(self.r2_base.iter_mut()) {
-            all.extend(cycle.iter_mut());
-        }
-        all.extend(self.r1_cycle.iter_mut().chain(self.r2_cycle.iter_mut()));
-        for cycle in self.r1_mkv_base.iter_mut().chain(self.r2_mkv_base.iter_mut()) {
-            all.extend(cycle.iter_mut().flat_map(|base| base.iter_mut()));
-        }
-        for cycle in self.r1_mkv_cycle.iter_mut().chain(self.r2_mkv_cycle.iter_mut()) {
-            all.extend(cycle.iter_mut());
-        }
-        all
-    }
-
-    /// `self`'s values, then `other`'s, bin by bin.
-    fn joined(mut self, mut other: Self) -> Self {
-        for (mine, theirs) in self.each_bin().into_iter().zip(other.each_bin()) {
-            mine.append(theirs);
-        }
-        self
-    }
-
-    /// Sort every bin, on the thread pool.
-    fn sort(&mut self) {
-        self.each_bin().into_par_iter().for_each(|bin| bin.sort_unstable());
-    }
-}
-
-impl QualityProfile {
-    /// Learn quality profile from extracted read pairs.
-    ///
-    /// Uses the read's own sequence bases (seq1/seq2) as the conditioning context.
-    /// These are in FASTQ orientation (matching the quality scores) and are ~99%
-    /// correct, so they faithfully represent the base the sequencer was reading.
-    pub fn from_read_pairs(pairs: &[ReadPair], read_length: usize) -> Self {
-        if crate::extract::one_thread() {
-            // One pass into one set of bins: on one thread, chunks joined
-            // together only copy every value once more.
-            let mut bins = ProfileBins::new(read_length);
-            for pair in pairs {
-                bins.add(pair, read_length);
-            }
-            return Self::from_bins(bins, pairs.len(), read_length);
-        }
-        Self::from_read_pairs_in_chunks(pairs, read_length, PROFILE_CHUNK)
-    }
-
-    /// [`from_read_pairs`](Self::from_read_pairs), `chunk` pairs at a time on
-    /// the thread pool. Every bin is sorted after the chunks are joined, so the
-    /// chunking cannot change what it holds.
-    fn from_read_pairs_in_chunks(pairs: &[ReadPair], read_length: usize, chunk: usize) -> Self {
-        let bins = pairs
-            .par_chunks(chunk.max(1))
-            .map(|part| {
-                let mut bins = ProfileBins::new(read_length);
-                for pair in part {
-                    bins.add(pair, read_length);
-                }
-                bins
-            })
-            // Not `reduce`: its fold starts from an empty identity and copies
-            // the first chunk into it.
-            .reduce_with(ProfileBins::joined)
-            .unwrap_or_else(|| ProfileBins::new(read_length));
-        Self::from_bins(bins, pairs.len(), read_length)
-    }
-
-    /// The profile `bins` hold, learned from `n_pairs` pairs.
-    fn from_bins(mut bins: ProfileBins, n_pairs: usize, read_length: usize) -> Self {
-        // Sort all distributions for CDF sampling.
-        bins.sort();
-        let ProfileBins {
-            r1_base,
-            r2_base,
-            r1_cycle,
-            r2_cycle,
-            r1_mkv_base,
-            r2_mkv_base,
-            r1_mkv_cycle,
-            r2_mkv_cycle,
-        } = bins;
-
-        // Log summary.
-        let r1_mean_start = mean_qual(&r1_cycle[0]);
-        let r1_mean_mid = mean_qual(&r1_cycle[read_length / 2]);
-        let r1_mean_end = mean_qual(&r1_cycle[read_length.saturating_sub(1)]);
-        let r2_mean_start = mean_qual(&r2_cycle[0]);
-        let r2_mean_end = mean_qual(&r2_cycle[read_length.saturating_sub(1)]);
-
-        // Count how many (cycle, base) bins have enough data.
-        let base_bins_total = read_length * 4 * 2; // R1 + R2
-        let base_bins_ok = r1_base
-            .iter()
-            .chain(r2_base.iter())
-            .flat_map(|cycle| cycle.iter())
-            .filter(|bin| bin.len() >= MIN_BASE_OBS)
-            .count();
-
-        // Count Markov bin usability.
-        let mkv_base_total = read_length * 4 * PREV_Q_BINS * 2;
-        let mkv_base_ok = r1_mkv_base
-            .iter()
-            .chain(r2_mkv_base.iter())
-            .flat_map(|cycle| cycle.iter().flat_map(|base| base.iter()))
-            .filter(|bin| bin.len() >= MIN_MARKOV_OBS)
-            .count();
-        let mkv_cycle_total = read_length * PREV_Q_BINS * 2;
-        let mkv_cycle_ok = r1_mkv_cycle
-            .iter()
-            .chain(r2_mkv_cycle.iter())
-            .flat_map(|cycle| cycle.iter())
-            .filter(|bin| bin.len() >= MIN_MARKOV_OBS)
-            .count();
-
-        let census = format!(
-            "Base-conditioned bins: {}/{} usable. Markov bins: base {}/{}, cycle {}/{} usable",
-            base_bins_ok, base_bins_total,
-            mkv_base_ok, mkv_base_total,
-            mkv_cycle_ok, mkv_cycle_total,
-        );
-        log::info!(
-            "Quality profile: {} pairs, {} cycles. R1 mean Q: start={:.1} mid={:.1} end={:.1}, R2: start={:.1} end={:.1}. {}",
-            n_pairs,
-            read_length,
-            r1_mean_start, r1_mean_mid, r1_mean_end,
-            r2_mean_start, r2_mean_end,
-            census,
-        );
-        if let Some(warning) = thin_profile_warning(n_pairs, &census) {
-            log::warn!("{}", warning);
-        }
-
-        Self {
-            r1_base_quals: r1_base,
-            r2_base_quals: r2_base,
-            r1_cycle_quals: r1_cycle,
-            r2_cycle_quals: r2_cycle,
-            r1_markov_base: r1_mkv_base,
-            r2_markov_base: r2_mkv_base,
-            r1_markov_cycle: r1_mkv_cycle,
-            r2_markov_cycle: r2_mkv_cycle,
-        }
-    }
-
-    /// Sample a quality score (Phred+33 ASCII) for a given read number, cycle,
-    /// sequenced base, and optionally the previous quality score.
-    ///
-    /// Uses a 4-level fallback hierarchy:
-    /// 1. Markov + base: `P(Q_i | cycle, base, prev_q_bin)` — best if enough data
-    /// 2. Markov + cycle: `P(Q_i | cycle, prev_q_bin)` — drop base conditioning
-    /// 3. Base-only: `P(Q_i | cycle, base)` — no Markov (cycle 0 or sparse bins)
-    /// 4. Cycle-only: `P(Q_i | cycle)` — final fallback
-    ///
-    /// The returned byte is clamped to the valid Phred+33 range [b'!', b'~'] = [33, 126].
-    ///
-    /// This clamp is defense in depth, not the primary fix for M14 (missing
-    /// donor qualities poisoning this model with byte 32): `extract.rs` now
-    /// drops donor records with no stored quality, or with a raw score above
-    /// Q93, before they ever reach this profile, and
-    /// `fastq.rs::write_paired_fastq` refuses to write any out-of-range byte
-    /// regardless of source. Kept here because nothing proves this sampler
-    /// can never be fed bad data through some other path -- and because a
-    /// poisoned donor is only ever *suppressed*, never written, so the writer
-    /// would not catch it.
-    pub fn sample_quality(
-        &self,
-        read_num: u8,
-        cycle: usize,
-        base: u8,
-        prev_qual: Option<u8>,
-        rng: &mut StdRng,
-    ) -> u8 {
-        // Phred+33: valid byte range is b'!' (Q0) to b'~' (Q93).
-        const MIN_QUAL_BYTE: u8 = b'!';
-        const MAX_QUAL_BYTE: u8 = b'!' + 93; // '~' = 126
-        let q = self.sample_quality_inner(read_num, cycle, base, prev_qual, rng);
-        q.clamp(MIN_QUAL_BYTE, MAX_QUAL_BYTE)
-    }
-
-    fn sample_quality_inner(
-        &self,
-        read_num: u8,
-        cycle: usize,
-        base: u8,
-        prev_qual: Option<u8>,
-        rng: &mut StdRng,
-    ) -> u8 {
-        let (base_quals, cycle_quals, mkv_base, mkv_cycle) = match read_num {
-            1 => (
-                &self.r1_base_quals,
-                &self.r1_cycle_quals,
-                &self.r1_markov_base,
-                &self.r1_markov_cycle,
-            ),
-            _ => (
-                &self.r2_base_quals,
-                &self.r2_cycle_quals,
-                &self.r2_markov_base,
-                &self.r2_markov_cycle,
-            ),
-        };
-
-        // If we have a previous quality, try Markov tables first.
-        if let Some(pq) = prev_qual {
-            let pbin = prev_q_bin(pq);
-
-            // Level 1: Markov + base-conditioned.
-            if cycle < mkv_base.len() {
-                if let Some(bi) = base_index(base) {
-                    let bin = &mkv_base[cycle][bi][pbin];
-                    if bin.len() >= MIN_MARKOV_OBS {
-                        return bin[rng.gen_range(0..bin.len())];
-                    }
-                }
-            }
-
-            // Level 2: Markov + cycle-only.
-            if cycle < mkv_cycle.len() {
-                let bin = &mkv_cycle[cycle][pbin];
-                if bin.len() >= MIN_MARKOV_OBS {
-                    return bin[rng.gen_range(0..bin.len())];
-                }
-            }
-        }
-
-        // Level 3: Base-conditioned marginal (no Markov).
-        if cycle < base_quals.len() {
-            if let Some(bi) = base_index(base) {
-                let bin = &base_quals[cycle][bi];
-                if bin.len() >= MIN_BASE_OBS {
-                    return bin[rng.gen_range(0..bin.len())];
-                }
-            }
-        }
-
-        // Level 4: Cycle-only marginal.
-        if cycle < cycle_quals.len() && !cycle_quals[cycle].is_empty() {
-            return cycle_quals[cycle][rng.gen_range(0..cycle_quals[cycle].len())];
-        }
-
-        b'!' + 20 // last resort: Q20, a fixed byte with no draw at all
-    }
-}
+pub use crate::quality::QualityProfile;
 
 /// Generates synthetic reads from reference sequence + learned quality profile.
 pub struct SynthReadGenerator<'a> {
@@ -513,27 +151,29 @@ impl<'a> SynthReadGenerator<'a> {
     /// `template` is what the sequencer reads, 5'→3', with the sample's own
     /// alleles baked in; it should carry a few bases past `rl` so a deletion
     /// error is covered by real sequence instead of `N` padding (L1).
-    /// Generating in sequencing order also keeps the quality Markov chain
+    /// Generating in sequencing order also keeps the quality model's history
     /// running with the cycle counter for both mates, not against it (L17).
+    ///
+    /// `class` is the read's class from the pair's joint draw
+    /// (`QualityProfile::draw_classes`); `None` draws one for this mate alone.
     fn generate_from_template(
         &self,
         template: &[u8],
         rl: usize,
         read_num: u8,
+        class: Option<usize>,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
         let mut seq = Vec::with_capacity(rl);
         let mut qual = Vec::with_capacity(rl);
         let mut idx = 0usize; // current position in template
-        let mut prev_qual: Option<u8> = None; // Markov chain state
+        let mut state = self.profile.start_read(read_num, class, rng);
 
         while seq.len() < rl && idx < template.len() {
             let c = seq.len(); // cycle position in the read
             let true_base = template[idx].to_ascii_uppercase();
 
-            let q = self
-                .profile
-                .sample_quality(read_num, c, true_base, prev_qual, rng);
+            let q = self.profile.next_quality(read_num, &state, rl - c, rng);
 
             if true_base == b'N' {
                 // An `N` is a no-call and reports Q2, not the profile's `q`
@@ -542,24 +182,18 @@ impl<'a> SynthReadGenerator<'a> {
                 // an `N` consumes strictly fewer random numbers than a called
                 // base and does not leave the stream unchanged.
                 //
-                // `prev_qual` is the quality the read *emitted* (the
+                // The history holds what the read *emitted* (the
                 // indel-deletion branch below stays put for the same reason:
-                // nothing was emitted), so the chain carries Q2 forward rather
-                // than the `q` it threw away. Measured at a short reference
-                // gap, that costs the bases after an `N` nothing: mean Q
-                // 35.62 either way. Real Illumina Q2 is far too rare for the
-                // after-Q2 transition bin to reach MIN_MARKOV_OBS (4
-                // observations across a whole learned profile), so sampling
-                // falls straight through to the non-Markov levels.
+                // nothing was emitted), so Q2 enters it rather than the `q`
+                // thrown away.
                 seq.push(b'N');
                 qual.push(N_QUAL);
-                prev_qual = Some(N_QUAL);
+                self.profile.emitted(&mut state, N_QUAL);
                 idx += 1;
                 continue;
             }
 
-            let phred = (q as f64 - 33.0).max(0.0);
-            let p_err = 10.0_f64.powf(-phred / 10.0);
+            let p_err = self.profile.error_rate(q, &state, rl - c);
 
             if rng.gen::<f64>() < p_err {
                 if self.indel_error_rate > 0.0 && rng.gen::<f64>() < self.indel_error_rate {
@@ -568,25 +202,25 @@ impl<'a> SynthReadGenerator<'a> {
                         // Insertion: add a random base without consuming template.
                         seq.push(random_base(rng));
                         qual.push(q);
-                        prev_qual = Some(q);
+                        self.profile.emitted(&mut state, q);
                         // Don't advance idx — the template base is read next cycle.
                     } else {
                         // Deletion: skip this template base entirely.
                         idx += 1;
                         // Don't add to seq/qual — next iteration reads the next base.
-                        // Don't update prev_qual — no quality was emitted.
+                        // Nothing was emitted, so the history stays as it is.
                     }
                 } else {
                     // Substitution error.
                     seq.push(random_different_base(true_base, rng));
                     qual.push(q);
-                    prev_qual = Some(q);
+                    self.profile.emitted(&mut state, q);
                     idx += 1;
                 }
             } else {
                 seq.push(true_base);
                 qual.push(q);
-                prev_qual = Some(q);
+                self.profile.emitted(&mut state, q);
                 idx += 1;
             }
         }
@@ -619,12 +253,30 @@ impl<'a> SynthReadGenerator<'a> {
     ///   forward read is returned in reference orientation, which is the same
     ///   thing. Reads are `rl` long either way.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn generate_read(
         &self,
         chrom: &str,
         ref_start: u64,
         alleles: &HashMap<u64, u8>,
         read_num: u8,
+        is_reverse: bool,
+        rl: usize,
+        rng: &mut StdRng,
+    ) -> (Vec<u8>, Vec<u8>) {
+        self.generate_read_of_class(chrom, ref_start, alleles, read_num, None, is_reverse, rl, rng)
+    }
+
+    /// [`generate_read`](Self::generate_read) for a read of class `class`
+    /// (`None`: drawn for this mate alone).
+    #[allow(clippy::too_many_arguments)]
+    fn generate_read_of_class(
+        &self,
+        chrom: &str,
+        ref_start: u64,
+        alleles: &HashMap<u64, u8>,
+        read_num: u8,
+        class: Option<usize>,
         is_reverse: bool,
         rl: usize,
         rng: &mut StdRng,
@@ -667,7 +319,7 @@ impl<'a> SynthReadGenerator<'a> {
             (0..ref_seq.len()).map(base_at).collect()
         };
 
-        self.generate_from_template(&template, rl, read_num, rng)
+        self.generate_from_template(&template, rl, read_num, class, rng)
     }
 
     /// Generate a synthetic read pair for a fragment at a given position.
@@ -702,15 +354,20 @@ impl<'a> SynthReadGenerator<'a> {
         // quality model, is_reverse handles the flip, so whichever mate
         // ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
+        // Both mates' classes in one draw, so a poor pair is poor in both.
+        let classes = self.profile.draw_classes(rng);
+        let class_of = |num: u8| Some(if num == 1 { classes.0 } else { classes.1 });
 
         // Forward mate (left end of the fragment).
-        let (mut fwd_seq, mut fwd_qual) =
-            self.generate_read(chrom, frag_start, alleles, fwd_num, false, rl as usize, rng);
+        let (mut fwd_seq, mut fwd_qual) = self.generate_read_of_class(
+            chrom, frag_start, alleles, fwd_num, class_of(fwd_num), false, rl as usize, rng,
+        );
 
         // Reverse mate (right end) — generated in sequencing order, so it
         // already comes back in FASTQ orientation.
-        let (mut rev_seq, mut rev_qual) =
-            self.generate_read(chrom, right_start, alleles, rev_num, true, rl as usize, rng);
+        let (mut rev_seq, mut rev_qual) = self.generate_read_of_class(
+            chrom, right_start, alleles, rev_num, class_of(rev_num), true, rl as usize, rng,
+        );
 
         self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
         self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
@@ -731,6 +388,7 @@ impl<'a> SynthReadGenerator<'a> {
             ref_end: frag_start + frag_len,
             insert_size: frag_len as i64,
             chrom: chrom.to_string(),
+            align: None,
         })
     }
 
@@ -846,11 +504,26 @@ impl<'a> SynthReadGenerator<'a> {
     /// `is_reverse`: when true the read comes off the reverse strand — `seq`
     ///   is reverse-complemented first and the read is returned in FASTQ
     ///   orientation (see `generate_read` docs).
+    #[cfg(test)]
     fn generate_read_from_seq(
         &self,
         seq: &[u8],
         rl: usize,
         read_num: u8,
+        is_reverse: bool,
+        rng: &mut StdRng,
+    ) -> (Vec<u8>, Vec<u8>) {
+        self.generate_read_from_seq_of_class(seq, rl, read_num, None, is_reverse, rng)
+    }
+
+    /// [`generate_read_from_seq`](Self::generate_read_from_seq) for a read of
+    /// class `class` (`None`: drawn for this mate alone).
+    fn generate_read_from_seq_of_class(
+        &self,
+        seq: &[u8],
+        rl: usize,
+        read_num: u8,
+        class: Option<usize>,
         is_reverse: bool,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
@@ -861,7 +534,7 @@ impl<'a> SynthReadGenerator<'a> {
             // 3' end of `seq` first.
             reverse_complement(&mut template);
         }
-        self.generate_from_template(&template, rl, read_num, rng)
+        self.generate_from_template(&template, rl, read_num, class, rng)
     }
 
     /// Generate a synthetic read pair from a variant haplotype.
@@ -906,15 +579,18 @@ impl<'a> SynthReadGenerator<'a> {
         // read_num picks the quality model, is_reverse handles the flip,
         // so whichever mate ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
+        // Both mates' classes in one draw, so a poor pair is poor in both.
+        let classes = self.profile.draw_classes(rng);
+        let class_of = |num: u8| Some(if num == 1 { classes.0 } else { classes.1 });
 
         // Forward mate (left end of the fragment).
         let (mut fwd_seq, mut fwd_qual) =
-            self.generate_read_from_seq(left_seq, rl_bases, fwd_num, false, rng);
+            self.generate_read_from_seq_of_class(left_seq, rl_bases, fwd_num, class_of(fwd_num), false, rng);
 
         // Reverse mate (right end): generated in sequencing order, so it
         // already comes back in FASTQ orientation.
         let (mut rev_seq, mut rev_qual) =
-            self.generate_read_from_seq(right_seq, rl_bases, rev_num, true, rng);
+            self.generate_read_from_seq_of_class(right_seq, rl_bases, rev_num, class_of(rev_num), true, rng);
 
         self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
         self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
@@ -960,6 +636,7 @@ impl<'a> SynthReadGenerator<'a> {
                 ref_end,
                 insert_size: frag_len as i64,
                 chrom,
+                align: None,
             },
             spans,
         ))
@@ -1002,29 +679,6 @@ pub fn copy_rate(copy: Option<bool>, vaf: f64) -> f64 {
     }
 }
 
-/// Quantize a Phred+33 quality score into a previous-quality bin for the Markov model.
-/// Bins: Q0-9 → 0, Q10-19 → 1, Q20-29 → 2, Q30+ → 3.
-fn prev_q_bin(phred_plus_33: u8) -> usize {
-    let phred = phred_plus_33.saturating_sub(b'!');
-    match phred {
-        0..=9 => 0,
-        10..=19 => 1,
-        20..=29 => 2,
-        _ => 3,
-    }
-}
-
-/// Map a DNA base to an index: A=0, C=1, G=2, T=3. Returns None for N or other.
-fn base_index(base: u8) -> Option<usize> {
-    match base.to_ascii_uppercase() {
-        b'A' => Some(0),
-        b'C' => Some(1),
-        b'G' => Some(2),
-        b'T' => Some(3),
-        _ => None,
-    }
-}
-
 /// Complement of a DNA base: A↔T, C↔G.
 fn complement(base: u8) -> u8 {
     match base {
@@ -1054,6 +708,7 @@ fn random_different_base(base: u8, rng: &mut StdRng) -> u8 {
 }
 
 /// Mean Phred quality (Q value, not ASCII) of a quality vector.
+#[cfg(test)]
 fn mean_qual(quals: &[u8]) -> f64 {
     if quals.is_empty() {
         return 0.0;
@@ -1079,167 +734,50 @@ mod tests {
             ref_end: ref_start + rl as u64 * 2,
             insert_size: (rl * 2) as i64,
             chrom: "chr1".to_string(),
+            align: None,
         }
     }
 
-    /// 500 pairs of length `rl` whose qualities and bases vary by pair and
-    /// cycle, so every kind of bin gets values in many orders.
-    fn varied_pairs(rl: usize) -> Vec<ReadPair> {
-        (0..500u64)
-            .map(|i| {
-                let q1: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 7 + c * 13) % 41) as u8).collect();
-                let q2: Vec<u8> = (0..rl as u64).map(|c| b'!' + ((i * 11 + c * 5) % 41) as u8).collect();
-                let mut p = mock_read_pair(&format!("r{}", i), q1, q2, i);
-                p.seq1 = (0..rl).map(|c| b"ACGTN"[(i as usize + c) % 5]).collect();
-                p.seq2 = (0..rl).map(|c| b"TGCA"[(i as usize * 3 + c) % 4]).collect();
-                p
-            })
-            .collect()
-    }
 
     fn on_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
         rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(f)
     }
 
-    #[test]
-    fn test_quality_profile_on_one_thread_is_the_one_learned_in_chunks() {
-        // On one thread the profile is learned in one pass; it must be the
-        // profile learned in chunks of 7 on four threads.
-        let rl = 12;
-        let pairs = varied_pairs(rl);
-        let one = on_threads(1, || QualityProfile::from_read_pairs(&pairs, rl));
-        let split = on_threads(4, || QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
-        assert!(one == split, "the one-thread profile differs from the one learned in chunks");
-    }
 
-    #[test]
-    fn test_quality_profile_is_the_same_learned_in_chunks_on_many_threads() {
-        // The profile may be learned chunk by chunk on several threads; its
-        // bins must be exactly the ones a single pass over every pair fills.
-        let rl = 12;
-        let pairs = varied_pairs(rl);
-        // The reference: every pair into one set of bins, in order, with no
-        // chunk or join in the way.
-        let mut one_pass = ProfileBins::new(rl);
-        for pair in &pairs {
-            one_pass.add(pair, rl);
-        }
-        let whole = QualityProfile::from_bins(one_pass, pairs.len(), rl);
-        let split = on_threads(4, || QualityProfile::from_read_pairs_in_chunks(&pairs, rl, 7));
-        assert!(whole == split, "a profile learned in chunks of 7 differs from one learned in one pass");
-        // Sampling takes a position in a bin, so the exact reads depend on
-        // every bin being sorted, not just on what it holds.
-        let bins = ProfileBins {
-            r1_base: split.r1_base_quals,
-            r2_base: split.r2_base_quals,
-            r1_cycle: split.r1_cycle_quals,
-            r2_cycle: split.r2_cycle_quals,
-            r1_mkv_base: split.r1_markov_base,
-            r2_mkv_base: split.r2_markov_base,
-            r1_mkv_cycle: split.r1_markov_cycle,
-            r2_mkv_cycle: split.r2_markov_cycle,
-        };
-        let mut bins = bins;
-        let all = bins.each_bin();
-        assert!(all.iter().any(|bin| bin.len() > 1), "the fixture fills no bin");
-        assert!(all.iter().all(|bin| bin.windows(2).all(|w| w[0] <= w[1])), "a bin is not sorted");
-    }
 
     #[test]
     fn test_quality_profile_from_pairs() {
+        // R1 learns from the donors' R1 strings and R2 from their R2 strings.
         let rl = 10;
-        // Create pairs with known quality patterns: Q30 at all cycles for R1,
-        // Q20 at all cycles for R2.
-        let q30 = vec![b'!' + 30; rl]; // Phred+33: Q30
-        let q20 = vec![b'!' + 20; rl]; // Phred+33: Q20
-
-        let pairs: Vec<ReadPair> = (0..100)
-            .map(|i| mock_read_pair(&format!("read_{}", i), q30.clone(), q20.clone(), i * 10))
-            .collect();
-
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
-
-        // Cycle-only fallback should have all 100 observations per cycle.
-        assert_eq!(profile.r1_cycle_quals.len(), rl);
-        assert_eq!(profile.r2_cycle_quals.len(), rl);
-        assert_eq!(profile.r1_cycle_quals[0].len(), 100);
-
-        // All R1 cycle-only values should be Q30.
-        assert!(profile.r1_cycle_quals[0].iter().all(|&q| q == b'!' + 30));
-        // All R2 cycle-only values should be Q20.
-        assert!(profile.r2_cycle_quals[0].iter().all(|&q| q == b'!' + 20));
-
-        // Base-conditioned: mock_read_pair sets seq1=all-A, so A bin should have data,
-        // other bins should be empty.
-        assert_eq!(profile.r1_base_quals[0][0].len(), 100); // A bin
-        assert_eq!(profile.r1_base_quals[0][1].len(), 0); // C bin
-        assert_eq!(profile.r1_base_quals[0][2].len(), 0); // G bin
-        assert_eq!(profile.r1_base_quals[0][3].len(), 0); // T bin
-
-        // R2: seq2=all-T, so T bin should have data.
-        assert_eq!(profile.r2_base_quals[0][3].len(), 100); // T bin
-        assert_eq!(profile.r2_base_quals[0][0].len(), 0); // A bin
-    }
-
-    #[test]
-    fn test_quality_sampling_distribution() {
-        let rl = 10;
-        // Mix of Q10 and Q30 at cycle 0 (50/50 split).
-        let pairs: Vec<ReadPair> = (0..200)
-            .map(|i| {
-                let q = if i < 100 {
-                    vec![b'!' + 10; rl]
-                } else {
-                    vec![b'!' + 30; rl]
-                };
-                mock_read_pair(&format!("read_{}", i), q.clone(), q, i * 10)
-            })
-            .collect();
-
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Sample 1000 values at cycle 0 with base A (matching mock seq1).
-        let samples: Vec<u8> = (0..1000)
-            .map(|_| profile.sample_quality(1, 0, b'A', None, &mut rng))
-            .collect();
-
-        let q10_count = samples.iter().filter(|&&q| q == b'!' + 10).count();
-        let q30_count = samples.iter().filter(|&&q| q == b'!' + 30).count();
-
-        // Both should be roughly 50% (±10% tolerance).
-        assert!(q10_count > 350, "too few Q10: {}", q10_count);
-        assert!(q30_count > 350, "too few Q30: {}", q30_count);
-    }
-
-    #[test]
-    fn test_base_conditioned_vs_fallback() {
-        let rl = 10;
-        // Create pairs where seq1 = all-A with Q30, so base-conditioned bin for A
-        // is populated but bins for C, G, T are empty.
         let q30 = vec![b'!' + 30; rl];
         let q20 = vec![b'!' + 20; rl];
-
         let pairs: Vec<ReadPair> = (0..100)
             .map(|i| mock_read_pair(&format!("read_{}", i), q30.clone(), q20.clone(), i * 10))
             .collect();
-
         let profile = QualityProfile::from_read_pairs(&pairs, rl);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Querying with base=A should use the base-conditioned bin (all Q30).
-        let q_a = profile.sample_quality(1, 0, b'A', None, &mut rng);
-        assert_eq!(q_a, b'!' + 30);
-
-        // Querying with base=C should fall back to cycle-only (also all Q30,
-        // since all reads had Q30 regardless of base). The C bin has 0 obs.
-        let q_c = profile.sample_quality(1, 0, b'C', None, &mut rng);
-        assert_eq!(q_c, b'!' + 30); // cycle-only fallback, still Q30
-
-        // Querying with base=N should fall back to cycle-only.
-        let q_n = profile.sample_quality(1, 0, b'N', None, &mut rng);
-        assert_eq!(q_n, b'!' + 30);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 10_000], rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(5);
+        for i in 0..50u64 {
+            let p = gen.generate_read_pair("chr1", 100 + i * 20, 40, &no_alleles, "p", &mut rng).unwrap();
+            assert!(p.qual1.iter().all(|&q| q == b'!' + 30), "R1 should be all Q30: {:?}", p.qual1);
+            assert!(p.qual2.iter().all(|&q| q == b'!' + 20), "R2 should be all Q20: {:?}", p.qual2);
+        }
     }
+
+    #[test]
+    fn test_quality_profile_is_the_same_learned_on_one_thread_or_many() {
+        // The context counts are learned in chunks on the thread pool; they
+        // are sums, so the thread count must not change the profile.
+        let rl = 60usize;
+        let mut tr = StdRng::seed_from_u64(77);
+        let pairs = good_and_poor_pairs(rl, 5000, &mut tr);
+        let one = on_threads(1, || QualityProfile::from_read_pairs(&pairs, rl));
+        let many = on_threads(4, || QualityProfile::from_read_pairs(&pairs, rl));
+        assert!(one == many, "the profile learned on 4 threads differs from the one on 1");
+    }
+
+
 
     #[test]
     fn test_complement() {
@@ -1284,10 +822,11 @@ mod tests {
         assert!((mean_qual(&quals) - 20.0).abs() < 0.001);
     }
 
-    // ── Markov quality model tests ──────────────────────────────────────
+    // ── Quality model tests ──────────────────────────────────────
 
     #[test]
     fn test_prev_q_bin() {
+        use crate::quality::prev_q_bin;
         assert_eq!(prev_q_bin(b'!' + 0), 0); // Q0 → bin 0
         assert_eq!(prev_q_bin(b'!' + 9), 0); // Q9 → bin 0
         assert_eq!(prev_q_bin(b'!' + 10), 1); // Q10 → bin 1
@@ -1298,100 +837,8 @@ mod tests {
         assert_eq!(prev_q_bin(b'!' + 40), 3); // Q40 → bin 3
     }
 
-    #[test]
-    fn test_markov_tables_populated() {
-        let rl = 10;
-        let q30 = vec![b'!' + 30; rl];
-        let pairs: Vec<ReadPair> = (0..100)
-            .map(|i| mock_read_pair(&format!("read_{}", i), q30.clone(), q30.clone(), i * 10))
-            .collect();
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
 
-        // Cycle 0 has no previous quality → Markov bins should be empty.
-        for pbin in 0..PREV_Q_BINS {
-            assert_eq!(profile.r1_markov_base[0][0][pbin].len(), 0);
-            assert_eq!(profile.r1_markov_cycle[0][pbin].len(), 0);
-        }
 
-        // Cycle 1+: prev_q_bin(Q30) = 3, base A (idx 0) should have 100 obs.
-        assert_eq!(profile.r1_markov_base[1][0][3].len(), 100);
-        assert_eq!(profile.r1_markov_cycle[1][3].len(), 100);
-
-        // Other prev_q bins at cycle 1 should be empty (all reads had Q30).
-        assert_eq!(profile.r1_markov_base[1][0][0].len(), 0);
-        assert_eq!(profile.r1_markov_base[1][0][1].len(), 0);
-        assert_eq!(profile.r1_markov_base[1][0][2].len(), 0);
-    }
-
-    #[test]
-    fn test_markov_quality_correlation() {
-        let rl = 10;
-        // Half reads are all-Q10, half are all-Q30. The Markov model should
-        // learn that Q30 follows Q30 and Q10 follows Q10.
-        let pairs: Vec<ReadPair> = (0..200)
-            .map(|i| {
-                let q = if i < 100 {
-                    vec![b'!' + 10; rl]
-                } else {
-                    vec![b'!' + 30; rl]
-                };
-                mock_read_pair(&format!("r_{}", i), q.clone(), q, i * 10)
-            })
-            .collect();
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Sample Q at cycle 5, base A, with prev_qual=Q30.
-        // Markov should strongly prefer Q30 (from the all-Q30 reads).
-        let samples: Vec<u8> = (0..1000)
-            .map(|_| profile.sample_quality(1, 5, b'A', Some(b'!' + 30), &mut rng))
-            .collect();
-        let q30_frac = samples.iter().filter(|&&q| q == b'!' + 30).count() as f64 / 1000.0;
-        // Without Markov: ~50%. With Markov: ~100% (Q30→Q30 only from Q30 reads).
-        assert!(
-            q30_frac > 0.85,
-            "Markov Q30|prev=Q30 should be >85%, got {:.1}%",
-            q30_frac * 100.0
-        );
-
-        // Conversely, prev_qual=Q10 should strongly prefer Q10.
-        let samples: Vec<u8> = (0..1000)
-            .map(|_| profile.sample_quality(1, 5, b'A', Some(b'!' + 10), &mut rng))
-            .collect();
-        let q10_frac = samples.iter().filter(|&&q| q == b'!' + 10).count() as f64 / 1000.0;
-        assert!(
-            q10_frac > 0.85,
-            "Markov Q10|prev=Q10 should be >85%, got {:.1}%",
-            q10_frac * 100.0
-        );
-    }
-
-    #[test]
-    fn test_markov_cycle0_falls_back_to_marginal() {
-        let rl = 10;
-        // Mix of Q10 and Q30 reads.
-        let pairs: Vec<ReadPair> = (0..200)
-            .map(|i| {
-                let q = if i < 100 {
-                    vec![b'!' + 10; rl]
-                } else {
-                    vec![b'!' + 30; rl]
-                };
-                mock_read_pair(&format!("r_{}", i), q.clone(), q, i * 10)
-            })
-            .collect();
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // At cycle 0, prev_qual=None → should use marginal (50/50 Q10/Q30).
-        let samples: Vec<u8> = (0..1000)
-            .map(|_| profile.sample_quality(1, 0, b'A', None, &mut rng))
-            .collect();
-        let q10_count = samples.iter().filter(|&&q| q == b'!' + 10).count();
-        let q30_count = samples.iter().filter(|&&q| q == b'!' + 30).count();
-        assert!(q10_count > 350, "Cycle 0 should have ~50% Q10, got {}", q10_count);
-        assert!(q30_count > 350, "Cycle 0 should have ~50% Q30, got {}", q30_count);
-    }
 
     // ── Haplotype read pair generation tests ────────────────────────────
 
@@ -2207,65 +1654,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_quality_chain_carries_the_q2_an_n_reported() {
-        // `prev_qual` is the quality the read last *emitted*, so an `N` hands
-        // the Markov chain the Q2 it reported, not the profile draw it threw
-        // away (L18). Only a profile whose after-Q2 bin differs from its
-        // after-Q37 bin can tell the two rules apart -- the fixed-quality mock
-        // the other `N` tests use cannot see chain state at all.
-        let rl = 60usize;
-        // 100 donor pairs all-Q37 and 40 all-Q2, so the Q30+ transition bin
-        // holds only Q37 and the Q0-9 bin only Q2, both over MIN_MARKOV_OBS.
-        // The chain is then pinned by whichever mode a read is in.
-        let q37 = vec![b'!' + 37; rl];
-        let q2 = vec![b'!' + 2; rl];
-        let pairs: Vec<ReadPair> = (0..140u64)
-            .map(|i| {
-                let q = if i < 100 { q37.clone() } else { q2.clone() };
-                mock_read_pair(&format!("m_{}", i), q.clone(), q, i * 500)
-            })
-            .collect();
-        let profile = QualityProfile::from_read_pairs(&pairs, rl);
-
-        let n_cycle = 20usize;
-        let ref_start = 500u64;
-        let mut seq = scrambled_seq(1000, 71);
-        seq[ref_start as usize + n_cycle] = b'N';
-        let gen = mock_gen_with_profile(profile, seq, rl, 0.0);
-        let no_alleles = HashMap::new();
-
-        let mut high_mode = 0usize;
-        for s in 0..40u64 {
-            let mut rng = StdRng::seed_from_u64(s);
-            let (read_seq, read_qual) =
-                gen.generate_read("chr1", ref_start, &no_alleles, 1, false, rl, &mut rng);
-            assert_eq!(read_seq[n_cycle], b'N', "seed {}: the reference `N` should land at cycle {}", s, n_cycle);
-
-            // Only a read that entered the `N` in the Q37 mode can separate
-            // "carry the Q2 we reported" from "carry the draw we discarded".
-            if read_qual[..n_cycle].iter().any(|&q| q != b'!' + 37) {
-                continue;
-            }
-            high_mode += 1;
-            assert_eq!(read_qual[n_cycle], b'!' + 2, "seed {}: the `N` itself", s);
-            for (c, &q) in read_qual.iter().enumerate().skip(n_cycle + 1) {
-                assert_eq!(
-                    q,
-                    b'!' + 2,
-                    "seed {}: cycle {} after the `N` was drawn from the after-Q37 bin (got Q{}), not the after-Q2 one",
-                    s,
-                    c,
-                    q - b'!'
-                );
-            }
-        }
-        assert!(
-            high_mode >= 10,
-            "only {} of 40 reads entered the `N` at Q37, so the assertions above prove nothing",
-            high_mode
-        );
-    }
 
     #[test]
     fn test_reverse_read_from_seq_complements_lowercase_before_uppercasing() {
@@ -2336,6 +1724,267 @@ mod tests {
             rh,
             rt
         );
+    }
+
+    /// A read whose every base is Q11 with probability `p_low`, else Q37,
+    /// independently: a good read at small `p_low`, a poor one at large.
+    fn scattered_low_qual(read_length: usize, p_low: f64, rng: &mut StdRng) -> Vec<u8> {
+        (0..read_length)
+            .map(|_| if rng.gen::<f64>() < p_low { b'!' + 11 } else { b'!' + 37 })
+            .collect()
+    }
+
+    /// The standard deviation of `reads`' mean qualities (Phred).
+    fn read_mean_sd(reads: &[&Vec<u8>]) -> f64 {
+        let means: Vec<f64> = reads.iter().map(|q| mean_phred(q)).collect();
+        let m = means.iter().sum::<f64>() / means.len() as f64;
+        (means.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (means.len() - 1) as f64).sqrt()
+    }
+
+    fn mean_phred(qual: &[u8]) -> f64 {
+        qual.iter().map(|&q| (q - b'!') as f64).sum::<f64>() / qual.len() as f64
+    }
+
+    /// Half the donor pairs good (2% of bases low) and half poor (40% low),
+    /// both mates alike: the read-to-read spread and the mate link of the
+    /// sample, with nothing a one-base chain can see along a read.
+    fn good_and_poor_pairs(rl: usize, n: usize, rng: &mut StdRng) -> Vec<ReadPair> {
+        (0..n)
+            .map(|i| {
+                let p = if i % 2 == 0 { 0.02 } else { 0.4 };
+                let (q1, q2) = (scattered_low_qual(rl, p, rng), scattered_low_qual(rl, p, rng));
+                mock_read_pair(&format!("gp_{}", i), q1, q2, i as u64 * 500)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_generated_reads_keep_the_pools_read_to_read_spread() {
+        // Real reads are good or poor as a whole: on HG002 35x the SD of each
+        // read's mean quality is 2.08, and a first-order chain gives 0.52.
+        let rl = 100usize;
+        let mut tr = StdRng::seed_from_u64(31);
+        let pairs = good_and_poor_pairs(rl, 4000, &mut tr);
+        let pool_sd = read_mean_sd(&pairs.iter().flat_map(|p| [&p.qual1, &p.qual2]).collect::<Vec<_>>());
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 200_000], rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(32);
+        let made: Vec<ReadPair> = (0..2000u64)
+            .map(|i| gen.generate_read_pair("chr1", 1000 + i * 50, 300, &no_alleles, "p", &mut rng).unwrap())
+            .collect();
+        let made_sd = read_mean_sd(&made.iter().flat_map(|p| [&p.qual1, &p.qual2]).collect::<Vec<_>>());
+        assert!(
+            (made_sd / pool_sd - 1.0).abs() <= 0.15,
+            "generated read-mean SD {:.2} should be within 15% of the pool's {:.2}",
+            made_sd,
+            pool_sd
+        );
+    }
+
+    #[test]
+    fn test_the_two_mates_of_a_generated_pair_share_the_pools_mate_link() {
+        // A pair's two reads come off one cluster pair: on HG002 35x the
+        // correlation of R1's and R2's mean quality is 0.55.
+        let rl = 100usize;
+        let mut tr = StdRng::seed_from_u64(41);
+        let pairs = good_and_poor_pairs(rl, 4000, &mut tr);
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 200_000], rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(42);
+        let (mut r1, mut r2) = (Vec::new(), Vec::new());
+        for i in 0..2000u64 {
+            let p = gen.generate_read_pair("chr1", 1000 + i * 50, 300, &no_alleles, "p", &mut rng).unwrap();
+            r1.push(mean_phred(&p.qual1));
+            r2.push(mean_phred(&p.qual2));
+        }
+        let n = r1.len() as f64;
+        let (m1, m2) = (r1.iter().sum::<f64>() / n, r2.iter().sum::<f64>() / n);
+        let cov: f64 = r1.iter().zip(&r2).map(|(a, b)| (a - m1) * (b - m2)).sum();
+        let v1: f64 = r1.iter().map(|a| (a - m1).powi(2)).sum();
+        let v2: f64 = r2.iter().map(|b| (b - m2).powi(2)).sum();
+        let corr = cov / (v1 * v2).sqrt();
+        assert!(corr > 0.5, "the mates' mean qualities should correlate above 0.5, got {:.3}", corr);
+    }
+
+    /// Donor pairs over `reference` (chr1): R1 forward at a random place and
+    /// R2 reverse 200 bp on, both 100 bp. Good pairs have 10% of bases at Q11
+    /// and err at 2% there; poor pairs 60% and 30%. Q37 bases never err.
+    /// Two pairs in five are poor, so the 40% read-class cut falls between the
+    /// two kinds rather than inside one: at half and half, one class holds both.
+    fn donors_that_err_by_read(reference: &[u8], n: usize, rng: &mut StdRng) -> Vec<ReadPair> {
+        use crate::types::MateAlignment;
+        let rl = 100usize;
+        let read = |start: usize, reverse: bool, p_low: f64, p_err: f64, rng: &mut StdRng| {
+            let mut seq = reference[start..start + rl].to_vec();
+            if reverse {
+                reverse_complement(&mut seq);
+            }
+            let mut qual = Vec::with_capacity(rl);
+            for b in seq.iter_mut() {
+                if rng.gen::<f64>() < p_low {
+                    qual.push(b'!' + 11);
+                    if rng.gen::<f64>() < p_err {
+                        *b = random_different_base(*b, rng);
+                    }
+                } else {
+                    qual.push(b'!' + 37);
+                }
+            }
+            (seq, qual)
+        };
+        (0..n)
+            .map(|i| {
+                let (p_low, p_err) = if i % 5 >= 2 { (0.1, 0.02) } else { (0.6, 0.30) };
+                let start = rng.gen_range(100..reference.len() - 500);
+                let (seq1, qual1) = read(start, false, p_low, p_err, rng);
+                let (seq2, qual2) = read(start + 200, true, p_low, p_err, rng);
+                ReadPair {
+                    name: format!("d_{}", i),
+                    seq1,
+                    qual1,
+                    seq2,
+                    qual2,
+                    ref_start: start as u64,
+                    ref_end: (start + 300) as u64,
+                    insert_size: 300,
+                    chrom: "chr1".to_string(),
+                    align: Some(Box::new([
+                        MateAlignment { start: start as u64, reverse: false, cigar: vec![(b'M', rl as u32)] },
+                        MateAlignment { start: (start + 200) as u64, reverse: true, cigar: vec![(b'M', rl as u32)] },
+                    ])),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_generated_errors_follow_the_donors_rate_by_kind_of_read() {
+        // At the same quality, a poor real read errs far more than a good
+        // one: aligned HG002 bases at Q25 err 0.07% in good reads and 0.95%
+        // in poor ones. 10^(-Q/10) gives both the same rate.
+        let rl = 100usize;
+        // 0.5x, so almost no reference position has the 5 donor reads the
+        // variant rule needs. At 3x, positions where one poor read erred among
+        // 5-10 reads were taken for the sample's own variants (12% of donor
+        // bases) and the poor reads' rate was learned as 0.24. At a real
+        // sample's ~30x, one error is ~3% of a position's reads, under 10%.
+        let reference = scrambled_seq(2_400_000, 61);
+        let mut tr = StdRng::seed_from_u64(62);
+        let donors = donors_that_err_by_read(&reference, 6000, &mut tr);
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chr1".to_string(), reference.clone());
+        let shared = SharedReference::from_sequences(seqs);
+        let profile = QualityProfile::from_donor_pairs(&donors, rl, &shared);
+        let gen = mock_gen_with_profile(profile, reference.clone(), rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(63);
+        // [good, poor]: (wrong Q11 bases, Q11 bases)
+        let mut tally = [(0u64, 0u64); 2];
+        for i in 0..4000u64 {
+            let start = 1000 + i * 90;
+            let p = gen.generate_read_pair("chr1", start, 300, &no_alleles, "p", &mut rng).unwrap();
+            let mut fwd = reference[start as usize..start as usize + rl].to_vec();
+            fwd.iter_mut().for_each(|b| *b = b.to_ascii_uppercase());
+            let mut rev = reference[start as usize + 200..start as usize + 300].to_vec();
+            reverse_complement(&mut rev);
+            for (seq, qual) in [(&p.seq1, &p.qual1), (&p.seq2, &p.qual2)] {
+                let mism = |t: &[u8]| seq.iter().zip(t).filter(|(a, b)| a != b).count();
+                let template = if mism(&fwd) < mism(&rev) { &fwd } else { &rev };
+                let kind = (mean_phred(qual) < 30.0) as usize;
+                for ((&b, &t), &q) in seq.iter().zip(template.iter()).zip(qual.iter()) {
+                    if q == b'!' + 11 {
+                        tally[kind].1 += 1;
+                        tally[kind].0 += (b != t) as u64;
+                    }
+                }
+            }
+        }
+        let rate = |k: usize| tally[k].0 as f64 / tally[k].1 as f64;
+        assert!((rate(0) - 0.02).abs() < 0.05, "good reads' Q11 bases should err near 2%, got {:.3}", rate(0));
+        assert!((rate(1) - 0.30).abs() < 0.05, "poor reads' Q11 bases should err near 30%, got {:.3}", rate(1));
+    }
+
+    #[test]
+    fn test_generated_qualities_follow_the_pools_pattern_over_more_than_one_base() {
+        // Donor qualities run Q37 Q37 Q11 Q11 Q37 Q37 ..., each read from a
+        // random phase: the next quality is fixed by the last two, while the
+        // last one alone leaves it a coin flip.
+        let rl = 60usize;
+        let mut tr = StdRng::seed_from_u64(91);
+        let pattern = |phase: usize| -> Vec<u8> {
+            (0..rl).map(|i| if (i + phase) % 4 < 2 { b'!' + 37 } else { b'!' + 11 }).collect()
+        };
+        let pairs: Vec<ReadPair> = (0..3000)
+            .map(|i| mock_read_pair(&format!("pt_{}", i), pattern(tr.gen_range(0..4)), pattern(tr.gen_range(0..4)), i * 300))
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 400_000], rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(92);
+        let (mut kept, mut all) = (0usize, 0usize);
+        for i in 0..1000u64 {
+            let p = gen.generate_read_pair("chr1", 1000 + i * 200, 250, &no_alleles, "p", &mut rng).unwrap();
+            for q in [&p.qual1, &p.qual2] {
+                for i in 2..q.len() {
+                    all += 1;
+                    // Two alike are followed by a change, two different by a repeat.
+                    kept += ((q[i] == q[i - 1]) == (q[i - 1] != q[i - 2])) as usize;
+                }
+            }
+        }
+        let share = kept as f64 / all as f64;
+        assert!(share > 0.95, "only {:.3} of generated qualities follow the two-base pattern", share);
+    }
+
+    #[test]
+    fn test_a_pool_of_many_quality_values_generates_only_those_values() {
+        // Older Illumina BAMs keep ~40 quality values, not 4 bins (the
+        // novoalign HG002 chr20 BAM has 31): the history bins them.
+        let rl = 80usize;
+        let mut tr = StdRng::seed_from_u64(71);
+        let values: Vec<u8> = (2..42).map(|q| b'!' + q).collect();
+        let pairs: Vec<ReadPair> = (0..1500)
+            .map(|i| {
+                let q1: Vec<u8> = (0..rl).map(|_| values[tr.gen_range(0..values.len())]).collect();
+                let q2: Vec<u8> = (0..rl).map(|_| values[tr.gen_range(0..values.len())]).collect();
+                mock_read_pair(&format!("v_{}", i), q1, q2, i as u64 * 300)
+            })
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let gen = mock_gen_with_profile(profile, vec![b'A'; 300_000], rl, 0.0);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(72);
+        let mut seen = std::collections::BTreeSet::new();
+        for i in 0..500u64 {
+            let p = gen.generate_read_pair("chr1", 1000 + i * 100, 250, &no_alleles, "p", &mut rng).unwrap();
+            for &q in p.qual1.iter().chain(&p.qual2) {
+                assert!(values.contains(&q), "Q{} is not one of the pool's values", q - b'!');
+                seen.insert(q);
+            }
+        }
+        assert!(seen.len() >= 35, "only {} of the pool's 40 values came out", seen.len());
+    }
+
+    #[test]
+    fn test_an_n_reports_q2_and_the_read_goes_on() {
+        // An `N` is a no-call at Q2 (L18); the read goes on to its full
+        // length, drawing from the pool's own values after it.
+        let rl = 60usize;
+        let pairs: Vec<ReadPair> = (0..200)
+            .map(|i| mock_read_pair(&format!("n_{}", i), vec![b'!' + 37; rl], vec![b'!' + 37; rl], i * 300))
+            .collect();
+        let profile = QualityProfile::from_read_pairs(&pairs, rl);
+        let mut seq = scrambled_seq(2000, 81);
+        seq[520] = b'N';
+        let gen = mock_gen_with_profile(profile, seq, rl, 0.0);
+        let mut rng = StdRng::seed_from_u64(82);
+        let (read_seq, read_qual) = gen.generate_read("chr1", 500, &HashMap::new(), 1, false, rl, &mut rng);
+        assert_eq!(read_seq.len(), rl);
+        assert_eq!(read_seq[20], b'N');
+        assert_eq!(read_qual[20], b'!' + 2, "the N reports Q2");
+        assert!(read_qual[21..].iter().all(|&q| q == b'!' + 37), "after the N the read draws the pool's Q37 again");
     }
 
     // --- N7: how far a small pool's quality model drifts (a measurement) ---
@@ -2419,7 +2068,7 @@ mod tests {
         // Below 1,000 donor pairs the fake reads' low-quality runs come out
         // too short (N7): the run goes on, but it has to say so, with the
         // pool size, the size it needs, and the census that shows why.
-        let census = "Markov bins: base 0/4832, cycle 146/1208 usable";
+        let census = "12 full contexts with at least 20 observations";
         let warning = thin_profile_warning(32, census).expect("32 pairs is under the measured size");
         for part in ["32", "1000", census] {
             assert!(warning.contains(part), "the warning must name {:?}: {}", part, warning);
@@ -2449,28 +2098,31 @@ mod tests {
         assert!((d[2] - 1.0).abs() < 1e-12, "M3 {}", d[2]);
     }
 
-    /// Draw R1 and R2 qualities from `profile` over each pair's own bases,
-    /// chaining the previous quality forward as `generate_from_template`
-    /// does, `N` at Q2 included.
+    /// Draw R1 and R2 qualities from `profile` over each pair's own bases, as
+    /// `generate_from_template` does: both classes in one draw, the history
+    /// running along the read, `N` at Q2 included.
     fn n7_draw(profile: &QualityProfile, pairs: &[ReadPair], rng: &mut StdRng) -> QualPairs {
-        fn draw(profile: &QualityProfile, read_num: u8, bases: &[u8], rng: &mut StdRng) -> Vec<u8> {
-            let mut prev = None;
-            let mut out = Vec::with_capacity(bases.len());
+        fn draw(profile: &QualityProfile, read_num: u8, class: usize, bases: &[u8], rng: &mut StdRng) -> Vec<u8> {
+            let mut state = profile.start_read(read_num, Some(class), rng);
+            let len = bases.len();
+            let mut out = Vec::with_capacity(len);
             for (c, &b) in bases.iter().enumerate() {
-                let base = b.to_ascii_uppercase();
-                let q = if base == b'N' {
+                let q = if b.eq_ignore_ascii_case(&b'N') {
                     N_QUAL
                 } else {
-                    profile.sample_quality(read_num, c, base, prev, rng)
+                    profile.next_quality(read_num, &state, len - c, rng)
                 };
                 out.push(q);
-                prev = Some(q);
+                profile.emitted(&mut state, q);
             }
             out
         }
         pairs
             .iter()
-            .map(|p| (draw(profile, 1, &p.seq1, rng), draw(profile, 2, &p.seq2, rng)))
+            .map(|p| {
+                let (c1, c2) = profile.draw_classes(rng);
+                (draw(profile, 1, c1, &p.seq1, rng), draw(profile, 2, c2, &p.seq2, rng))
+            })
             .collect()
     }
 
@@ -2546,5 +2198,107 @@ mod tests {
             .find(|&i| ok[i..].iter().all(|&b| b))
             .map(|i| sizes[i]);
         println!("N*\t{:?}", n_star);
+    }
+
+    // --- K4: how many donor pairs the quality model needs (a measurement) ---
+
+    /// K1's three numbers for `fake` strings against `real` ones: the ratio of
+    /// their read-mean SDs, and two-proportion z for the share of perfect
+    /// reads (every base at `real`'s top quality) and of crashed reads (at
+    /// least 10 of the last 20 qualities below Q15).
+    fn k1_metrics(fake: &QualPairs, real: &QualPairs) -> [f64; 3] {
+        let reads = |set: &QualPairs| -> Vec<Vec<u8>> {
+            set.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).filter(|q| !q.is_empty()).collect()
+        };
+        let (f, r) = (reads(fake), reads(real));
+        let top = *r.iter().flatten().max().unwrap();
+        let sd = |v: &[Vec<u8>]| read_mean_sd(&v.iter().collect::<Vec<_>>());
+        let share = |v: &[Vec<u8>], pred: &dyn Fn(&[u8]) -> bool| {
+            (v.iter().filter(|q| pred(q)).count() as f64, v.len() as f64)
+        };
+        let z = |(k1, n1): (f64, f64), (k2, n2): (f64, f64)| {
+            let p = (k1 + k2) / (n1 + n2);
+            let se = (p * (1.0 - p) * (1.0 / n1 + 1.0 / n2)).sqrt();
+            if se == 0.0 { 0.0 } else { (k1 / n1 - k2 / n2) / se }
+        };
+        let perfect = |q: &[u8]| q.iter().all(|&b| b == top);
+        let crashed = |q: &[u8]| q.len() >= 20 && q[q.len() - 20..].iter().filter(|&&b| b < b'!' + 15).count() >= 10;
+        [
+            sd(&f) / sd(&r),
+            z(share(&f, &perfect), share(&r, &perfect)),
+            z(share(&f, &crashed), share(&r, &crashed)),
+        ]
+    }
+
+    #[test]
+    fn test_k1_metrics_measure_what_they_say() {
+        let q = |v: &[u8]| v.iter().map(|p| p + 33).collect::<Vec<u8>>();
+        let mut a: QualPairs = Vec::new();
+        for i in 0..100 {
+            let good = q(&[37; 30]);
+            let poor = if i % 2 == 0 { q(&[37; 30]) } else { q(&[11; 30]) };
+            a.push((good, poor));
+        }
+        let m = k1_metrics(&a, &a);
+        assert!((m[0] - 1.0).abs() < 1e-12 && m[1] == 0.0 && m[2] == 0.0, "a set against itself: {:?}", m);
+        // All average: the SD collapses, and there are no perfect or crashed reads.
+        let b: QualPairs = (0..100).map(|_| (q(&[30; 30]), q(&[30; 30]))).collect();
+        let m = k1_metrics(&b, &a);
+        assert!(m[0] < 0.01 && m[1] < -3.0 && m[2] < -3.0, "an all-average set against a mixed one: {:?}", m);
+    }
+
+    /// K4 of docs/superpowers/plans/2026-10-07-quality-model.md. Run by hand:
+    /// `SPIKE_N7_BAM=<HG002 35x BAM> cargo test --release -- --ignored
+    /// measure_quality_pool_size --nocapture`. A 200 kb window (N7's 30 kb
+    /// holds ~2,400 pairs, too few for a 5,000-pair pool), split by name into
+    /// a train and a held-out half; for each pool size, 20 random pools from
+    /// the train half generate the held-out pairs' strings, and K1's rule is
+    /// applied to the medians: SD ratio 0.85-1.15, |z| < 3 for perfect and
+    /// crashed reads.
+    #[test]
+    #[ignore]
+    fn measure_quality_pool_size() {
+        use crate::extract::extract_read_pairs;
+        const READ_LENGTH: usize = 151;
+        let bam = std::env::var("SPIKE_N7_BAM").expect("set SPIKE_N7_BAM to the HG002 35x BAM");
+        let pool = extract_read_pairs(&bam, "chr20", 38_402_500, 38_602_500, 20, None).unwrap().pairs;
+        let fnv = |name: &str| {
+            name.bytes()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+        };
+        let (train, held): (Vec<ReadPair>, Vec<ReadPair>) = pool.into_iter().partition(|p| fnv(&p.name) % 2 == 0);
+        let real: QualPairs = held.iter().map(|p| (p.qual1.clone(), p.qual2.clone())).collect();
+        println!("pool\ttrain={}\theld_out={}", train.len(), held.len());
+        let sizes = [500usize, 1000, 2000, 5000];
+        let mut ok = Vec::new();
+        for (si, &n) in sizes.iter().enumerate() {
+            let n = n.min(train.len());
+            let mut per_metric: [Vec<f64>; 3] = Default::default();
+            for rep in 0..20u64 {
+                let mut rng = StdRng::seed_from_u64(1000 * si as u64 + rep);
+                let subset: Vec<ReadPair> = rand::seq::index::sample(&mut rng, train.len(), n)
+                    .iter()
+                    .map(|i| train[i].clone())
+                    .collect();
+                let profile = QualityProfile::from_read_pairs(&subset, READ_LENGTH);
+                let m = k1_metrics(&n7_draw(&profile, &held, &mut rng), &real);
+                println!("size\t{}\t{}\t{:.3}\t{:.2}\t{:.2}", n, rep, m[0], m[1], m[2]);
+                for k in 0..3 {
+                    per_metric[k].push(m[k]);
+                }
+            }
+            let median: Vec<f64> = per_metric
+                .iter_mut()
+                .map(|v| {
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    (v[9] + v[10]) / 2.0
+                })
+                .collect();
+            let pass = (0.85..=1.15).contains(&median[0]) && median[1].abs() < 3.0 && median[2].abs() < 3.0;
+            println!("median\t{}\t{:.3}\t{:.2}\t{:.2}\t{}", n, median[0], median[1], median[2], if pass { "pass" } else { "fail" });
+            ok.push(pass);
+        }
+        let n_star = (0..sizes.len()).find(|&i| ok[i..].iter().all(|&b| b)).map(|i| sizes[i]);
+        println!("smallest passing size, and every larger one: {:?}", n_star);
     }
 }

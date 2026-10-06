@@ -7,7 +7,9 @@ use anyhow::{Context, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::stats::FragmentDist;
-use crate::types::{ReadPair, ReadPool};
+use crate::types::{MateAlignment, ReadPair, ReadPool};
+use noodles::sam::alignment::record::cigar::op::{Kind, Op};
+use noodles::sam::alignment::record::Cigar as CigarTrait;
 
 /// Check if a path refers to a CRAM file (by extension).
 pub fn is_cram(path: &str) -> bool {
@@ -566,6 +568,30 @@ struct PartialRead {
     qual: Vec<u8>,
     pos: u64,
     tlen: i32,
+    /// Whether the record was reverse-complemented (`seq`/`qual` are flipped
+    /// back to sequencing order).
+    reverse: bool,
+    /// The record's CIGAR, compacted (see [`MateAlignment::cigar`]).
+    cigar: Vec<(u8, u32)>,
+}
+
+/// A CIGAR as [`MateAlignment::cigar`] keeps it: M, = and X as `b'M'`, D and
+/// N as `b'D'`, padding dropped. A malformed op ends the walk.
+fn compact_cigar<I: IntoIterator<Item = std::io::Result<Op>>>(ops: I) -> Vec<(u8, u32)> {
+    let mut out = Vec::new();
+    for op in ops {
+        let Ok(op) = op else { break };
+        let code = match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => b'M',
+            Kind::Insertion => b'I',
+            Kind::Deletion | Kind::Skip => b'D',
+            Kind::SoftClip => b'S',
+            Kind::HardClip => b'H',
+            Kind::Pad => continue,
+        };
+        out.push((code, op.len() as u32));
+    }
+    out
 }
 
 /// Compute the fragment end position from template length and read positions.
@@ -602,6 +628,10 @@ fn build_pair_from_partials(
         (read2.tlen as i64).unsigned_abs() as i64
     };
 
+    let align = Some(Box::new([
+        MateAlignment { start: read1.pos, reverse: read1.reverse, cigar: read1.cigar },
+        MateAlignment { start: read2.pos, reverse: read2.reverse, cigar: read2.cigar },
+    ]));
     ReadPair {
         name,
         seq1: read1.seq,
@@ -612,6 +642,7 @@ fn build_pair_from_partials(
         ref_end,
         insert_size,
         chrom: chrom.to_string(),
+        align,
     }
 }
 
@@ -715,16 +746,20 @@ fn parse_partial_from_bam_record(
     }
     let mut qual: Vec<u8> = raw_qual.iter().map(|s| s.wrapping_add(33)).collect();
 
-    if flags.is_reverse_complemented() {
+    let reverse = flags.is_reverse_complemented();
+    if reverse {
         reverse_complement(&mut seq);
         qual.reverse();
     }
+    let cigar = compact_cigar(record.cigar().iter());
 
     Some(PartialRead {
         seq,
         qual,
         pos,
         tlen,
+        reverse,
+        cigar,
     })
 }
 
@@ -760,16 +795,20 @@ fn parse_partial_from_record_buf(
     }
     let mut qual: Vec<u8> = raw_qual.iter().map(|s| s.wrapping_add(33)).collect();
 
-    if flags.is_reverse_complemented() {
+    let reverse = flags.is_reverse_complemented();
+    if reverse {
         reverse_complement(&mut seq);
         qual.reverse();
     }
+    let cigar = compact_cigar(CigarTrait::iter(&buf.cigar()));
 
     Some(PartialRead {
         seq,
         qual,
         pos,
         tlen,
+        reverse,
+        cigar,
     })
 }
 
@@ -1401,6 +1440,7 @@ mod tests {
             ref_end: start + 400,
             insert_size: 400,
             chrom: "chr1".to_string(),
+            align: None,
         };
         let names = |input: Vec<ReadPair>| -> Vec<String> {
             let pool = build_read_pool(input, FragmentDist::from_stats(400.0, 80.0));
@@ -1430,6 +1470,7 @@ mod tests {
             ref_end: start + 400,
             insert_size: 400,
             chrom: "chr1".to_string(),
+            align: None,
         };
 
         let mut pairs = vec![pair("a", 10), pair("b", 20), pair("a", 10)];
@@ -1445,6 +1486,8 @@ mod tests {
             qual: vec![b'!' + 30; len],
             pos,
             tlen,
+            reverse: false,
+            cigar: vec![(b'M', len as u32)],
         }
     }
 
