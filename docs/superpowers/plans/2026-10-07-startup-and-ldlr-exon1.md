@@ -55,3 +55,40 @@ Date: 2026-10-07. Base: master `4a5672d`. Two small defects found by the improve
 ## Out of scope
 
 The bundled `ldlr_known_deletions_hg38.vcf`, whose round-number breakpoints are named like published alleles (M29 part 2). MANE GFF input. Decoy contigs present in a FASTA, which are readable and so are kept.
+
+## Result (2026-10-07): every locked check passes
+
+Code: `1103835` (the fix and its two tests) and `9964b38` (an end-to-end test of the wiring). Binaries: master `4a5672d` is `df547601`, and the fix is `e533ec11` (built from `1103835`; `9964b38` adds a test only).
+
+**C1: PASS.** The HG001 CRAM (`NA12878.final.cram`, no-alt FASTA, `del:chr19:11100000-11102000 --threads 8`) exits 0 in 5 s.
+- Master exits 1 with `invalid reference sequence name: chrUn_JTFH01000277v1_decoy`.
+- The log names the dropped contigs: `Quality sample: 2620 contig(s) with reads are not in the reference FASTA and are left out (e.g. HLA-A*01:01:01:01, HLA-A*01:01:01:02N, HLA-A*01:01:38L)`.
+- The sample: 20 blocks from chr1:73995837 to chrX:144483718, 110,789 pairs. Read in 2.5 s, learned in 0.9 s.
+- This CRAM has eight quality values (2, 3, 4, 5, 6, 10, 20, 30).
+
+**C2: PASS.** Master's binary against the fix, 10 of 10 files md5-identical:
+
+| case | R1 | R2 | truth.vcf | replaced_reads | fastq_removed_reads | SPIKE_ reads in R1 |
+|---|---|---|---|---|---|---|
+| (a) 35x dup + snp, seed 1 | `0bcd4052fb` | `27e7b36a4b` | `3c9571b20c` | `36db938278` | `71ff026371` | 120,099 |
+| (b) 31-value snp + del | `fd005167f5` | `2a563a9898` | `43ecf37fa7` | `06b4805f71` | `33397ca685` | 325 |
+
+On both, the new "left out" line is absent: no window was dropped, despite the 31-value BAM's 2,385 extra `@SQ`.
+
+**C3: PASS.** `test_the_bundled_ldlr_exons_are_manes` checks all 18 exons against MANE v1.0 `NM_000527.5` and that exon 1 holds the ATG at 0-based 11089548.
+- It FAILED on the old file: `left: [(1, 11090578, 11090919), …] right: [(1, 11089462, 11089615), …]`.
+- It passes on the new one.
+- The file diff is two lines: exon 1, and exon 18's end. Exons 2-17 are byte-identical.
+
+**C4: PASS.**
+- 753 passed, 0 failed, 3 ignored. That is 750 plus 3 new tests, with nothing removed.
+- Clippy is identical to `4a5672d`: 16 lines, the same warnings.
+
+**C5: PASS.** Each mutant turned a test FAILED:
+- **The old exon 1 back:** `test_the_bundled_ldlr_exons_are_manes` FAILED. This is the pre-fix run above, on the same file content.
+- **The contig filter removed** (`windows_on_reference` keeps everything): `test_sample_windows_on_contigs_the_reference_lacks_are_left_out` FAILED.
+- **The filter left out of `sample_input`'s wiring:** this mutant survived the unit test above, so an end-to-end test was added (`9964b38`). With the mutant it FAILED at `blocks.expect("the startup sample aborted on a contig the FASTA lacks")`, the same abort as the bug. Without the mutant it passes.
+
+**Not done here.**
+- The bundled `ldlr_known_deletions_hg38.vcf` still has round-number breakpoints named like published alleles (M29 part 2).
+- A FASTA that holds decoys is readable, so decoy blocks are still sampled from it.
