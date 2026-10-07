@@ -92,3 +92,32 @@ On both, the new "left out" line is absent: no window was dropped, despite the 3
 **Not done here.**
 - The bundled `ldlr_known_deletions_hg38.vcf` still has round-number breakpoints named like published alleles (M29 part 2).
 - A FASTA that holds decoys is readable, so decoy blocks are still sampled from it.
+
+## Follow-up after review (2026-10-07)
+
+Two independent reviewers, one on the code and one on the LDLR data, found no critical or important problem.
+- The data reviewer rebuilt the BED from the MANE GFF: byte-identical, 18 lines. They checked the ATG and the stop codon (TGA at chr19:11131314-11131316, inside exon 18).
+
+Their minors, fixed in `70e25c9`:
+1. **A contig-name mismatch blamed the wrong cause** ("20" against "chr20", reachable with an SV event). Every window was dropped and the sample came back empty, so `from_input` bailed with "check that the file is indexed and that --min-mapq…". Now `sample_input` refuses such an input itself, naming the cause. Measured with a reheadered no-chr BAM against a chr20 FASTA: `Error: none of the contigs … lists (1 of them, e.g. 20) are in the reference FASTA …: the input and the FASTA name their contigs differently (e.g. "20" against "chr20") or come from different builds`. Master's error was `chromosome '20' not found in FASTA index`.
+2. **The end-to-end test passed vacuously.** A filter dropping every window passed all 753 tests. The test is now two:
+   - a chrA BAM against a chrA FASTA must sample all 20 pairs;
+   - a decoy-only BAM must be refused, with the mismatch named.
+3. **The log line said "contig(s) with reads"**, which was wrong on the no-index path. It now says "contig(s) of <input>". `sample_input`'s doc now says the windows are filtered.
+4. **The exon test also checks** that there is one LDLR, on chr19.
+
+**Mutants, each FAILED a test:**
+- drop-all wiring → `test_the_startup_sample_reads_the_contigs_the_fasta_holds`;
+- filter not wired → `test_the_startup_sample_names_a_contig_the_fasta_lacks`;
+- no mismatch error → the same test;
+- LDLR rows on chr1 → `test_the_bundled_ldlr_exons_are_manes`.
+
+**Tests and clippy.** 754 passed, 0 failed, 3 ignored. Clippy is identical to `4a5672d`. A `.err().expect()` first added a warning and was replaced by `expect_err` before the commit was final.
+
+**Re-run with the new binary (`23560464`):**
+- C1: the HG001 CRAM exits 0.
+- C2: 10 of 10 files are md5-identical to master on the 35x and 31-value runs (120,099 and 325 SPIKE_ reads).
+
+**Left open, both older than this change:**
+- A CRAM multi-reference slice can mix FASTA and non-FASTA contigs. On HG001, 3 of 76,890 slices do, and the sample cannot reach them. An event on chrEBV aborts there, as it did before.
+- The README's gVCF example `del:chr19:11090000-11133000` misses MANE exon 1. It does not claim to be the whole gene.
