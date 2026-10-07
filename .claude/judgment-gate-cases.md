@@ -4,6 +4,38 @@ This repo's own history of retractions: the specific ways this codebase has fool
 general gate catches general errors; this catches the ones that actually happen here. Each entry says
 what was claimed, what the claim actually rested on, and which gate would have caught it earlier.
 
+## 2026-10-07 — K6: "a 31-value alphabet crashes too often, 24% against 14%" was composition
+
+- **Claimed.** On `HG002.GRCh38.chr20.bam` (31 quality values) spike's reads crash 24.3% of the time
+  against the real reads' 14.4%, z +6.61, so "this alphabet now over-crashes"
+  (`docs/superpowers/plans/2026-10-07-quality-model-v2.md`, Result, K6).
+- **What it actually rested on.** Comparing **spike's remade reads**, which stand only over the two
+  events' own templates — and one of those templates is a T13 about 200 bp left of the deletion edge
+  — with **every read in two windows** totalling 25 kb. The two sets do not stand over the same DNA.
+  The model's own headline finding is that a run of 12+ makes a read crash 15% of the time against
+  0.46% with no run, so a set enriched in such templates *must* crash more. The gate was built to
+  measure that effect and then read its own enrichment as a defect.
+- **How it was caught.** By run bin (`docs/analysis/quality-model-v2/k6_runbins.py`): put both sets
+  in the bins `quality::run_bin` already defines, from the reference under each read. Within each
+  bin the two sets agree — in bin 3, 61.7% against 58.6% (R1) and 73.0% against 77.7% (R2). **23.8%**
+  of spike's reads sit in bin 3 against **6.7%** of the window's. At the donors' per-bin rates
+  spike's reads are expected to crash **23.76%**; they crash **24.31%**. A held-out check on the same
+  BAM (40,232 pairs) shows no over-crash at all: 6.15% / 16.43% against 6.78% / 18.55%.
+- **The tell that was in the data all along.** 650 spike reads against 5,127 real ones in the same
+  windows. A 7.9x difference in count is a difference in *where* the reads are, and the plan's own
+  table of crash rates by run bin was on the page above it.
+- **Which gate would have caught it.** Gate D step 1 (*could my own pipeline have produced this?*) —
+  specifically a **selection or composition effect**: the set being scored was chosen by where the
+  events are, not sampled from the comparison population.
+- **The rule.** Compare spike's reads to real reads **over the same templates** — the same run bin,
+  the same stratum — never to every read in a window. If the two sets differ in size by more than the
+  sampling, they differ in composition; stratify before taking a ratio.
+- **The same run's K3, briefly.** "Mates crash together less often, 4.74 against 11.6" was a ratio of
+  rare events computed on **five both-crashed pairs** (4,780 pairs × P(both) 0.00105 = 5.02; 12.21
+  expected at 11.6; Poisson P(X ≤ 5) = 0.018). On 62,682 held-out pairs the link is 10.55-11.91
+  against the real 7.77 — spike does not under-link there. **The rule:** before reporting a ratio of
+  probabilities as a difference, print the numerator's raw count. Five is not a measurement.
+
 ## 2026-09-26 — T3: "mappability dominates, 5 of 6" was 3 of 6
 
 - **Claimed.** Of CR2's six depth-fold warnings on real chr20 duplications, five "would not have

@@ -358,3 +358,77 @@ Still flat: the base itself is not in the context, only its runs.
   - mates crash together less often (K3);
   - a 31-value alphabet crashes too often (K6);
   - the run is 1.27x slower on a single event.
+
+## Correction (2026-10-07): K3 and K6
+
+Measured after the Result above was committed. The Result section is left as it stands; this is what
+is withdrawn from it. Scripts and outputs:
+`docs/analysis/quality-model-v2/k6_runbins.py` and `mates.py`, and
+`docs/superpowers/plans/2026-10-07-quality-speed.md` (Result).
+
+### K6's "a 31-value alphabet crashes too often" is **withdrawn**
+
+**Claimed.** 24.3% of spike's reads crash against 14.4% of the real reads, z +6.61, so "this
+alphabet now over-crashes".
+
+**What it rested on.** `k6score.py` compares **spike's remade reads** — the reads of two events,
+which sit over those events' own templates — with **every read in two windows** totalling 25 kb. The
+two sets do not stand over the same DNA.
+
+**The measurement.** `k6_runbins.py` puts both sets in run bins (the longest one-letter run in the
+reference under the read, in sequencing order, as `quality::run_bin` bins it):
+
+| set | R1 by bin 0 / 1 / 2 / 3 | R2 by bin 0 / 1 / 2 / 3 | overall | share in bin 3 |
+|---|---|---|---|---|
+| the donors in the windows | 4.1 / 6.2 / 9.0 / 58.6% | 14.4 / 13.0 / 18.9 / 77.7% | 13.88% of 7,304 | **6.7%** |
+| spike's remade reads | 6.0 / 3.1 / 7.1 / 61.7% | 14.6 / 14.8 / 23.1 / 73.0% | 24.31% of 650 | **23.8%** |
+
+- **Within each run bin spike's reads crash like the donors.** In bin 3, the one that matters:
+  61.7% against 58.6% (R1) and 73.0% against 77.7% (R2).
+- **The whole gap is composition.** 23.8% of spike's reads stand over a run of 12+ — a T13 about
+  200 bp left of the deletion edge — against 6.7% of the window's reads. Give spike's reads the
+  donors' crash rate in each bin and they would be **expected to crash 23.76%**. They crash
+  **24.31%**.
+- **A held-out check on the same BAM shows no over-crash**: on 40,232 held-out pairs, spike crashes
+  **6.15% / 16.43%** (R1 / R2) against the real **6.78% / 18.55%** — if anything slightly under.
+
+(`k6_runbins.py` reports the donors as 13.88% where `k6score.py` reported 14.36%: it reads the
+original BAM rather than the merged one, deduplicates by name and mate, and skips unmapped reads.
+The difference is 0.5 points and does not touch the conclusion.)
+
+**Withdrawn.** "A 31-value alphabet crashes too often (24.3% against 14.4%)" is not a finding about
+the alphabet, the model, or anything else. It is this run's two events standing over a long T run.
+
+### K3's "mates crash together less often" is **downgraded**
+
+**Claimed.** Spike's mate crash link is 4.74 against the sample's 11.6.
+
+**What it rested on.** 4,780 pairs with P(both) 0.00105 — **five both-crashed pairs**. At the
+sample's link 11.6, 0.0121 × 0.0182 × 11.6 × 4,780 = **12.21** were expected, and Poisson
+P(X ≤ 5 | µ = 12.21) = **0.018**. One rare-event ratio built on five events.
+
+**The measurement.** On 62,682 held-out 35x pairs, over three seeds:
+
+| set | P(R1) | P(R2) | P(both) | link |
+|---|---|---|---|---|
+| real | 0.84% | 1.27% | 0.083% | **7.77** |
+| spike, seed 21 | 0.74% | 1.12% | 0.088% | **10.55** |
+| spike, seed 22 | 0.73% | 1.11% | 0.089% | **11.02** |
+| spike, seed 23 | 0.74% | 1.10% | 0.097% | **11.91** |
+
+Spike's link is **above** the real one there, not below. On the 31-value BAM's 40,232 held-out
+pairs: 2.93 against 2.77.
+
+**Downgraded.** "Mates crash together less often" is a weak signal at best, and the held-out data
+show no under-linking. It is not withdrawn only because the K2-event pools are the hospital-shaped
+case and were never re-measured at a size that could tell.
+
+### What this changes in the Result's "Still off" list
+
+- **"a 31-value alphabet crashes too often (K6)" — gone.** Composition, not the model.
+- **"mates crash together less often (K3)" — downgraded** to: not shown; five pairs, and the
+  held-out link is 10.6-11.9 against 7.8.
+- **"the run is 1.27x slower on a single event" — fixed**, at 1.18x with the output byte-identical
+  (`2026-10-07-quality-speed.md`).
+- Still standing: crashed reads about 15% short on 35x, and run-free reads clipping too little on
+  the hospital BAM.
