@@ -306,7 +306,7 @@ fn pick_sample_name(rg_samples: &[String]) -> Option<String> {
 }
 
 /// The header of a BAM or CRAM file.
-fn read_header(alignment_path: &str, ref_path: Option<&str>) -> Result<noodles::sam::Header> {
+pub(crate) fn read_header(alignment_path: &str, ref_path: Option<&str>) -> Result<noodles::sam::Header> {
     Ok(if crate::extract::is_cram(alignment_path) {
         let rp = ref_path.ok_or_else(|| {
             anyhow::anyhow!("CRAM input requires a reference FASTA (--reference)")

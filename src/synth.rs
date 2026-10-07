@@ -12,6 +12,7 @@
 //!    gives for that quality in that kind of read
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -24,21 +25,19 @@ use crate::reference::SharedReference;
 use crate::stats::FragmentDist;
 use crate::types::{ReadPair, ReadPool};
 
-/// Fewest donor pairs the quality model needs before its fake reads look like
-/// the sample's own. N7 measured 1,000 for the first-order chain this model
-/// replaced; offline, the context model reached the sample's read-to-read
-/// spread at 5,000 pairs but not at 1,000 (HG002 35x). Re-measured by K4 of
-/// docs/superpowers/plans/2026-10-07-quality-model.md.
-const MIN_PROFILE_PAIRS: usize = 1_000;
+/// Fewest sampled pairs the quality model is known to be good from: with
+/// 50,000 pairs of HG002 35x it made 0.99% crashed reads, with 120,000 0.94%
+/// (docs/superpowers/plans/2026-10-07-quality-model-v2.md).
+const MIN_PROFILE_PAIRS: usize = 50_000;
 
-/// The warning for a quality profile trained on `pairs` donor pairs with the
-/// bin census `census`, or `None` when there are enough pairs.
+/// The warning for a quality profile learned from `pairs` sampled pairs with
+/// the context census `census`, or `None` when there are enough pairs.
 pub(crate) fn thin_profile_warning(pairs: usize, census: &str) -> Option<String> {
     (pairs < MIN_PROFILE_PAIRS).then(|| {
         format!(
-            "Quality profile learned from {} donor pairs; below {} its reads come out \
-             more alike than the sample's (measured on HG002 35x). {}. Widen \
-             --flank or --region for a larger pool.",
+            "Quality profile learned from {} sampled pairs; it was measured good from {} \
+             (HG002 35x), and with fewer its crashed reads and their errors are learned \
+             from thinner counts. {}.",
             pairs, MIN_PROFILE_PAIRS, census
         )
     })
@@ -55,11 +54,15 @@ const INDEL_SLACK: usize = 10;
 /// an ordinary score (often Q37) instead (L18).
 const N_QUAL: u8 = b'!' + 2; // Q2
 
-pub use crate::quality::QualityProfile;
+pub use crate::quality::{ClassMix, QualityProfile};
 
 /// Generates synthetic reads from reference sequence + learned quality profile.
 pub struct SynthReadGenerator<'a> {
-    profile: QualityProfile,
+    /// The run's quality model, learned once from the startup sample.
+    profile: Arc<QualityProfile>,
+    /// The event's own read-class mix (`QualityProfile::class_mix`); `None`
+    /// draws the sample's.
+    class_mix: Option<ClassMix>,
     reference: &'a SharedReference,
     read_length: usize,
     /// Fraction of sequencing errors that are indels (vs substitutions).
@@ -78,13 +81,14 @@ pub struct SynthReadGenerator<'a> {
 
 impl<'a> SynthReadGenerator<'a> {
     pub fn new(
-        profile: QualityProfile,
+        profile: impl Into<Arc<QualityProfile>>,
         reference: &'a SharedReference,
         read_length: usize,
         indel_error_rate: f64,
     ) -> Self {
         Self {
-            profile,
+            profile: profile.into(),
+            class_mix: None,
             reference,
             read_length,
             indel_error_rate,
@@ -97,6 +101,13 @@ impl<'a> SynthReadGenerator<'a> {
     /// adapter-trimmed; `new` builds an untrimmed one.
     pub fn with_adapter_trim(mut self, on: bool) -> Self {
         self.adapter_trimmed = on;
+        self
+    }
+
+    /// This generator drawing read classes with the event's own `mix`; `new`
+    /// draws the sample's.
+    pub fn with_class_mix(mut self, mix: ClassMix) -> Self {
+        self.class_mix = Some(mix);
         self
     }
 
@@ -188,7 +199,8 @@ impl<'a> SynthReadGenerator<'a> {
                 // thrown away.
                 seq.push(b'N');
                 qual.push(N_QUAL);
-                self.profile.emitted(&mut state, N_QUAL);
+                self.profile.emitted(&mut state, N_QUAL, b'N');
+                self.profile.record_error(&mut state, false);
                 idx += 1;
                 continue;
             }
@@ -202,25 +214,29 @@ impl<'a> SynthReadGenerator<'a> {
                         // Insertion: add a random base without consuming template.
                         seq.push(random_base(rng));
                         qual.push(q);
-                        self.profile.emitted(&mut state, q);
+                        self.profile.emitted(&mut state, q, true_base);
+                        self.profile.record_error(&mut state, true);
                         // Don't advance idx — the template base is read next cycle.
                     } else {
                         // Deletion: skip this template base entirely.
                         idx += 1;
                         // Don't add to seq/qual — next iteration reads the next base.
-                        // Nothing was emitted, so the history stays as it is.
+                        // Nothing was emitted, so the history -- qualities,
+                        // run and errors -- stays as it is.
                     }
                 } else {
                     // Substitution error.
                     seq.push(random_different_base(true_base, rng));
                     qual.push(q);
-                    self.profile.emitted(&mut state, q);
+                    self.profile.emitted(&mut state, q, true_base);
+                    self.profile.record_error(&mut state, true);
                     idx += 1;
                 }
             } else {
                 seq.push(true_base);
                 qual.push(q);
-                self.profile.emitted(&mut state, q);
+                self.profile.emitted(&mut state, q, true_base);
+                self.profile.record_error(&mut state, false);
                 idx += 1;
             }
         }
@@ -264,23 +280,20 @@ impl<'a> SynthReadGenerator<'a> {
         rl: usize,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
-        self.generate_read_of_class(chrom, ref_start, alleles, read_num, None, is_reverse, rl, rng)
+        let template = self.template_at(chrom, ref_start, alleles, is_reverse, rl);
+        self.generate_from_template(&template, rl, read_num, None, rng)
     }
 
-    /// [`generate_read`](Self::generate_read) for a read of class `class`
-    /// (`None`: drawn for this mate alone).
-    #[allow(clippy::too_many_arguments)]
-    fn generate_read_of_class(
+    /// The template of a read at `ref_start` (see `generate_read`), in
+    /// sequencing order, with any indel slack past its 3' end.
+    fn template_at(
         &self,
         chrom: &str,
         ref_start: u64,
         alleles: &HashMap<u64, u8>,
-        read_num: u8,
-        class: Option<usize>,
         is_reverse: bool,
         rl: usize,
-        rng: &mut StdRng,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Vec<u8> {
         // Fetch extra ref bases in case indel errors shift our position. They
         // go past the read's 3' end, which for a reverse read is to the left.
         let slack = if self.indel_error_rate > 0.0 { INDEL_SLACK as u64 } else { 0 };
@@ -310,16 +323,23 @@ impl<'a> SynthReadGenerator<'a> {
         // end comes back short at its high end — which for a reverse read is
         // its 5' start. Represent that shortfall as `N` there, not as a
         // window shifted onto real bases from past the read's other end.
-        let template: Vec<u8> = if is_reverse {
+        if is_reverse {
             let missing = (fetch_end - fetch_start).saturating_sub(ref_seq.len() as u64) as usize;
             std::iter::repeat_n(b'N', missing)
                 .chain((0..ref_seq.len()).rev().map(|i| complement(base_at(i))))
                 .collect()
         } else {
             (0..ref_seq.len()).map(base_at).collect()
-        };
+        }
+    }
 
-        self.generate_from_template(&template, rl, read_num, class, rng)
+    /// Both mates' classes in one draw, so a poor pair is poor in both, given
+    /// the runs of one base each mate's template holds (`fwd`, `rev`: the
+    /// forward and reverse mate's, first `rl` bases) and the event's mix.
+    fn draw_pair_classes(&self, fwd: &[u8], rev: &[u8], rl: usize, r1_is_reverse: bool, rng: &mut StdRng) -> (usize, usize) {
+        let run = |t: &[u8]| crate::quality::template_run_bin(&t[..rl.min(t.len())]);
+        let (r1, r2) = if r1_is_reverse { (run(rev), run(fwd)) } else { (run(fwd), run(rev)) };
+        self.profile.draw_classes((r1, r2), self.class_mix.as_ref(), rng)
     }
 
     /// Generate a synthetic read pair for a fragment at a given position.
@@ -354,20 +374,19 @@ impl<'a> SynthReadGenerator<'a> {
         // quality model, is_reverse handles the flip, so whichever mate
         // ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
-        // Both mates' classes in one draw, so a poor pair is poor in both.
-        let classes = self.profile.draw_classes(rng);
+        let fwd_template = self.template_at(chrom, frag_start, alleles, false, rl as usize);
+        let rev_template = self.template_at(chrom, right_start, alleles, true, rl as usize);
+        let classes = self.draw_pair_classes(&fwd_template, &rev_template, rl as usize, r1_is_reverse, rng);
         let class_of = |num: u8| Some(if num == 1 { classes.0 } else { classes.1 });
 
         // Forward mate (left end of the fragment).
-        let (mut fwd_seq, mut fwd_qual) = self.generate_read_of_class(
-            chrom, frag_start, alleles, fwd_num, class_of(fwd_num), false, rl as usize, rng,
-        );
+        let (mut fwd_seq, mut fwd_qual) =
+            self.generate_from_template(&fwd_template, rl as usize, fwd_num, class_of(fwd_num), rng);
 
         // Reverse mate (right end) — generated in sequencing order, so it
         // already comes back in FASTQ orientation.
-        let (mut rev_seq, mut rev_qual) = self.generate_read_of_class(
-            chrom, right_start, alleles, rev_num, class_of(rev_num), true, rl as usize, rng,
-        );
+        let (mut rev_seq, mut rev_qual) =
+            self.generate_from_template(&rev_template, rl as usize, rev_num, class_of(rev_num), rng);
 
         self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
         self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
@@ -513,28 +532,8 @@ impl<'a> SynthReadGenerator<'a> {
         is_reverse: bool,
         rng: &mut StdRng,
     ) -> (Vec<u8>, Vec<u8>) {
-        self.generate_read_from_seq_of_class(seq, rl, read_num, None, is_reverse, rng)
-    }
-
-    /// [`generate_read_from_seq`](Self::generate_read_from_seq) for a read of
-    /// class `class` (`None`: drawn for this mate alone).
-    fn generate_read_from_seq_of_class(
-        &self,
-        seq: &[u8],
-        rl: usize,
-        read_num: u8,
-        class: Option<usize>,
-        is_reverse: bool,
-        rng: &mut StdRng,
-    ) -> (Vec<u8>, Vec<u8>) {
         let rl = rl.min(seq.len());
-        let mut template = seq.to_vec();
-        if is_reverse {
-            // Sequencing order: the reverse mate reads the other strand,
-            // 3' end of `seq` first.
-            reverse_complement(&mut template);
-        }
-        self.generate_from_template(&template, rl, read_num, class, rng)
+        self.generate_from_template(&template_from_seq(seq, is_reverse), rl, read_num, None, rng)
     }
 
     /// Generate a synthetic read pair from a variant haplotype.
@@ -579,18 +578,29 @@ impl<'a> SynthReadGenerator<'a> {
         // read_num picks the quality model, is_reverse handles the flip,
         // so whichever mate ends up as R1 keeps the R1 model.
         let (fwd_num, rev_num) = if r1_is_reverse { (2, 1) } else { (1, 2) };
-        // Both mates' classes in one draw, so a poor pair is poor in both.
-        let classes = self.profile.draw_classes(rng);
+        let fwd_template = template_from_seq(left_seq, false);
+        let rev_template = template_from_seq(right_seq, true);
+        let classes = self.draw_pair_classes(&fwd_template, &rev_template, rl_bases, r1_is_reverse, rng);
         let class_of = |num: u8| Some(if num == 1 { classes.0 } else { classes.1 });
 
         // Forward mate (left end of the fragment).
-        let (mut fwd_seq, mut fwd_qual) =
-            self.generate_read_from_seq_of_class(left_seq, rl_bases, fwd_num, class_of(fwd_num), false, rng);
+        let (mut fwd_seq, mut fwd_qual) = self.generate_from_template(
+            &fwd_template,
+            rl_bases.min(fwd_template.len()),
+            fwd_num,
+            class_of(fwd_num),
+            rng,
+        );
 
         // Reverse mate (right end): generated in sequencing order, so it
         // already comes back in FASTQ orientation.
-        let (mut rev_seq, mut rev_qual) =
-            self.generate_read_from_seq_of_class(right_seq, rl_bases, rev_num, class_of(rev_num), true, rng);
+        let (mut rev_seq, mut rev_qual) = self.generate_from_template(
+            &rev_template,
+            rl_bases.min(rev_template.len()),
+            rev_num,
+            class_of(rev_num),
+            rng,
+        );
 
         self.trim_adapter_start(frag_len, &mut fwd_seq, &mut fwd_qual);
         self.trim_adapter_start(frag_len, &mut rev_seq, &mut rev_qual);
@@ -641,6 +651,16 @@ impl<'a> SynthReadGenerator<'a> {
             spans,
         ))
     }
+}
+
+/// A haplotype slice `seq` as its read meets it, in sequencing order: the
+/// reverse mate reads the other strand, the 3' end of `seq` first.
+fn template_from_seq(seq: &[u8], is_reverse: bool) -> Vec<u8> {
+    let mut template = seq.to_vec();
+    if is_reverse {
+        reverse_complement(&mut template);
+    }
+    template
 }
 
 /// Where a planted pair lies on its haplotype, each `[start, end)`: the
@@ -2065,16 +2085,16 @@ mod tests {
 
     #[test]
     fn test_quality_profile_warns_below_the_measured_pool_size() {
-        // Below 1,000 donor pairs the fake reads' low-quality runs come out
-        // too short (N7): the run goes on, but it has to say so, with the
-        // pool size, the size it needs, and the census that shows why.
+        // Below 50,000 sampled pairs the model is learned from thinner counts
+        // than it was measured good with: the run goes on, but it has to say
+        // so, with the sample size, the size it needs, and the census.
         let census = "12 full contexts with at least 20 observations";
         let warning = thin_profile_warning(32, census).expect("32 pairs is under the measured size");
-        for part in ["32", "1000", census] {
+        for part in ["32", "50000", census] {
             assert!(warning.contains(part), "the warning must name {:?}: {}", part, warning);
         }
-        assert!(thin_profile_warning(999, census).is_some(), "999 pairs is still under it");
-        assert_eq!(thin_profile_warning(1_000, census), None, "1,000 pairs is enough");
+        assert!(thin_profile_warning(49_999, census).is_some(), "49,999 pairs is still under it");
+        assert_eq!(thin_profile_warning(50_000, census), None, "50,000 pairs is enough");
     }
 
     #[test]
@@ -2113,14 +2133,15 @@ mod tests {
                     profile.next_quality(read_num, &state, len - c, rng)
                 };
                 out.push(q);
-                profile.emitted(&mut state, q);
+                profile.emitted(&mut state, q, b);
             }
             out
         }
         pairs
             .iter()
             .map(|p| {
-                let (c1, c2) = profile.draw_classes(rng);
+                let runs = (crate::quality::template_run_bin(&p.seq1), crate::quality::template_run_bin(&p.seq2));
+                let (c1, c2) = profile.draw_classes(runs, None, rng);
                 (draw(profile, 1, c1, &p.seq1, rng), draw(profile, 2, c2, &p.seq2, rng))
             })
             .collect()
@@ -2300,5 +2321,461 @@ mod tests {
         }
         let n_star = (0..sizes.len()).find(|&i| ok[i..].iter().all(|&b| b)).map(|i| sizes[i]);
         println!("smallest passing size, and every larger one: {:?}", n_star);
+    }
+
+    // --- v2: runs, lows, error history, the event's class mix (plan 2026-10-07-quality-model-v2) ---
+
+    /// A pair's two templates in sequencing order on `reference` (chr1): R1
+    /// forward at `start`, R2 reverse at `start + 200`, both `rl` long.
+    fn mate_templates(reference: &[u8], start: usize, rl: usize) -> (Vec<u8>, Vec<u8>) {
+        let fwd = reference[start..start + rl].to_ascii_uppercase();
+        let mut rev = reference[start + 200..start + 200 + rl].to_ascii_uppercase();
+        reverse_complement(&mut rev);
+        (fwd, rev)
+    }
+
+    /// The last cycle of the first run of 12+ of one base in `template`, if any.
+    fn run12_end(template: &[u8]) -> Option<usize> {
+        let mut len = 0;
+        for i in 0..template.len() {
+            len = if i > 0 && template[i] == template[i - 1] { len + 1 } else { 1 };
+            if len >= 12 && (i + 1 == template.len() || template[i + 1] != template[i]) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Makes a donor mate's (called bases, qualities) from its template.
+    type MakeMate<'a> = &'a dyn Fn(&[u8], &mut StdRng) -> (Vec<u8>, Vec<u8>);
+
+    /// Donor pairs on `reference` (chr1) at random starts in `range`, R1
+    /// forward and R2 reverse 200 bp on, `rl` long; `make(template, rng)`
+    /// gives each mate's (called bases, qualities) in sequencing order.
+    fn donors_on(
+        reference: &[u8],
+        range: std::ops::Range<usize>,
+        n: usize,
+        rl: usize,
+        rng: &mut StdRng,
+        make: MakeMate,
+    ) -> Vec<ReadPair> {
+        use crate::types::MateAlignment;
+        (0..n)
+            .map(|i| {
+                let start = rng.gen_range(range.clone());
+                let (t1, t2) = mate_templates(reference, start, rl);
+                let (seq1, qual1) = make(&t1, rng);
+                let (seq2, qual2) = make(&t2, rng);
+                ReadPair {
+                    name: format!("d_{}", i),
+                    seq1,
+                    qual1,
+                    seq2,
+                    qual2,
+                    ref_start: start as u64,
+                    ref_end: (start + 200 + rl) as u64,
+                    insert_size: (200 + rl) as i64,
+                    chrom: "chr1".to_string(),
+                    align: Some(Box::new([
+                        MateAlignment { start: start as u64, reverse: false, cigar: vec![(b'M', rl as u32)] },
+                        MateAlignment { start: (start + 200) as u64, reverse: true, cigar: vec![(b'M', rl as u32)] },
+                    ])),
+                }
+            })
+            .collect()
+    }
+
+    /// Generated pairs at random starts in `range`, each mate with its template.
+    fn made_on(
+        gen: &SynthReadGenerator,
+        reference: &[u8],
+        range: std::ops::Range<usize>,
+        n: usize,
+        rl: usize,
+        rng: &mut StdRng,
+    ) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        let no_alleles = HashMap::new();
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let start = rng.gen_range(range.clone());
+            let p = gen
+                .generate_read_pair("chr1", start as u64, (200 + rl) as u64, &no_alleles, "p", rng)
+                .unwrap();
+            let (fwd, rev) = mate_templates(reference, start, rl);
+            for (seq, qual) in [(p.seq1, p.qual1), (p.seq2, p.qual2)] {
+                let mism = |t: &[u8]| seq.iter().zip(t).filter(|(a, b)| a != b).count();
+                let t = if mism(&fwd) <= mism(&rev) { fwd.clone() } else { rev.clone() };
+                out.push((seq, qual, t));
+            }
+        }
+        out
+    }
+
+    fn crashed(qual: &[u8]) -> bool {
+        qual.len() >= 20 && qual[qual.len() - 20..].iter().filter(|&&q| q < b'!' + 15).count() >= 10
+    }
+
+    fn generator_on(reference: &[u8], donors: &[ReadPair], rl: usize) -> SynthReadGenerator<'static> {
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chr1".to_string(), reference.to_vec());
+        let shared = SharedReference::from_sequences(seqs);
+        let profile = QualityProfile::from_donor_pairs(donors, rl, &shared);
+        mock_gen_with_profile(profile, reference.to_vec(), rl, 0.0)
+    }
+
+    /// `seq` with each base of `seq` wrong with chance `p_err`.
+    fn with_errors(template: &[u8], qual: &[u8], p_err: &dyn Fn(usize, u8) -> f64, rng: &mut StdRng) -> Vec<u8> {
+        template
+            .iter()
+            .zip(qual)
+            .enumerate()
+            .map(|(c, (&b, &q))| if rng.gen::<f64>() < p_err(c, q) { random_different_base(b, rng) } else { b })
+            .collect()
+    }
+
+    #[test]
+    fn test_reads_crash_after_a_run_of_one_base_as_the_donors_do() {
+        // T1. A run of 12+ of one base sets off the rest of a read: on HG002
+        // 35x, reads with one crash 15.0% of the time, against 0.46% without.
+        let rl = 100usize;
+        let mut reference = scrambled_seq(1_000_000, 81);
+        for k in 0..450usize {
+            let at = 1_000 + k * 2_000;
+            reference[at - 1] = b'G';
+            reference[at..at + 12].copy_from_slice(&[b'T'; 12]);
+            reference[at + 12] = b'G';
+        }
+        let mut tr = StdRng::seed_from_u64(82);
+        let donors = donors_on(&reference, 100..900_000, 8000, rl, &mut tr, &|t, rng| {
+            let end = run12_end(t);
+            let qual: Vec<u8> = (0..rl)
+                .map(|c| {
+                    let after = end.is_some_and(|e| c > e);
+                    let p_low = if after { 0.7 } else { 0.02 };
+                    if rng.gen::<f64>() < p_low { b'!' + 11 } else { b'!' + 37 }
+                })
+                .collect();
+            (t.to_vec(), qual)
+        });
+        let early = |t: &[u8]| run12_end(t).is_some_and(|e| e <= 75);
+        let donor_mates: Vec<(&Vec<u8>, &Vec<u8>, Vec<u8>)> = donors
+            .iter()
+            .flat_map(|p| {
+                let (f, r) = mate_templates(&reference, p.ref_start as usize, rl);
+                [(&p.seq1, &p.qual1, f), (&p.seq2, &p.qual2, r)]
+            })
+            .collect();
+        let share = |v: &[&Vec<u8>]| v.iter().filter(|q| crashed(q)).count() as f64 / v.len().max(1) as f64;
+        let d_run = share(&donor_mates.iter().filter(|m| early(&m.2)).map(|m| m.1).collect::<Vec<_>>());
+
+        let gen = generator_on(&reference, &donors, rl);
+        let mut rng = StdRng::seed_from_u64(83);
+        let made = made_on(&gen, &reference, 100..900_000, 6000, rl, &mut rng);
+        let g_run = share(&made.iter().filter(|m| early(&m.2)).map(|m| &m.1).collect::<Vec<_>>());
+        let g_free = share(&made.iter().filter(|m| crate::quality::template_run_bin(&m.2) == 0).map(|m| &m.1).collect::<Vec<_>>());
+        assert!(g_run >= 5.0 * g_free.max(0.001), "reads after a run crash {:.3}, run-free reads {:.3}: not 5x", g_run, g_free);
+        assert!(g_run >= 0.7 * d_run, "reads after a run crash {:.3}, the donors' {:.3}", g_run, d_run);
+        // And the crash starts after the run, not anywhere in the read.
+        let (mut before, mut after) = ((0usize, 0usize), (0usize, 0usize));
+        for (_, q, t) in &made {
+            if let Some(e) = run12_end(t).filter(|e| (30..=60).contains(e)) {
+                let low = |w: &[u8]| w.iter().filter(|&&x| x < b'!' + 15).count();
+                before.0 += low(&q[e - 20..e]);
+                before.1 += 20;
+                after.0 += low(&q[e + 1..=e + 20]);
+                after.1 += 20;
+            }
+        }
+        let (b, a) = (before.0 as f64 / before.1 as f64, after.0 as f64 / after.1 as f64);
+        assert!(a >= 3.0 * b, "low qualities after the run {:.3}, before it {:.3}", a, b);
+    }
+
+    #[test]
+    fn test_runs_are_learned_from_the_template_not_from_a_dead_tails_calls() {
+        // T2. A dead tail calls false runs of its own: on HG002 35x, 22% of
+        // crashed reads on a run-free template show one. Learned from the
+        // called bases, the model would tie poor reads to runs.
+        let rl = 100usize;
+        let mut reference = scrambled_seq(1_000_000, 84);
+        for k in 0..40usize {
+            let at = 900_000 + k * 2_000;
+            reference[at - 1] = b'G';
+            reference[at..at + 12].copy_from_slice(&[b'T'; 12]);
+            reference[at + 12] = b'G';
+        }
+        let mut tr = StdRng::seed_from_u64(85);
+        let donors = donors_on(&reference, 100..800_000, 8000, rl, &mut tr, &|t, rng| {
+            if rng.gen::<f64>() < 0.2 {
+                // A dead tail: Q11 at 80% over the last 30 cycles, all called A.
+                let qual: Vec<u8> = (0..rl)
+                    .map(|c| if c >= rl - 30 && rng.gen::<f64>() < 0.8 { b'!' + 11 } else { b'!' + 37 })
+                    .collect();
+                let mut seq = t.to_vec();
+                seq[rl - 30..].fill(b'A');
+                (seq, qual)
+            } else {
+                let qual: Vec<u8> = (0..rl).map(|_| if rng.gen::<f64>() < 0.02 { b'!' + 11 } else { b'!' + 37 }).collect();
+                (t.to_vec(), qual)
+            }
+        });
+        let pool_crash = donors.iter().flat_map(|p| [&p.qual1, &p.qual2]).filter(|q| crashed(q)).count() as f64
+            / (2 * donors.len()) as f64;
+        let gen = generator_on(&reference, &donors, rl);
+        let mut rng = StdRng::seed_from_u64(86);
+        let share = |v: &[(Vec<u8>, Vec<u8>, Vec<u8>)]| v.iter().filter(|m| crashed(&m.1)).count() as f64 / v.len() as f64;
+        let free = made_on(&gen, &reference, 100..800_000, 4000, rl, &mut rng);
+        let g_free = share(&free);
+        assert!(
+            (g_free / pool_crash - 1.0).abs() <= 0.3,
+            "run-free templates crash {:.3}, the pool {:.3}",
+            g_free,
+            pool_crash
+        );
+        let with_run: Vec<_> = (0..40usize)
+            .flat_map(|k| made_on(&gen, &reference, 900_000 + k * 2_000 - 40..900_000 + k * 2_000 - 39, 50, rl, &mut rng))
+            .filter(|m| crate::quality::template_run_bin(&m.2) == 3)
+            .collect();
+        assert!(with_run.len() > 1000, "only {} reads over the runs", with_run.len());
+        let g_run = share(&with_run);
+        assert!(g_run <= 1.3 * pool_crash, "templates with a run crash {:.3}, the pool {:.3}", g_run, pool_crash);
+    }
+
+    #[test]
+    fn test_errors_follow_a_dense_stretch_of_low_qualities() {
+        // T3. Low qualities in a bad stretch are mixed with high ones (on
+        // HG002 35x the run of lows ending at a read's last base has a median
+        // of 1), and errors follow how dense they are, not how many in a row.
+        // Every read has the same mean quality (one class) and one dense
+        // stretch -- Q11 at every other cycle over 30 cycles, erring at 40% --
+        // somewhere in cycles 20-70, with 10 more Q11s scattered elsewhere,
+        // erring at 5%.
+        let rl = 100usize;
+        let reference = scrambled_seq(1_000_000, 87);
+        let mut tr = StdRng::seed_from_u64(88);
+        let donors = donors_on(&reference, 100..900_000, 8000, rl, &mut tr, &|t, rng| {
+            let from = rng.gen_range(20..=40usize);
+            let dense = |c: usize| c >= from && c < from + 30 && (c - from) & 1 == 0;
+            let mut qual = vec![b'!' + 37; rl];
+            (0..rl).filter(|&c| dense(c)).for_each(|c| qual[c] = b'!' + 11);
+            let mut scattered = 0;
+            while scattered < 10 {
+                let c = rng.gen_range(0..rl);
+                if !(from.saturating_sub(16)..from + 46).contains(&c) && qual[c] == b'!' + 37 {
+                    qual[c] = b'!' + 11;
+                    scattered += 1;
+                }
+            }
+            let seq = with_errors(t, &qual, &|c, q| if q != b'!' + 11 { 0.0 } else if dense(c) { 0.40 } else { 0.05 }, rng);
+            (seq, qual)
+        });
+        // Q11 bases with 6+ lows among the 16 cycles before them: inside a
+        // dense stretch.
+        let gen = generator_on(&reference, &donors, rl);
+        let mut rng = StdRng::seed_from_u64(89);
+        let made = made_on(&gen, &reference, 100..900_000, 4000, rl, &mut rng);
+        let (mut wrong, mut all) = (0usize, 0usize);
+        for (seq, q, t) in &made {
+            for c in 16..rl {
+                if q[c] == b'!' + 11 && q[c - 16..c].iter().filter(|&&x| x < b'!' + 15).count() >= 6 {
+                    wrong += (seq[c] != t[c]) as usize;
+                    all += 1;
+                }
+            }
+        }
+        assert!(all > 2000, "only {} Q11 bases in dense stretches", all);
+        let rate = wrong as f64 / all as f64;
+        assert!((rate - 0.40).abs() < 0.05, "Q11 bases in a dense stretch err {:.3}, not near 0.40", rate);
+    }
+
+    #[test]
+    fn test_rare_errors_follow_the_lows_over_16_cycles_not_the_lows_in_a_row() {
+        // T3b (added for mutant 4). Errors rare enough that the error history
+        // stays near empty, but set by how many of the last 16 qualities were
+        // low: Q11 bases with 6+ lows among the 16 cycles ending at them err
+        // at 3%, others at 0.3%. Lows come at random inside a stretch, so the
+        // run of lows in a row is short either way.
+        let rl = 100usize;
+        let reference = scrambled_seq(1_000_000, 95);
+        let lows16 = |q: &[u8], c: usize| q[c.saturating_sub(15)..=c].iter().filter(|&&x| x < b'!' + 15).count();
+        let mut tr = StdRng::seed_from_u64(96);
+        let donors = donors_on(&reference, 100..900_000, 12_000, rl, &mut tr, &|t, rng| {
+            let from = rng.gen_range(0..=60usize);
+            let qual: Vec<u8> = (0..rl)
+                .map(|c| if c >= from && c < from + 40 && rng.gen::<bool>() { b'!' + 11 } else { b'!' + 37 })
+                .collect();
+            let seq = with_errors(
+                t,
+                &qual,
+                &|c, q| if q != b'!' + 11 { 0.0 } else if lows16(&qual, c) >= 6 { 0.03 } else { 0.003 },
+                rng,
+            );
+            (seq, qual)
+        });
+        let gen = generator_on(&reference, &donors, rl);
+        let mut rng = StdRng::seed_from_u64(97);
+        let made = made_on(&gen, &reference, 100..900_000, 8000, rl, &mut rng);
+        let (mut dense, mut sparse) = ((0usize, 0usize), (0usize, 0usize));
+        for (seq, q, t) in &made {
+            for c in 0..rl {
+                if q[c] == b'!' + 11 {
+                    let cell = if lows16(q, c) >= 6 { &mut dense } else { &mut sparse };
+                    cell.0 += (seq[c] != t[c]) as usize;
+                    cell.1 += 1;
+                }
+            }
+        }
+        let rate = |x: (usize, usize)| x.0 as f64 / x.1 as f64;
+        assert!(dense.1 > 30_000 && sparse.1 > 10_000, "too few Q11 bases: {} dense, {} sparse", dense.1, sparse.1);
+        assert!((rate(dense) / 0.03 - 1.0).abs() <= 0.3, "Q11 bases after 6+ lows err {:.4}, not near 0.03", rate(dense));
+        assert!((rate(sparse) - 0.003).abs() <= 0.002, "Q11 bases after fewer lows err {:.4}, not near 0.003", rate(sparse));
+    }
+
+    #[test]
+    fn test_reads_keep_the_donors_read_to_read_spread_of_errors() {
+        // T4. Tails differ by read beyond their qualities: on HG002 35x the
+        // per-read error rate of crashed tails has SD 0.160, against 0.108 if
+        // every read erred alike. Here half the crashed reads err at 60% at
+        // Q11 and half at 10%, with the same qualities.
+        let rl = 100usize;
+        let reference = scrambled_seq(1_000_000, 90);
+        let mut tr = StdRng::seed_from_u64(91);
+        let donors = donors_on(&reference, 100..900_000, 8000, rl, &mut tr, &|t, rng| {
+            if rng.gen::<f64>() < 0.3 {
+                let qual: Vec<u8> = (0..rl).map(|c| if c >= rl - 40 && c % 3 > 0 { b'!' + 11 } else { b'!' + 37 }).collect();
+                let p = if rng.gen::<bool>() { 0.6 } else { 0.1 };
+                let seq = with_errors(t, &qual, &|_, q| if q == b'!' + 11 { p } else { 0.0 }, rng);
+                (seq, qual)
+            } else {
+                (t.to_vec(), vec![b'!' + 37; rl])
+            }
+        });
+        let per_read = |seq: &[u8], q: &[u8], t: &[u8]| -> Option<f64> {
+            let idx: Vec<usize> = (0..rl).filter(|&c| q[c] == b'!' + 11 && c >= rl - 40).collect();
+            (idx.len() >= 10).then(|| idx.iter().filter(|&&c| seq[c] != t[c]).count() as f64 / idx.len() as f64)
+        };
+        let sd = |v: &[f64]| {
+            let m = v.iter().sum::<f64>() / v.len() as f64;
+            (v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+        };
+        let pool: Vec<f64> = donors
+            .iter()
+            .flat_map(|p| {
+                let (f, r) = mate_templates(&reference, p.ref_start as usize, rl);
+                [per_read(&p.seq1, &p.qual1, &f), per_read(&p.seq2, &p.qual2, &r)]
+            })
+            .flatten()
+            .collect();
+        let gen = generator_on(&reference, &donors, rl);
+        let mut rng = StdRng::seed_from_u64(92);
+        let made: Vec<f64> = made_on(&gen, &reference, 100..900_000, 4000, rl, &mut rng)
+            .iter()
+            .filter_map(|(s, q, t)| per_read(s, q, t))
+            .collect();
+        assert!(made.len() > 500, "only {} generated crashed reads", made.len());
+        assert!(
+            sd(&made) >= 0.8 * sd(&pool),
+            "per-read error rate SD {:.3} against the pool's {:.3}",
+            sd(&made),
+            sd(&pool)
+        );
+    }
+
+    #[test]
+    fn test_an_events_reads_follow_its_own_class_mix() {
+        // T5. Regions differ: on HG002 35x the crashed share runs 0.60-2.62%
+        // over 20 blocks, and a block's own class mix halves the error of
+        // predicting it. A sample of good and poor reads, and an event pool of
+        // only poor ones.
+        let rl = 100usize;
+        let mut tr = StdRng::seed_from_u64(93);
+        let sample = good_and_poor_pairs(rl, 4000, &mut tr);
+        let pool: Vec<ReadPair> = good_and_poor_pairs(rl, 1000, &mut tr).into_iter().skip(1).step_by(2).collect();
+        let profile = QualityProfile::from_read_pairs(&sample, rl);
+        let mut seqs = StdHashMap::new();
+        seqs.insert("chr1".to_string(), vec![b'A'; 200_000]);
+        let reference: &'static SharedReference = Box::leak(Box::new(SharedReference::from_sequences(seqs)));
+        let mix = profile.class_mix(&pool, reference);
+        let pool_class = pool.iter().flat_map(|p| [&p.qual1, &p.qual2]).map(|q| profile.class_of(q) as f64).sum::<f64>()
+            / (2 * pool.len()) as f64;
+        let gen = SynthReadGenerator::new(profile, reference, rl, 0.0).with_class_mix(mix);
+        let no_alleles = HashMap::new();
+        let mut rng = StdRng::seed_from_u64(94);
+        let mut classes = Vec::new();
+        for i in 0..2000u64 {
+            let p = gen.generate_read_pair("chr1", 1000 + i * 50, 300, &no_alleles, "p", &mut rng).unwrap();
+            classes.push(gen.profile.class_of(&p.qual1) as f64);
+            classes.push(gen.profile.class_of(&p.qual2) as f64);
+        }
+        let made_class = classes.iter().sum::<f64>() / classes.len() as f64;
+        assert!(
+            (made_class - pool_class).abs() <= 1.0,
+            "generated reads' mean class {:.2}, the event pool's {:.2}",
+            made_class,
+            pool_class
+        );
+    }
+
+    /// K2b of docs/superpowers/plans/2026-10-07-quality-model-v2.md: the big
+    /// held-out clip test, on this code. Run by hand (docs/analysis/quality-model-v2/k2b.sh):
+    /// `SPIKE_K2B_BAM=<BAM> SPIKE_K2B_REF=<FASTA> SPIKE_K2B_OUT=<dir> SPIKE_K2B_SET=real|spike
+    /// [SPIKE_K2B_SEED=21] cargo test --release -- --ignored measure_clip_share --nocapture`.
+    /// Samples the BAM as a run does (`sample_input`), learns from the pairs
+    /// whose name hashes even, and writes the odd ones with |TLEN| >= 151 and
+    /// both mates full length to `<set>_R1.fq` / `_R2.fq`: as sequenced
+    /// (`real`), or as spike makes them from the reference at each mate's own
+    /// 5' position and strand, each block's pairs with that block's class mix
+    /// (`spike`).
+    #[test]
+    #[ignore]
+    fn measure_clip_share() {
+        use std::io::Write;
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {}", k));
+        let (bam, fasta, out, set) = (env("SPIKE_K2B_BAM"), env("SPIKE_K2B_REF"), env("SPIKE_K2B_OUT"), env("SPIKE_K2B_SET"));
+        let seed: u64 = std::env::var("SPIKE_K2B_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(21);
+        let rl = crate::bam_stats::compute_stats(&bam, 10_000, Some(&fasta)).unwrap().cycles;
+        let fnv = |name: &str| name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+        let blocks = crate::quality::sample_input(&bam, &fasta, 20).unwrap();
+        let (mut train, mut held) = (Vec::new(), Vec::new());
+        for b in &blocks {
+            let (tr, he): (Vec<ReadPair>, Vec<ReadPair>) = b.pairs.iter().cloned().partition(|p| fnv(&p.name) % 2 == 0);
+            train.push(crate::quality::DonorBlock { pairs: tr, ..b.clone() });
+            held.push(he);
+        }
+        let profile = QualityProfile::from_blocks(&train, rl);
+        let mut f1 = std::io::BufWriter::new(std::fs::File::create(format!("{}/{}_R1.fq", out, set)).unwrap());
+        let mut f2 = std::io::BufWriter::new(std::fs::File::create(format!("{}/{}_R2.fq", out, set)).unwrap());
+        let put = |f: &mut std::io::BufWriter<std::fs::File>, name: &str, s: &[u8], q: &[u8]| {
+            writeln!(f, "@{}\n{}\n+\n{}", name, String::from_utf8_lossy(s), String::from_utf8_lossy(q)).unwrap();
+        };
+        let none = SharedReference::from_sequences(StdHashMap::new());
+        let gen = SynthReadGenerator::new(profile, &none, rl, 0.0);
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut written = 0usize;
+        for (b, (tr, he)) in blocks.iter().zip(train.iter().zip(&held)) {
+            let mix = gen.profile.class_mix(&tr.pairs, b);
+            for p in he {
+                let Some(al) = &p.align else { continue };
+                if p.insert_size.abs() < rl as i64 || p.seq1.len() != rl || p.seq2.len() != rl {
+                    continue;
+                }
+                written += 1;
+                if set == "real" {
+                    put(&mut f1, &p.name, &p.seq1, &p.qual1);
+                    put(&mut f2, &p.name, &p.seq2, &p.qual2);
+                    continue;
+                }
+                let t1 = crate::quality::template_of(b, &p.chrom, &al[0], rl);
+                let t2 = crate::quality::template_of(b, &p.chrom, &al[1], rl);
+                let runs = (crate::quality::template_run_bin(&t1), crate::quality::template_run_bin(&t2));
+                let (c1, c2) = gen.profile.draw_classes(runs, Some(&mix), &mut rng);
+                let (s1, q1) = gen.generate_from_template(&t1, rl, 1, Some(c1), &mut rng);
+                let (s2, q2) = gen.generate_from_template(&t2, rl, 2, Some(c2), &mut rng);
+                put(&mut f1, &p.name, &s1, &q1);
+                put(&mut f2, &p.name, &s2, &q2);
+            }
+        }
+        println!("set {} seed {}: {} held-out pairs written; learned from {} pairs in {} blocks", set, seed, written,
+                 train.iter().map(|b| b.pairs.len()).sum::<usize>(), blocks.len());
     }
 }

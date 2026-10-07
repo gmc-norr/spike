@@ -653,6 +653,16 @@ fn main() -> Result<()> {
     validate_event_overlaps(&events, args.allow_overlap)?;
     refuse_carried_alleles(&events, &config.bam_path, &config.ref_path, config.min_mapq, &shared_ref)?;
 
+    // The sample's base qualities and errors, learned once from a sample of
+    // the whole input rather than from each event's pool, which is too thin
+    // for crashed reads and their errors.
+    let quality_profile = std::sync::Arc::new(crate::quality::QualityProfile::from_input(
+        &config.bam_path,
+        &config.ref_path,
+        config.min_mapq,
+        config.read_length,
+    )?);
+
     let mut event_outputs = Vec::with_capacity(events.len());
     // Per event, in the same order: the fraction its tiled fragments actually
     // plant when the additive cap or the two-fragment floor moved it off the
@@ -778,7 +788,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let synth_gen = synth_generator(&pool, &shared_ref, &config);
+        let synth_gen = synth_generator(&pool, &quality_profile, &shared_ref, &config);
 
         // Build variant haplotype.
         let mut haplotype =
@@ -1859,17 +1869,20 @@ struct EventStat {
 /// reads look like the sample's is `synth.rs`'s `MIN_PROFILE_PAIRS`.
 const MIN_DONOR_PAIRS: usize = 30;
 
-/// The event's read generator: its quality profile and error table learned
-/// from the donor pool against the reference, sequencing `config.read_length`
-/// cycles, trimmed as the library was, naming its reads in the input's name
-/// shape.
+/// The event's read generator: the run's quality profile, with the event's
+/// own read-class mix counted from its donor pool, sequencing
+/// `config.read_length` cycles, trimmed as the library was, naming its reads
+/// in the input's name shape.
 fn synth_generator<'a>(
     pool: &ReadPool,
+    profile: &std::sync::Arc<synth::QualityProfile>,
     reference: &'a crate::reference::SharedReference,
     config: &SimConfig,
 ) -> synth::SynthReadGenerator<'a> {
-    let quality_profile = synth::QualityProfile::from_donor_pairs(&pool.pairs, config.read_length, reference);
-    synth::SynthReadGenerator::new(quality_profile, reference, config.read_length, config.indel_error_rate)
+    let mix = profile.class_mix(&pool.pairs, reference);
+    log::debug!("Event read-class mix: {:?}", mix);
+    synth::SynthReadGenerator::new(profile.clone(), reference, config.read_length, config.indel_error_rate)
+        .with_class_mix(mix)
         .with_adapter_trim(config.adapter_trimmed)
         .with_read_names(config.read_names.clone())
 }
@@ -5089,6 +5102,11 @@ cat "$root/validation_summary.tsv""#,
         assert!(!pool(false).frag_dist.lengths.contains(&90));
     }
 
+    /// A quality profile learned from `pool`'s own pairs, for generator tests.
+    fn test_profile(pool: &ReadPool) -> std::sync::Arc<synth::QualityProfile> {
+        std::sync::Arc::new(synth::QualityProfile::from_read_pairs(&pool.pairs, TEST_READ_LENGTH))
+    }
+
     #[test]
     fn test_the_generator_follows_the_library_s_trimming() {
         let mut seqs = std::collections::HashMap::new();
@@ -5102,9 +5120,9 @@ cat "$root/validation_summary.tsv""#,
             &pool_config(false),
         )
         .expect("a full pool");
-        assert_eq!(synth_generator(&pool, &reference, &pool_config(true)).min_fragment_len(), 1);
+        assert_eq!(synth_generator(&pool, &test_profile(&pool), &reference, &pool_config(true)).min_fragment_len(), 1);
         assert_eq!(
-            synth_generator(&pool, &reference, &pool_config(false)).min_fragment_len(),
+            synth_generator(&pool, &test_profile(&pool), &reference, &pool_config(false)).min_fragment_len(),
             TEST_READ_LENGTH as i64
         );
     }
@@ -5130,7 +5148,7 @@ cat "$root/validation_summary.tsv""#,
             y: (7, 7),
         };
         assert_eq!(
-            synth_generator(&pool, &reference, &config).read_name("ev0001_hap_000001"),
+            synth_generator(&pool, &test_profile(&pool), &reference, &config).read_name("ev0001_hap_000001"),
             "SPIKE_ev0001_hap_000001:46:FC:2:1101:5:7"
         );
     }

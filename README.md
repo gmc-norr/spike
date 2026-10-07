@@ -14,7 +14,8 @@ Real BAM/CRAM + Reference FASTA + Variant specs
                   v
     +-----------------------------+
     |  1. Extract read pairs      |  Real reads from the event region
-    |  2. Learn quality           |  Quality and error model from real data
+    |  2. Read classes            |  The event's share of poor reads (the quality and
+    |                             |  error model is learned once, at startup)
     |  3. Build haplotype         |  Linear variant sequence from ordered segments
     |  4. Read sample's SNPs      |  Het + hom-alt SNPs, phased; pick the event copy
     |  5. Suppress reads          |  Remove reads by copy within the haplotype footprint
@@ -31,7 +32,7 @@ Real BAM/CRAM + Reference FASTA + Variant specs
 
 **Read suppression and replacement**: For non-additive events (DEL, INV, INS, SNP, full-model DUP), original reads within the haplotype's reference footprint are suppressed at the target VAF rate, and new synthetic reads tiled across the variant haplotype replace the removed fraction. For additive events (Fusion, junction-model DUP), all original reads are kept and synthetic reads are added on top. By default a non-additive event removes reads from its donor pool, and the duplicates of the pairs it removes; the experimental `--edit-model origin` removes reads by their chance of having come from the event, at the event and at its look-alikes elsewhere in the genome.
 
-**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns from the donor reads how they are read: each base's quality given the read's recent qualities, its distance to the 3' end and the kind of read it is (good or poor overall, drawn for both mates of a pair together), and how often a base of that quality in that kind of read is wrong, counted against the reference. It then generates independent synthetic reads with the sample's qualities and errors. See [Quality profile](#quality-profile).
+**Quality-aware synthesis**: Instead of cloning real reads (which produces exact duplicates flagged by dedup tools), spike learns once, from a sample of the input, how its reads are read: each base's quality given the read's recent qualities, its distance to the 3' end, the kind of read it is (good or poor overall, drawn for both mates of a pair together), and the runs of one base it has read, and how often a base of that quality in that kind of read is wrong, counted against the reference. It then generates independent synthetic reads with the sample's qualities and errors, with each event keeping its own region's share of poor reads. See [Quality profile](#quality-profile).
 
 **The sample's two copies**: The event goes on one of the sample's two copies of the region. spike reads the sample's own SNPs around every event (het and hom-alt, via pileup or a pre-called gVCF), phases the het SNPs, and picks the event copy's haplotype. Original reads are removed by copy, and synthetic reads carry the alleles of the copy they come from. So SNPs in the flanks keep their allele balance and hom-alt SNPs stay hom-alt; a het deletion turns het SNPs inside it homozygous (LOH), and a het duplication shifts them to ~33/67. See [The sample's SNPs](#the-samples-snps).
 
@@ -1903,41 +1904,53 @@ Each fragment is scored by how many het SNPs show the event copy's vs. the other
 
 ## Quality profile
 
-The quality model is fqzcomp's quality context (htscodecs `fqzcomp_qual`, the one CRAM uses) used as a generator, plus an error table. Both are learned from the event's donor reads (`src/quality.rs`).
+The quality model is fqzcomp's quality context (htscodecs `fqzcomp_qual`, the one CRAM uses) used as a generator, plus an error table (`src/quality.rs`). Both are learned once per run, from a sample of the input, not from each event's donor pool: a pool of ~2,800 pairs was too thin for crashed reads and their errors (`docs/superpowers/plans/2026-10-07-quality-model.md`, refuted).
 
-**Qualities.** Each base's quality is drawn from the donor reads' qualities in the same context:
+**The sample.** At startup spike reads 20 blocks of 50 kb, spread evenly over the parts of the input that hold reads. Those parts are read from the index: a `.bai`'s 16 kb bins that hold reads, or a `.crai`'s slices, so a slice of one chromosome is sampled inside its reads. Pairs are extracted as donor pools are (`--min-mapq`, proper pairs, no duplicates). The log gives the blocks, the pairs and the time taken. Below 50,000 pairs it warns, and below 30 it stops.
+
+**Qualities.** Each base's quality is drawn from the sampled reads' qualities in the same context:
 
 - **History.** The read's last 5 qualities. For a library with more than 4 quality values, the last quality exactly and the two before it in four bins: Q0-9, Q10-19, Q20-29 and Q30+.
 - **Position.** The cycles left to the read's 3' end, in 8 bins.
 - **Changes.** Whether the quality has already changed bin twice in this read.
-- **Read class.** Where the read's mean quality falls among the donor reads', in 8 classes cut at the 1, 3, 8, 20, 40, 60 and 80% quantiles. A pair draws its two classes together from the donor pairs' joint table, so a poor pair is poor in both mates.
+- **Read class.** Where the read's mean quality falls among the sample's, in 8 classes cut at the 1, 3, 8, 20, 40, 60 and 80% quantiles.
+- **Lows.** How many of the read's last 16 qualities were below Q15 (0, 1-2, 3-5, 6-9, 10+). In a bad tail, low qualities are mixed with high ones to the read's end, so they are counted over a window, not in a row.
+- **Runs.** The longest run of one base the read has read so far, in its template: A, G or T 7-8, 9-11 and 12+, and C 5-6 and 7+. A run sets off the rest of the read, on the strand that reads into it. After 12+ T's, HG002 35x reads have 6.9-9.4x the low qualities and 14-22x the errors for the rest of the read, and the other strand does not. Reads with such a run crash 15.0% of the time, against 0.46% without one. The run is read from the template, the reference under a sampled read and the haplotype under spike's own, because a dead tail calls false runs of its own.
 
 A context is used once it holds 20 observations. Otherwise the draw backs off, in order, to:
-1. the last two qualities with position and class;
-2. the last quality with position and class;
-3. the last quality with position;
+1. the last two qualities with lows, run, position and class;
+2. the last quality with run, position and class;
+3. the last quality with run and position;
 4. position alone;
 5. the whole mate.
 
 R1 and R2 have their own tables.
 
+**Read classes.** A pair draws its two classes together, so a poor pair is poor in both mates. The draw starts from the sample's joint (R1, R2) table and is weighted per mate:
+- by the runs in the mate's template, since a read's class holds the crash its run set off;
+- by the event's own class mix: how much more or less often each class occurs among the event's donor reads than the sample predicts from their runs.
+
+Quality differs by region: the crashed share runs 0.60-2.62% over 20 blocks of HG002 35x, and an event's own class mix with its runs halves the error of predicting it (0.40 to 0.18 points).
+
 **Why not a chain.** The first-order Markov chain this replaced forgot a read's state within a few bases, so its reads were all average. On HG002 35x, the SD of a read's mean quality was 0.52 against the sample's 2.08. It made almost no perfect reads (0.02% against 5.5%) and no poor ones (mean below Q33: 0% against 8.4%).
 
-**Errors.** A base is wrong at the rate the donor reads show for:
+**Errors.** A base is wrong at the rate the sampled reads show for:
 - its quality;
 - the read's class;
-- the run of qualities below Q15 ending at it (0, 1, 2-3, 4-7, 8+);
-- its distance from the 3' end (1-10, 11-30, 31-60, 61+ cycles).
+- the lows among its last 16 qualities, itself included;
+- its distance from the 3' end (1-10, 11-30, 31-60, 61+ cycles);
+- the read's run;
+- the errors the read made among its last 30 bases (0, 1, 2-3, 4+). Tails differ by read beyond their qualities: in crashed HG002 tails, Q37 bases err 0.5% in mild tails and 7.3% in bad ones.
 
-The rate backs off to (quality, class), then to the quality alone, when a cell has fewer than 200 counted bases, and to `10^(-Q/10)` when nothing was counted. A binned quality understates how often a poor read errs: aligned HG002 bases at Q25 err 0.07% in good reads and 0.95% in poor ones. A wrong base becomes one of the other three, or an indel at `--indel-error-rate`.
+The rate backs off to (quality, lows, run, errors), then to (quality, class), then to the quality alone, when a cell has fewer than 200 counted bases, and to `10^(-Q/10)` when nothing was counted. A wrong base becomes one of the other three, or an indel at `--indel-error-rate`.
 
-**What counts as a donor error.** Each donor mate's bases are compared with the reference where they aligned:
+**What counts as a sampled read's error.** Each mate's bases are compared with the reference where they aligned:
 - **Aligned bases** count.
 - **Inserted bases and `N`s** do not.
 - **A soft-clipped end** is placed where it would have aligned and counts only if it is 1-4 bases, or matches the reference at at least half its bases: a read gone bad, not adapter, chimeric or foreign sequence.
-- **The sample's own variants:** a position where at least 5 donor reads have an aligned base and at least 10% of them differ is not counted.
+- **The sample's own variants:** a position where at least 5 of the block's reads have an aligned base and at least 10% of them differ is not counted.
 
-Of real soft clips on HG002 chr20, 45% are such bad ends; the rest are adapter read-through, the sample's own variants, chimeric fragments and sequence not in the reference, which spike does not reproduce (docs/analysis/soft-clips). The run log gives the counted bases and why the rest were left out.
+Of real soft clips on HG002 chr20, 45% are such bad ends; the rest are adapter read-through, the sample's own variants, chimeric fragments and sequence not in the reference, which spike does not reproduce (docs/analysis/soft-clips). Sequence-set-off crashes, several reads clipping at one spot on one strand, sit among the sample's own variants there, so bad ends are more than 45%. The run log gives the counted bases and why the rest were left out.
 
 Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its history runs with the cycle counter like the forward mate's instead of against it.
 
