@@ -39,8 +39,8 @@ withdrawn claims can be re-checked.
 the longest one-letter run in the reference under each read (binned as `quality::run_bin` bins it)
 and prints the crashed-read share per bin, per mate, plus what spike's reads *would* crash at if
 they took the donors' rate in each bin. Within each bin the two sets agree; spike's reads simply
-concentrate over a T13 about 200 bp left of the deletion edge — 23.8% of them sit in bin 3 against
-6.7% of the window's reads.
+concentrate over long runs — 23.8% of them (155 of 650) sit in bin 3 against 6.7% of the window's
+reads. `bin3_runs.py` below says which runs those are.
 
 **Run.** From the repository root:
 
@@ -55,6 +55,31 @@ python3 docs/analysis/quality-model-v2/k6_runbins.py SIM_BAM ORIGINAL_BAM REFERE
 | `REFERENCE_FASTA` | GRCh38 no-alt FASTA, faidx'd |
 
 Needs `pysam` and `numpy`. The two windows are the K6 events' own, hard-coded as `WINDOWS`.
+
+### `bin3_runs.py` — which runs the bin-3 reads stand over
+
+**What it shows.** That the bin-3 enrichment above is **five** runs of one letter under the two
+events' footprints, not one. It lists, per bin-3 `SPIKE_` read, the runs of 12+ (C 7+) in the
+reference inside the read's own span, and clusters the read starts:
+
+| run | at | 1-based position | reads |
+|---|---|---|---|
+| T13 | 202 bp left of the deletion's left edge | chr20:38,899,798 | 30 |
+| T12 | 540 bp right of its right edge | chr20:38,910,540 | 38 |
+| T13 | 1,172 bp right | chr20:38,911,172 | 38 |
+| T15 | 1,535 bp right | chr20:38,911,535 | 32 |
+| A17 | 466 bp left of the SNV | chr20:38,549,534 | 17 |
+
+It exists because the first write-up of the correction named only the first of those five.
+
+**Run.** From the repository root:
+
+```bash
+python3 docs/analysis/quality-model-v2/bin3_runs.py SIM_BAM REFERENCE_FASTA
+```
+
+Same `SIM_BAM` and reference as `k6_runbins.py`; it imports that script's `run_bin` and
+`template_bin`, so the two agree on the binning by construction. Needs `pysam`.
 
 ### `mates.py` — the mate crash link from paired FASTQ
 

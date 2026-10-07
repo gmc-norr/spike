@@ -271,3 +271,78 @@ re-running against this commit.
 `docs/superpowers/plans/2026-10-07-quality-model-v2.md` gets a `## Correction` section at its end;
 its Result section is left exactly as committed. The README's "How close" line drops the 31-value
 claim.
+
+## Whole-branch review (2026-10-07)
+
+One review agent on the most capable model, in the foreground, against this plan and trying to break
+B1. **Verdict: SOUND WITH FINDINGS.** It rebuilt the branch (`cargo build --release` gives
+`df547601763d864dad84be90eaf6b69d`, equal to the binary B1 was run with), rebuilt the `7f28bb0`
+baseline independently from `git archive` (`747 passed; 0 failed; 3 ignored`), re-ran every gate, ran
+**12 byte-identity cases this plan never tried** — an insertion, `--edit-model origin`, a fusion with
+`--exon-bed`, the 31-value BAM with `--indel-error-rate`, `--dup-model junction`, `--flank 2000`,
+`--min-mapq 40` (a different profile), an indel at `af=0.02`, `--into-fastq` (7 files), `--vcf` with
+`--allow-overlap`, `--threads 16`, `--region` — **all byte-identical**, and re-ran all three mutants
+plus four of its own. It could not break B1, and closed the argument structurally: one write site for
+`class_run`, one caller of `learn_counts`, no `Clone`/`Default`/serde, no struct literal outside
+`learn_counts`, `runs` provably ≤ 3, and no fast-math in the profile, so no reassociation.
+
+### Finding 2, Important — fixed in `e399a24`
+
+Nothing in the suite protected this branch's purpose. Delegating `run_ratio_at` back to `run_ratio`
+throws the whole speed win away and **all 749 tests stayed green**, with B1 and clippy unchanged;
+only the one-off S1 timing would have noticed.
+
+`test_draw_classes_reads_the_table_rather_than_recomputing_it` pokes
+`(mate 0, run bin 3, class 5)` to `1e12` and asserts mate 0 then draws class 5 every time, and that
+it did not already do so before the poke. Against the delegation it is the **only** test that
+reddens: `test result: FAILED. 749 passed; 1 failed`, `poking (mate 0, run bin 3, class 5) to 1e12
+left mate 0 drawing {5, 7, 4, 3}: draw_classes is not reading the table`.
+
+Mutants with it present: **M1** 747/3, **M2** 748/2, **M3** 746/4, **M4** (the delegation) 749/1.
+Tests now **750 passed, 0 failed, 3 ignored**; clippy still **16**, identical to the baseline;
+`cargo +1.82 check` clean; the release binary's md5 **unchanged**, so B1 still holds.
+
+Writing the poke index as `(0 * RUN_BINS + 3) * READ_CLASSES + c` was a clippy **error** ("this
+operation will always return zero"), taking clippy from 16 to 18 with a hard error. Spelled through
+a closure instead.
+
+### Finding 1, Critical — fixed
+
+The correction's own attribution was wrong. It named **one** T13 "about 200 bp left of the deletion
+edge" as the cause of the bin-3 enrichment. Reproduced independently with `bin3_runs.py`, now in
+`docs/analysis/quality-model-v2/`:
+
+```
+bin-3 spike reads: 155
+     38 reads  runs in span: (('T', 12, 38910539),)
+     38 reads  runs in span: (('T', 13, 38911171),)
+     32 reads  runs in span: (('T', 15, 38911534),)
+     30 reads  runs in span: (('T', 13, 38899797),)
+     17 reads  runs in span: (('A', 17, 38549533),)
+read-start clusters:
+    38549303-38549529 (17)
+    38899580-38899788 (30)
+    38910304-38910529 (38)
+    38910934-38911534 (70)
+```
+
+The named T13 (chr20:38,899,798, 202 bp left of the left edge — that part was right) carries **30 of
+155**, i.e. **4.6% of the 650**, not 23.8%. 108 sit over a T12, a T13 and a T15 0.5-1.5 kb to the
+*right* of the deletion, and 17 over an A17 in the SNV window. The withdrawal itself is unaffected
+and stronger — five long runs under a narrow footprint against 6.7% of a 25 kb window — but naming
+one run without counting the reads under it is the same class of mistake as the claim being
+withdrawn, so it is written up as such in `.claude/judgment-gate-cases.md` too.
+
+### Finding 4, Minor — fixed
+
+The K6b held-out set is one seed with no committed recipe, where K2b spans three. The Correction now
+says so and no longer leans on it as a size.
+
+### Finding 3, Minor — declined, with the reason
+
+The v2 plan's Result still states the withdrawn K6 number and still lists it under "Still off", with
+the withdrawal 50+ lines below. The review suggested a bracketed "[withdrawn]" pointer per bullet.
+**The brief for this work forbids editing that Result section — it is the committed record** — and a
+bracketed insert is an edit. The `## Correction` section opens by saying the Result is left as it
+stands and what is withdrawn from it, and the commit subject of this result says it too. Left for the
+human to decide.

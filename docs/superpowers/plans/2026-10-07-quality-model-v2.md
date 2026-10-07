@@ -385,19 +385,41 @@ reference under the read, in sequencing order, as `quality::run_bin` bins it):
 
 - **Within each run bin spike's reads crash like the donors.** In bin 3, the one that matters:
   61.7% against 58.6% (R1) and 73.0% against 77.7% (R2).
-- **The whole gap is composition.** 23.8% of spike's reads stand over a run of 12+ — a T13 about
-  200 bp left of the deletion edge — against 6.7% of the window's reads. Give spike's reads the
-  donors' crash rate in each bin and they would be **expected to crash 23.76%**. They crash
-  **24.31%**.
+- **The whole gap is composition.** 23.8% of spike's reads (155 of 650) stand over a run of 12+,
+  against 6.7% of the window's reads. Those 155 sit over **five** such runs under the two events'
+  own footprints (`bin3_runs.py`):
+
+  | run | at | 1-based position | reads |
+  |---|---|---|---|
+  | T13 | 202 bp left of the deletion's left edge | chr20:38,899,798 | 30 |
+  | T12 | 540 bp right of its right edge | chr20:38,910,540 | 38 |
+  | T13 | 1,172 bp right | chr20:38,911,172 | 38 |
+  | T15 | 1,535 bp right | chr20:38,911,535 | 32 |
+  | A17 | 466 bp left of the SNV | chr20:38,549,534 | 17 |
+
+  Give spike's reads the donors' crash rate in each bin and they would be **expected to crash
+  23.76%**. They crash **24.31%**.
 - **A held-out check on the same BAM shows no over-crash**: on 40,232 held-out pairs, spike crashes
   **6.15% / 16.43%** (R1 / R2) against the real **6.78% / 18.55%** — if anything slightly under.
+  Unlike K2b this is **one seed**, and the set was made before this work with no committed recipe,
+  so take it as a check that points the same way, not as a measurement of the size of the gap.
 
 (`k6_runbins.py` reports the donors as 13.88% where `k6score.py` reported 14.36%: it reads the
 original BAM rather than the merged one, deduplicates by name and mate, and skips unmapped reads.
 The difference is 0.5 points and does not touch the conclusion.)
 
 **Withdrawn.** "A 31-value alphabet crashes too often (24.3% against 14.4%)" is not a finding about
-the alphabet, the model, or anything else. It is this run's two events standing over a long T run.
+the alphabet, the model, or anything else. It is this run's two events standing over five runs of
+one letter inside 2 kb.
+
+**One correction to this correction.** The first version of this section, and of
+`docs/analysis/quality-model-v2/README.md`, named *one* T13 202 bp left of the deletion edge as the
+cause. The whole-branch review of `2026-10-07-quality-speed.md` showed that run carries **30 of the
+155** bin-3 reads — 4.6% of the 650 — and that most of them (108) sit over a T12, a T13 and a T15
+to the *right* of the deletion, with 17 more over an A17 in the SNV window. Reproduced with
+`bin3_runs.py`, which is in the repository for that reason. The conclusion is unchanged and in fact
+stronger: five long runs under a narrow footprint against 6.7% of a 25 kb window. Naming one run
+without counting the reads under it was the same class of mistake as the claim being withdrawn.
 
 ### K3's "mates crash together less often" is **downgraded**
 

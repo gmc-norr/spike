@@ -67,20 +67,25 @@ def in_windows(bam, keep):
                 yield r
 
 
-sim, orig, ref = sys.argv[1:4]
-fa = pysam.FastaFile(ref)
-spike = tally(fa, (r for r in pysam.AlignmentFile(sim).fetch(until_eof=True)
-                   if r.query_name.startswith("SPIKE_") and not r.flag & 0xF0C and not r.is_unmapped))
-donors = tally(fa, in_windows(pysam.AlignmentFile(orig), lambda r: True))
-print("crashed share by run bin 0 / 1 / 2 / 3 (reads in brackets)")
-for name, t in (("donors in windows", donors), ("spike remade reads", spike)):
-    for m in range(2):
-        cells = "  ".join(f"{100 * t[m, h, 1] / t[m, h, 0]:5.1f}% ({t[m, h, 0]:4d})" if t[m, h, 0] else "    -        "
-                          for h in range(4))
-        print(f"{name:20s} R{m + 1}: {cells}")
-rate = donors[:, :, 1] / np.maximum(donors[:, :, 0], 1)
-n_spike = spike[:, :, 0].sum()
-for name, t in (("donors in windows", donors), ("spike remade reads", spike)):
-    print(f"{name:20s} overall {100 * t[:, :, 1].sum() / t[:, :, 0].sum():5.2f}% of {t[:, :, 0].sum()}; "
-          f"run bin 3 holds {100 * t[:, 3, 0].sum() / t[:, :, 0].sum():.1f}%")
-print(f"expected for spike's reads at the donors' per-bin rates: {100 * (spike[:, :, 0] * rate).sum() / n_spike:.2f}%")
+def main() -> None:
+    sim, orig, ref = sys.argv[1:4]
+    fa = pysam.FastaFile(ref)
+    spike = tally(fa, (r for r in pysam.AlignmentFile(sim).fetch(until_eof=True)
+                       if r.query_name.startswith("SPIKE_") and not r.flag & 0xF0C and not r.is_unmapped))
+    donors = tally(fa, in_windows(pysam.AlignmentFile(orig), lambda r: True))
+    print("crashed share by run bin 0 / 1 / 2 / 3 (reads in brackets)")
+    for name, t in (("donors in windows", donors), ("spike remade reads", spike)):
+        for m in range(2):
+            cells = "  ".join(f"{100 * t[m, h, 1] / t[m, h, 0]:5.1f}% ({t[m, h, 0]:4d})" if t[m, h, 0] else "    -        "
+                              for h in range(4))
+            print(f"{name:20s} R{m + 1}: {cells}")
+    rate = donors[:, :, 1] / np.maximum(donors[:, :, 0], 1)
+    n_spike = spike[:, :, 0].sum()
+    for name, t in (("donors in windows", donors), ("spike remade reads", spike)):
+        print(f"{name:20s} overall {100 * t[:, :, 1].sum() / t[:, :, 0].sum():5.2f}% of {t[:, :, 0].sum()}; "
+              f"run bin 3 holds {100 * t[:, 3, 0].sum() / t[:, :, 0].sum():.1f}%")
+    print(f"expected for spike's reads at the donors' per-bin rates: {100 * (spike[:, :, 0] * rate).sum() / n_spike:.2f}%")
+
+
+if __name__ == "__main__":
+    main()

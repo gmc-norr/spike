@@ -10,17 +10,23 @@ what was claimed, what the claim actually rested on, and which gate would have c
   against the real reads' 14.4%, z +6.61, so "this alphabet now over-crashes"
   (`docs/superpowers/plans/2026-10-07-quality-model-v2.md`, Result, K6).
 - **What it actually rested on.** Comparing **spike's remade reads**, which stand only over the two
-  events' own templates — and one of those templates is a T13 about 200 bp left of the deletion edge
-  — with **every read in two windows** totalling 25 kb. The two sets do not stand over the same DNA.
+  events' own templates — and those templates hold five runs of 12+ one letter (a T13, a T12, a T13,
+  a T15 and an A17) inside 2 kb — with **every read in two windows** totalling 25 kb. The two sets do not stand over the same DNA.
   The model's own headline finding is that a run of 12+ makes a read crash 15% of the time against
   0.46% with no run, so a set enriched in such templates *must* crash more. The gate was built to
   measure that effect and then read its own enrichment as a defect.
 - **How it was caught.** By run bin (`docs/analysis/quality-model-v2/k6_runbins.py`): put both sets
   in the bins `quality::run_bin` already defines, from the reference under each read. Within each
   bin the two sets agree — in bin 3, 61.7% against 58.6% (R1) and 73.0% against 77.7% (R2). **23.8%**
-  of spike's reads sit in bin 3 against **6.7%** of the window's. At the donors' per-bin rates
+  of spike's reads (155 of 650) sit in bin 3 against **6.7%** of the window's, over five long runs
+  (`bin3_runs.py`). At the donors' per-bin rates
   spike's reads are expected to crash **23.76%**; they crash **24.31%**. A held-out check on the same
   BAM (40,232 pairs) shows no over-crash at all: 6.15% / 16.43% against 6.78% / 18.55%.
+- **And then the correction made the same mistake once.** Its first write-up named *one* of those
+  five runs as the cause. That run carries 30 of the 155 bin-3 reads — 4.6% of the 650 — and 108 sit
+  over three runs on the other side of the deletion. Found by the whole-branch review, by counting
+  the reads under each run instead of naming the nearest one. **The rule:** when you attribute an
+  enrichment to a feature, count the reads that feature actually covers.
 - **The tell that was in the data all along.** 650 spike reads against 5,127 real ones in the same
   windows. A 7.9x difference in count is a difference in *where* the reads are, and the plan's own
   table of crash rates by run bin was on the page above it.
