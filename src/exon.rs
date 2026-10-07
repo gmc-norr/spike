@@ -1424,6 +1424,43 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
         assert_eq!(genes[0].gene, "1001");
     }
 
+    /// The bundled LDLR exons are MANE v1.0's NM_000527.5, 0-based half-open.
+    /// Exon 1 once sat at 11090578-11090919, about 1 kb inside intron 1, so an
+    /// event naming exon 1 missed it; the real exon 1 holds the ATG at
+    /// chr19:11,089,549 (1-based).
+    #[test]
+    fn test_the_bundled_ldlr_exons_are_manes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/ldlr_deletions/ldlr_exons_hg38.bed");
+        let genes = parse_exon_bed(path.to_str().unwrap()).unwrap();
+        let ldlr = genes.iter().find(|g| g.gene == "LDLR").expect("LDLR in the bundled BED");
+        let mane: [(u64, u64); 18] = [
+            (11089462, 11089615),
+            (11100222, 11100345),
+            (11102663, 11102786),
+            (11105219, 11105600),
+            (11106564, 11106687),
+            (11107391, 11107514),
+            (11110651, 11110771),
+            (11111513, 11111639),
+            (11113277, 11113449),
+            (11113534, 11113762),
+            (11116093, 11116212),
+            (11116858, 11116998),
+            (11120091, 11120233),
+            (11120369, 11120522),
+            (11123173, 11123344),
+            (11128007, 11128085),
+            (11129512, 11129670),
+            (11131280, 11133820),
+        ];
+        let got: Vec<(u32, u64, u64)> = ldlr.exons.iter().map(|e| (e.number, e.start, e.end)).collect();
+        let want: Vec<(u32, u64, u64)> = mane.iter().enumerate().map(|(i, &(s, e))| (i as u32 + 1, s, e)).collect();
+        assert_eq!(got, want);
+        let atg = 11_089_548u64; // 0-based first base of the start codon
+        let exon1 = &ldlr.exons[0];
+        assert!(exon1.start <= atg && atg + 3 <= exon1.end, "exon 1 {}-{} misses the ATG", exon1.start, exon1.end);
+    }
+
     #[test]
     fn test_fifth_column_gene_symbol_still_wins_over_the_exon_name() {
         // spike's own layout (data/ldlr_deletions/ldlr_exons_hg38.bed) names

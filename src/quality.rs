@@ -1117,6 +1117,16 @@ pub fn indexed_windows(alignment_path: &str, ref_path: &str) -> Result<Vec<(Stri
     Ok(windows)
 }
 
+/// `windows` on contigs `fasta` holds, in order, and the names of the other
+/// contigs (sorted, once each).
+fn windows_on_reference(windows: Vec<(String, u64, u64)>, fasta: &HashSet<String>) -> (Vec<(String, u64, u64)>, Vec<String>) {
+    let (kept, other): (Vec<_>, Vec<_>) = windows.into_iter().partition(|w| fasta.contains(&w.0));
+    let mut dropped: Vec<String> = other.into_iter().map(|w| w.0).collect();
+    dropped.sort();
+    dropped.dedup();
+    (kept, dropped)
+}
+
 /// A BAI's leaf bins (16 kb, ids 4681-37448) that hold chunks, per contig.
 fn bai_windows(index: &noodles::bam::bai::Index, names: &[String]) -> Vec<(String, u64, u64)> {
     const FIRST_LEAF: usize = 4681;
@@ -1177,7 +1187,18 @@ pub fn choose_blocks(windows: &[(String, u64, u64)], n: usize, len: u64) -> Vec<
 /// donor pools are (`--min-mapq`, the same filters), on the thread pool, and
 /// deduplicated by name; each with the reference under its reads.
 pub fn sample_input(alignment_path: &str, ref_path: &str, min_mapq: u8) -> Result<Vec<DonorBlock>> {
-    let windows = indexed_windows(alignment_path, ref_path)?;
+    // Only contigs the FASTA holds can be read against it: an input aligned
+    // to a larger reference (decoys, HLA) lists others, and a block there
+    // would abort the run.
+    let fasta: HashSet<String> = crate::reference::fasta_contigs(ref_path)?.into_iter().map(|(name, _)| name).collect();
+    let (windows, dropped) = windows_on_reference(indexed_windows(alignment_path, ref_path)?, &fasta);
+    if !dropped.is_empty() {
+        log::info!(
+            "Quality sample: {} contig(s) with reads are not in the reference FASTA and are left out (e.g. {})",
+            dropped.len(),
+            dropped.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
     let placed = choose_blocks(&windows, SAMPLE_BLOCKS, SAMPLE_BLOCK_LEN);
     let mut blocks: Vec<DonorBlock> = placed
         .par_iter()
@@ -1680,6 +1701,20 @@ mod tests {
                 ("chrA".to_string(), leaf_start(30_016_384), leaf_start(30_016_384) + 16_384),
             ]
         );
+    }
+
+    /// An input aligned to a larger reference than the FASTA (a decoy-aware
+    /// CRAM with the no-alt FASTA) lists windows on contigs the FASTA lacks.
+    /// A block there cannot be read, and the run aborted; such windows are
+    /// left out, and every other window is kept in its order.
+    #[test]
+    fn test_sample_windows_on_contigs_the_reference_lacks_are_left_out() {
+        let w = |c: &str, s: u64| (c.to_string(), s, s + 16_384);
+        let windows = vec![w("chr1", 0), w("chrUn_JTFH01000277v1_decoy", 0), w("chr1", 16_384), w("chr2", 0), w("HLA-A*01:01:01:01", 0)];
+        let fasta: HashSet<String> = ["chr1", "chr2", "chrM"].iter().map(|s| s.to_string()).collect();
+        let (kept, dropped) = windows_on_reference(windows, &fasta);
+        assert_eq!(kept, vec![w("chr1", 0), w("chr1", 16_384), w("chr2", 0)]);
+        assert_eq!(dropped, vec!["HLA-A*01:01:01:01".to_string(), "chrUn_JTFH01000277v1_decoy".to_string()]);
     }
 
     /// T8: a CRAM's windows are its slices' spans, by contig and position.
