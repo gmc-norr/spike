@@ -44,7 +44,10 @@ with open("snv_accept.csv", "w") as fh:
 def wilson(k, n, z=1.96):
     c = (k + z * z / 2) / (n + z * z); h = z * math.sqrt(k * (n - k) / n + z * z / 4) / (n + z * z)
     return c - h, c + h
-print("crash real 261/23832", [round(100 * x, 3) for x in wilson(261, 23832)], "spike 1/13016", [round(100 * x, 4) for x in wilson(1, 13016)])
+_tails = json.load(open("qual_stats.json"))["lowtail"]
+for _k in ("real", "spike"):
+    _n = sum(_tails[_k].values()); _c = sum(v for q, v in _tails[_k].items() if int(q) >= 10)
+    print(f"crash {_k} {_c}/{_n}", [round(100 * x, 3) for x in wilson(_c, _n)])
 
 ins = list(csv.DictReader(open("insert.csv")))
 a = sorted(int(r["tlen"]) for r in ins if r["kind"] == "real"); b = sorted(int(r["tlen"]) for r in ins if r["kind"] == "spike")

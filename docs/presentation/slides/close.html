@@ -2,9 +2,9 @@
 <h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Summary</h2>
 <ul style="font-size:28px;line-height:1.5;color:#2B323B;width:1560px">
 <li>spike plants structural variants, SNVs and indels into a real sample's reads and records the truth</li>
-<li>Each random component uses a model estimated from the sample's own reads: empirical resampling, a first-order Markov chain for base quality, Phred-scaled errors</li>
-<li>In real runs, depth, allele fractions, fragment lengths and quality transitions agree with expectation and with real reads</li>
-<li>Known gap: quality varies too little from read to read; long low-quality runs at the 3′ end, and the soft clips they cause, are rarer than in real reads</li>
+<li>Each random component uses a model estimated from the sample's own reads: empirical resampling for fragments, and a quality context model and error table learned from a sample of the input</li>
+<li>In real runs, depth, allele fractions, fragment lengths, read-to-read quality spread and crashed 3′ ends agree with expectation and with real reads</li>
+<li>Known gaps: crashed ends about a quarter short; soft clips with other causes, and duplicates, are not made</li>
 </ul>
 <div style="flex:1"></div>
 <div style="display:flex;flex-direction:column;gap:4px;background:#F1F3F5;border-left:4px solid #1F4E79;padding:20px 28px">
@@ -14,5 +14,5 @@
 </div>
 <p style="font-size:26px;color:#4A5160">Source code: github.com/gmc-norr/spike</p>
 <p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Discussion · 25 / 25</p>
-<aside>Summary: spike plants known variants into real data and records them; its random components are estimated from the sample's own reads; real-run measurements agree except for read-to-read quality variation and the low-quality tail. The three commands at the bottom run one event from start to finish.</aside>
+<aside>Summary: spike plants known variants into real data and records them; its random components are estimated from the sample's own reads; real-run measurements agree with real reads, including how quality varies between reads and how often reads crash at the 3′ end. The three commands at the bottom run one event from start to finish.</aside>
 </section>

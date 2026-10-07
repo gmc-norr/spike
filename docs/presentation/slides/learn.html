@@ -1,10 +1,10 @@
 <section id="learn" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:30px">
-<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Library model estimated from the donor reads</h2>
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Library model estimated from the sample</h2>
 <table style="font-size:24px;color:#2B323B">
 <tr style="background:#E8EDF3"><th style="width:21%;text-align:left">Property</th><th style="width:47%;text-align:left">Estimated as</th><th style="width:32%;text-align:left">Example run</th></tr>
 <tr><td>Donor pool</td><td>Read pairs within ±10 kb, MAPQ ≥ 20, properly paired</td><td>4,623 pairs</td></tr>
 <tr><td>Fragment length</td><td>Observed insert sizes in [read length, 1,500] bp</td><td>mean 423.7 bp (n = 4,591)</td></tr>
-<tr><td>Base quality</td><td>Markov chain per mate, 151 cycles</td><td>4,623 pairs</td></tr>
+<tr><td>Qualities, errors</td><td>Context model and error table, from 20 blocks of 50 kb of the input</td><td>142,458 pairs, 2.6 s</td></tr>
 <tr><td>Adapter trimming</td><td>Read ends of full-length reads; copied to new reads</td><td>not trimmed</td></tr>
 <tr><td>Read names</td><td>Field shape of the input's names</td><td>7 fields, Illumina</td></tr>
 <tr><td>Het SNPs</td><td>Pileup: ≥ 10 reads, two alleles each 20–80%</td><td>32 fragments assigned</td></tr>
@@ -12,5 +12,5 @@
 </table>
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 2.</b> What spike estimates from the sample before it changes anything. Example run: heterozygous 10 kb deletion at chr20:38,900,000–38,910,000, GIAB HG002 at 35×; values from the run's log.</p>
 <p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 6 / 25</p>
-<aside>Before spike changes anything it reads the sample around the event and estimates everything it will need: the insert-size distribution, a base-quality model per mate, whether the library was adapter-trimmed, the shape of read names, and the sample's heterozygous SNPs, which tell it which of the two copies each fragment came from. In this run 32 fragments could be assigned; 16 more were ties and stay unassigned.</aside>
+<aside>Before spike changes anything it reads the sample around the event and estimates everything it will need: the insert-size distribution, and once per run a quality and error model from a sample of the whole input, whether the library was adapter-trimmed, the shape of read names, and the sample's heterozygous SNPs, which tell it which of the two copies each fragment came from. In this run 32 fragments could be assigned; 16 more were ties and stay unassigned.</aside>
 </section>

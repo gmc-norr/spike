@@ -15,7 +15,7 @@ The source of a 25-slide talk on spike's inner workings: what it does, the stati
 ## Data
 
 - **Sample:** a chr20 slice (38.5–40.2 Mb) of the GIAB HG002 NovaSeq PCR-free 35x BAM, aligned with bwa-mem2 2.2.1.
-- **spike version:** master 97aa3b4.
+- **spike version:** master ba9f4e7 (October 7, 2026), after the quality model was rebuilt. The deck first used 97aa3b4; slides 10-11 and 18-20 changed most.
 - **Runs:**
   - a heterozygous and a homozygous 10 kb deletion at chr20:38,900,000–38,910,000;
   - 25 SNVs, 60 kb apart, at allele fractions 0.1, 0.25, 0.5, 0.75 and 1.0.

@@ -1,21 +1,22 @@
 <section id="markov" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
-<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Base quality model: a first-order Markov chain</h2>
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Base quality model: contexts learned from the input</h2>
 <div style="display:flex;gap:56px;align-items:start">
 <div style="width:720px;display:flex;flex-direction:column;gap:18px">
-<p style="font-size:26px;line-height:1.45">The quality of base <i>i</i> is drawn from the observed qualities in the most specific bin holding ≥ 30 observations:</p>
-<ol style="font-size:26px;line-height:1.5;color:#2B323B">
-<li>P( <i>Q</i>(<i>i</i>) | <i>i</i>, <i>b</i>(<i>i</i>), <i>B</i>(<i>Q</i>(<i>i</i>−1)) )</li>
-<li>P( <i>Q</i>(<i>i</i>) | <i>i</i>, <i>B</i>(<i>Q</i>(<i>i</i>−1)) )</li>
-<li>P( <i>Q</i>(<i>i</i>) | <i>i</i>, <i>b</i>(<i>i</i>) ), also used at cycle 1</li>
-<li>P( <i>Q</i>(<i>i</i>) | <i>i</i> ), any number of observations</li>
-</ol>
-<p style="font-size:24px;line-height:1.45;color:#4A5160"><i>i</i>: cycle; <i>b</i>(<i>i</i>): base; <i>B</i> bins the previous quality: Q0–9, 10–19, 20–29, ≥ 30. Estimated per mate from the donor pool; a draw is a resampled observed value. Bins with ≥ 30 observations in the example run: level 1, 3,167 of 4,832; level 2, 900 of 1,208; level 3, 1,208 of 1,208.</p>
+<p style="font-size:26px;line-height:1.45">Each base's quality is drawn from the qualities that sampled reads show in the same context:</p>
+<ul style="font-size:26px;line-height:1.45;color:#2B323B">
+<li><b>History:</b> the read's last 5 qualities</li>
+<li><b>Position:</b> cycles left to the 3′ end, 8 bins</li>
+<li><b>Read class:</b> 8 classes of mean quality, drawn per pair</li>
+<li><b>Lows:</b> qualities below Q15 among the last 16</li>
+<li><b>Run:</b> the longest one-letter run in the template so far</li>
+</ul>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Learned once per run from 20 blocks of 50 kb of the input, per mate. A context is used once it holds 20 observations, else the draw backs off in five steps to the whole mate. Example run: 142,458 pairs, 36,986 full contexts.</p>
 </div>
 <div style="flex:1;display:flex;flex-direction:column;gap:14px">
-<img src="../figures/chart_markov.png" alt="Two heatmaps of one-step quality transition probabilities, real reads and spike's reads; rows: previous quality bin Q10-19, Q20-29, Q30+; columns: Q11, Q25, Q37. Real: 0.199 0.140 0.661 / 0.088 0.101 0.811 / 0.021 0.041 0.938. spike: 0.185 0.133 0.683 / 0.079 0.097 0.824 / 0.020 0.041 0.939." style="width:888px;height:497px;object-fit:contain">
-<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 5.</b> One-step transition probabilities, pooled over cycles and both mates, in the 25 windows of the SNV run: real reads (n = 23,832) and spike's reads (n = 13,016). This library has three quality values. Overall 2.9% of real bases are Q11; after a Q10–19 base, 19.9% are (spike: 2.7% and 18.5%).</p>
+<img src="../figures/chart_runbin.png" alt="Share of reads with a crashed 3-prime end, log scale, by the longest one-letter run in the read's template: none, A/G/T 7-8, A/G/T 9-11 or C 5-6, A/G/T 12+ or C 7+; real reads 0.53, 0.63, 1.28 and 15.1 percent, spike 0.36, 0.56, 1.22 and 12.7 percent, with overlapping confidence intervals" style="width:888px;height:497px;object-fit:contain">
+<p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 5.</b> Reads with a crashed 3′ end (≥ 10 of the last 20 qualities below Q15) by the longest one-letter run in the reference under the read, in the 25 windows of the SNV run: real reads (n = 23,838) and spike's reads (n = 13,009). Bars: Wilson 95% CIs.</p>
 </div>
 </div>
 <p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 10 / 25</p>
-<aside>Base qualities are not independent along a read: a low-quality base is far more often followed by another low one. Here 2.9 percent of real bases are Q11, but after a low-quality base the next is Q11 almost 20 percent of the time. spike models this with a first-order Markov chain whose transition probabilities are estimated per cycle, per base and per mate from the sample's own reads, with fallbacks to coarser bins where data are sparse. Figure 5 shows the one-step transitions measured on real reads and on spike's reads in the same windows: they agree closely.</aside>
+<aside>The first-order chain this replaced forgot a read's state within a few bases, so all its reads were average. The context model keeps what makes a read good or bad: its class, how many of its recent qualities were low, and whether its template held a long run of one letter, which on Illumina sets off a lasting crash on the strand that reads into it. All of it is learned once per run from 20 blocks of 50 kb spread over the input, because the reads around one event are too few to hold the rare poor reads. Figure 5 shows the run effect in real data: after 12 or more of one letter, 15 percent of real reads crash, against half a percent with no run, and spike's reads follow.</aside>
 </section>

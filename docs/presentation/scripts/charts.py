@@ -5,6 +5,7 @@ Colours: real reads blue, spike's reads orange (dataviz slots 1-2, validated
 on the slide surface); a third series aqua (slot 3).
 """
 import csv
+import statistics
 import math
 
 import matplotlib
@@ -104,8 +105,10 @@ rows = list(csv.DictReader(open("insert.csv")))
 f = fig(1000, 600)
 ax = f.add_axes([0.10, 0.17, 0.86, 0.79])
 bins = list(range(0, 1001, 20))
+medians = {}
 for kind, col in [("real", BLUE), ("spike", ORANGE)]:
     v = [int(r["tlen"]) for r in rows if r["kind"] == kind]
+    medians[kind] = statistics.median(v)
     counts = [0] * (len(bins) - 1)
     for t in v:
         if t < 1000:
@@ -115,8 +118,8 @@ for kind, col in [("real", BLUE), ("spike", ORANGE)]:
     ax.step(bins[:-1], ys, where="post", color=col, lw=2)
 ax.set_xlim(0, 1000)
 ax.set_ylim(0, None)
-ax.text(520, ax.get_ylim()[1] * 0.80, "Real pairs: median 382 bp", color="#1c5cab", fontsize=11, fontweight="bold")
-ax.text(520, ax.get_ylim()[1] * 0.68, "spike's pairs: median 385 bp", color="#c4501f", fontsize=11, fontweight="bold")
+ax.text(520, ax.get_ylim()[1] * 0.80, f"Real pairs: median {medians['real']:g} bp", color="#1c5cab", fontsize=11, fontweight="bold")
+ax.text(520, ax.get_ylim()[1] * 0.68, f"spike's pairs: median {medians['spike']:g} bp", color="#c4501f", fontsize=11, fontweight="bold")
 ax.set_xlabel("Fragment length (bp)")
 ax.set_ylabel("Share of pairs (%, 20 bp bins)")
 ax.grid(axis="x", visible=False)

@@ -4,7 +4,8 @@
 <tr style="background:#E8EDF3"><th style="width:56%;text-align:left">Condition</th><th style="width:44%;text-align:left">Reason</th></tr>
 <tr><td>More than half the reads over the event cannot be edited (below --min-mapq, not properly paired, mate failing a filter)</td><td>The planted event would be weaker than the truth file states (override: --allow-resistant)</td></tr>
 <tr><td>The sample already carries another allele at a small variant: ≥ 10 reads span it and ≥ 1 in 5 carry another allele</td><td>The requested fraction cannot be reached</td></tr>
-<tr><td>Fewer than 30 donor read pairs</td><td>No data to estimate the library model</td></tr>
+<tr><td>Fewer than 30 donor read pairs, or fewer than 30 in the startup sample</td><td>No data to estimate the library model</td></tr>
+<tr><td>None of the input's contigs are in the FASTA ("20" against "chr20", another build)</td><td>Reads cannot be compared with the reference</td></tr>
 <tr><td>Two events closer than 7,000 bp</td><td>Their replaced reads would overlap (override: --allow-overlap)</td></tr>
 <tr><td>Most common read length above 1,500 bp</td><td>Only short paired-end reads are modelled</td></tr>
 </table>

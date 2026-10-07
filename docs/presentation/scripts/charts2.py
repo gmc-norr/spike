@@ -41,9 +41,11 @@ save(f, "chart_markov.png")
 f = fig(1000, 560)
 ax = f.add_axes([0.13, 0.16, 0.84, 0.78])
 ax.axvspan(9.5, 20.5, color=BAND, lw=0, zorder=0)
+n_reads = {}
 for kind, col in [("real", BLUE), ("spike", ORANGE)]:
     c = {int(k): v for k, v in st["lowtail"][kind].items()}
     tot = sum(c.values())
+    n_reads[kind] = tot
     xs = list(range(21))
     ax.plot(xs, [c[x] / tot * 100 if c.get(x, 0) else float("nan") for x in xs], color=col, lw=2, marker="o", ms=4)
 ax.set_yscale("log")
@@ -55,8 +57,8 @@ ax.set_xlabel("Bases below Q15 among a read's last 20 cycles")
 ax.set_ylabel("Share of reads (%, log scale)")
 ax.grid(axis="x", visible=False)
 ax.text(10.2, 70, "crashed end (10 or more)", color=MUTED, fontsize=10)
-ax.text(10.4, 14, "Real reads (n = 23,832)", color="#1c5cab", fontsize=11, fontweight="bold")
-ax.text(10.4, 5, "spike's reads (n = 13,016)", color="#c4501f", fontsize=11, fontweight="bold")
+ax.text(10.4, 14, f"Real reads (n = {n_reads['real']:,})", color="#1c5cab", fontsize=11, fontweight="bold")
+ax.text(10.4, 5, f"spike's reads (n = {n_reads['spike']:,})", color="#c4501f", fontsize=11, fontweight="bold")
 save(f, "chart_lowtail.png")
 
 # C. Mismatch rate by base quality (aligned bases, variant positions excluded)

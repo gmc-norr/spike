@@ -1,15 +1,15 @@
 <section id="errors" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
-<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Sequencing errors drawn from base quality</h2>
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">Sequencing errors learned from the sample's own mismatches</h2>
 <div style="display:flex;gap:56px;align-items:start">
 <div style="width:720px;display:flex;flex-direction:column;gap:20px">
-<p style="font-size:26px;line-height:1.45">Each synthetic base is wrong with probability <i>p</i> = 10^(−<i>Q</i>/10), <i>Q</i> being the quality drawn for it. A wrong base becomes one of the three others with equal probability. Indel errors are off by default (--indel-error-rate).</p>
+<p style="font-size:26px;line-height:1.45">A base is wrong at the rate the sampled reads show for its quality, read class, lows among its last 16 qualities, distance from the 3′ end, template run and the read's recent errors. Sparse cells back off to coarser ones and, with nothing counted, to <i>p</i> = 10^(−<i>Q</i>/10). A wrong base becomes one of the three others with equal probability; indel errors are off by default.</p>
 <table style="font-size:24px;color:#2B323B">
 <tr style="background:#E8EDF3"><th style="width:22%;text-align:left">Quality</th><th style="width:26%;text-align:right">Real reads</th><th style="width:26%;text-align:right">spike</th><th style="width:26%;text-align:right">10^(−Q/10)</th></tr>
-<tr><td>Q11</td><td style="text-align:right">9.45%</td><td style="text-align:right">8.11%</td><td style="text-align:right">7.94%</td></tr>
-<tr><td>Q25</td><td style="text-align:right">0.318%</td><td style="text-align:right">0.296%</td><td style="text-align:right">0.316%</td></tr>
-<tr><td>Q37</td><td style="text-align:right">0.011%</td><td style="text-align:right">0.020%</td><td style="text-align:right">0.020%</td></tr>
+<tr><td>Q11</td><td style="text-align:right">9.63%</td><td style="text-align:right">9.54%</td><td style="text-align:right">7.94%</td></tr>
+<tr><td>Q25</td><td style="text-align:right">0.310%</td><td style="text-align:right">0.414%</td><td style="text-align:right">0.316%</td></tr>
+<tr><td>Q37</td><td style="text-align:right">0.012%</td><td style="text-align:right">0.023%</td><td style="text-align:right">0.020%</td></tr>
 </table>
-<p style="font-size:24px;line-height:1.45;color:#4A5160">Mismatch rate on aligned bases, MAPQ ≥ 20; 249 positions where ≥ 10% of reads mismatch (variants) excluded. spike follows the nominal rate by construction; real Q37 bases err about half as often as nominal.</p>
+<p style="font-size:24px;line-height:1.45;color:#4A5160">Mismatch rate on aligned bases, MAPQ ≥ 20; 261 positions where ≥ 10% of reads mismatch (variants) excluded. At Q11 spike matches the real rate, which the nominal rate understates; at Q25 and Q37 it errs 1.3× and 1.9× the real rate.</p>
 </div>
 <div style="flex:1;display:flex;flex-direction:column;gap:14px">
 <img src="../figures/chart_errors.png" alt="Mismatch rate (log scale) against base quality 11, 25 and 37, for real reads and spike's reads, with 95% confidence intervals and the dashed nominal line 10^(-Q/10)" style="width:888px;height:497px;object-fit:contain">
@@ -17,5 +17,5 @@
 </div>
 </div>
 <p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 11 / 25</p>
-<aside>The error model is the Phred definition itself: a base of quality Q is wrong with probability ten to the minus Q over ten. Counts behind the table: real Q11 8,648 of 91,530 aligned bases, Q25 518 of 163,031, Q37 369 of 3,306,944; spike Q11 4,277 of 52,754, Q25 265 of 89,594, Q37 367 of 1,819,605. One caveat: the aligner soft-clips the worst read ends, and those bases have no reference position, so they are missing from this count. An earlier inspection found that real reads with a crashed tail carry far more errors than their qualities say.</aside>
+<aside>The error model is learned, not assumed: in the startup sample spike compares each read with the reference, leaving out the sample's own variants, adapter and other foreign ends, and counts errors by quality and by the read's state. Counts behind the table: real Q11 8,951 of 92,947 aligned bases, Q25 509 of 164,117, Q37 399 of 3,304,160; spike Q11 4,816 of 50,472, Q25 376 of 90,801, Q37 426 of 1,812,902. At Q11 the learned rate matches; at Q25 and Q37 spike's bases err more often than the real ones in these windows. Soft-clipped bases have no reference position and are not counted here.</aside>
 </section>

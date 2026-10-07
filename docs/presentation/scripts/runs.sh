@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The spike runs behind the deck's figures, on a chr20 slice (38.5-40.2 Mb) of the GIAB HG002
-# NovaSeq PCR-free 35x BAM (bwa-mem2 2.2.1). The deck used spike at master 97aa3b4.
+# NovaSeq PCR-free 35x BAM (bwa-mem2 2.2.1). The deck uses spike at master ba9f4e7 (it first used 97aa3b4, before the quality model was rebuilt).
 #   REF    GRCh38 no-alt analysis set FASTA (bwa-mem2 indexed)
 #   SLICE  the chr20 slice BAM
 #   SPIKE  spike binary (default: spike on PATH)

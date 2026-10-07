@@ -51,8 +51,10 @@ for i, (m, title) in enumerate([(1, "A  Read 1"), (2, "B  Read 2")]):
 
 ax = fig.add_axes([0.63, 0.24, 0.36, 0.64])
 edges = np.arange(20, 37.5 + 1e-9, 0.5)
+sd_means = {}
 for k, col in (("real", BLUE), ("spike", ORANGE)):
     rm = np.vstack([Q[k][1], Q[k][2]]).mean(axis=1)
+    sd_means[k] = rm.std(ddof=1)
     h, _ = np.histogram(np.clip(rm, 20, 37.49), bins=edges)
     y = np.where(h > 0, h / len(rm) * 100, np.nan)   # empty bins break the line
     ax.stairs(y, edges, color=col, lw=2, baseline=None)
@@ -63,7 +65,7 @@ ax.set_title("C  Mean quality of each read", loc="left", color=INK, fontsize=12,
 ax.set_xlabel("Mean base quality of the read")
 ax.set_ylabel("Share of reads (%, log)")
 ax.grid(axis="x", visible=False)
-ax.text(21, 12, "Real: SD 2.08", color="#1c5cab", fontsize=11, fontweight="bold")
-ax.text(21, 4, "spike: SD 0.52", color="#c4501f", fontsize=11, fontweight="bold")
+ax.text(21, 12, f"Real: SD {sd_means['real']:.2f}", color="#1c5cab", fontsize=11, fontweight="bold")
+ax.text(21, 4, f"spike: SD {sd_means['spike']:.2f}", color="#c4501f", fontsize=11, fontweight="bold")
 fig.savefig("chart_qspread.png", dpi=400)
 print("ok")
