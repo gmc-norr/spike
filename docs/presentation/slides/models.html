@@ -13,6 +13,6 @@
 <tr><td>Orientation</td><td>Bernoulli(0.5): which end of the fragment is read 1</td><td>None</td></tr>
 </table>
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 1.</b> Every random choice in a run. All are drawn from one pseudo-random generator (Rust StdRng) seeded by --seed. The empirical models resample observed values rather than fit parametric distributions.</p>
-<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 5 / 25</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 5 / 27</p>
 <aside>This table is the statistical core of spike. Where a model is estimated it is non-parametric: spike draws from observed values rather than fitting, say, a normal fragment-length distribution. Fragment lengths, depth and the event's class mix come from the donor pool, the sample's own reads around the event. The quality and error models are learned once per run from a sample of the whole input, 20 blocks of 50 kb, because one event's pool is too thin for rare poor reads and their errors; slides 10 and 11 describe them.</aside>
 </section>

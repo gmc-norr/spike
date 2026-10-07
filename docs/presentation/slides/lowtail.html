@@ -13,6 +13,6 @@
 </div>
 </div>
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 13.</b> Number of bases below Q15 among each read's last 20 cycles, real vs spike's reads (log scale; zero counts not drawn). Crashed end: ≥ 10 of 20. CIs: Wilson.</p>
-<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 20 / 25</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Results · 20 / 27</p>
 <aside>About one real read in a hundred ends in a long run of low-quality bases, a crash, and aligners soft-clip such ends. The old first-order chain made almost none: its run length fell off geometrically. The context model makes them at nearly the real rate, 0.88 against 1.16 percent, because it remembers how many recent qualities were low and whether the read's template held a long one-letter run. Its error table, learned from the sample's own crashed tails, makes those ends err as real ones do, so they are clipped too: on 125,000 held-out reads spike's bad-end clips were 1.23 to 1.27 percent against the sample's 1.26.</aside>
 </section>

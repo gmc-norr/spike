@@ -10,6 +10,6 @@
 <tr><td>Most common read length above 1,500 bp</td><td>Only short paired-end reads are modelled</td></tr>
 </table>
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Table 3.</b> Refusals stop the run before anything is written, and list every affected event. The truth file also records, per event, the share of reads that could not be edited (SIM_RESIST), the largest depth departure (SIM_DEPTH_FOLD) and how many planted pairs show the event (SIM_ALT_FRAGS).</p>
-<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 14 / 25</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 14 / 27</p>
 <aside>spike prefers to stop rather than write a truth file that claims more than the reads hold. The most consequential case is the first: reads it cannot edit, mostly with low mapping quality, stay in the BAM unchanged, so an event in a hard region would come out weaker than requested.</aside>
 </section>

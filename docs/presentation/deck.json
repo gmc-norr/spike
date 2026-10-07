@@ -30,6 +30,8 @@
   "lowtail",
   "validate",
   "realism",
+  "landscape",
+  "apart",
   "next",
   "method",
   "close"
@@ -48,8 +50,8 @@
    "start": "depth"
   },
   "s4": {
-   "description": "Discussion: limitations, next steps, practice and summary",
-   "start": "next"
+   "description": "Discussion: other tools, limitations, next steps, practice and summary",
+   "start": "landscape"
   }
  },
  "faces": {

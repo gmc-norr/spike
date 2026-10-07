@@ -1,0 +1,31 @@
+<section id="apart" data-transition="fade" style="background:#FDFDFC;color:#1F2328;font-family:'Noto Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:52px;font-weight:600;line-height:1.15;color:#1F2328;border-bottom:3px solid #1F4E79;padding:0px 0px 18px 0px">What sets spike apart</h2>
+<div style="display:flex;gap:64px;align-items:start">
+<div style="flex:1.25;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:30px;font-weight:600;color:#1F4E79">Among the tools in Table 8, only spike</h3>
+<ul style="font-size:26px;line-height:1.45;color:#2B323B">
+<li>makes new reads for every variant type from the sample's own phased copy of the region, so nearby SNPs travel with the event and a het deletion leaves the SNPs inside homozygous</li>
+<li>learns the qualities and errors of those reads from the input itself, at start-up, with no separate training step; the other tools that make new reads give every base one quality or use a profile prepared beforehand</li>
+<li>returns the whole real sample as FASTQ, so the full clinical pipeline (alignment, duplicate marking, calling) runs from the first step</li>
+</ul>
+<h3 style="font-size:30px;font-weight:600;color:#1F4E79;margin-top:8px">Also built in</h3>
+<ul style="font-size:26px;line-height:1.45;color:#2B323B">
+<li>spike validate measures each planted event; events that cannot be planted faithfully are refused (Table 3)</li>
+<li>Events by gene and exon name: del:LDLR:exon4-exon8</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:30px;font-weight:600;color:#1F4E79">Where other tools go further</h3>
+<ul style="font-size:26px;line-height:1.45;color:#2B323B">
+<li>Long and linked reads; STR expansions (VISOR)</li>
+<li>Tumour designs: purity, clones, somatic sets (BAMSurgeon, VarSim, VISOR, SVEngine)</li>
+<li>Each read's true origin (NEAT's golden BAM; VarSim's read names)</li>
+<li>No sample needed: any genome at any depth (NEAT, VarSim, VISOR, SVEngine)</li>
+<li>Ion Torrent data (VarBen)</li>
+<li>For an SNV, the existing reads edited in place, keeping their real qualities (SomatoSim, VarBen, BAMSurgeon)</li>
+</ul>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Discussion · 24 / 27</p>
+<aside>spike's place: it starts from a real sample like the spike-in tools, but makes new reads like the simulators, and learns them from that sample. Why it matters: an independent comparison of read simulators against real data (Milhaven and Pfeifer, Heredity 2023) found the quality scores of wgsim, which BAMSurgeon, SVEngine and VISOR use for new reads, a poor representation of the empirical data. "Phased" is the difference from BAMSurgeon 1.4.1, which assembled its structural-variant templates from the sample's reads and leaves phasing to the user ("we suggest phasing BAMs beforehand"); its 2026 rewrite builds them from the reference, carrying no small variants. The right column is the honest other side: for long reads, tumour designs, a per-read golden truth, or data without any real sample, other tools are the better choice. For a single SNV, editing the existing reads in place keeps them exactly; spike remakes the reads around it instead.</aside>
+</section>

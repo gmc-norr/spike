@@ -17,6 +17,6 @@
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 5.</b> Reads with a crashed 3′ end (≥ 10 of the last 20 qualities below Q15) by the longest one-letter run in the reference under the read, in the 25 windows of the SNV run: real reads (n = 23,838) and spike's reads (n = 13,009). Bars: Wilson 95% CIs.</p>
 </div>
 </div>
-<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 10 / 25</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 10 / 27</p>
 <aside>The first-order chain this replaced forgot a read's state within a few bases, so all its reads were average. The context model keeps what makes a read good or bad: its class, how many of its recent qualities were low, and whether its template held a long run of one letter, which on Illumina sets off a lasting crash on the strand that reads into it. All of it is learned once per run from 20 blocks of 50 kb spread over the input, because the reads around one event are too few to hold the rare poor reads. Figure 5 shows the run effect in real data: after 12 or more of one letter, 15 percent of real reads crash, against half a percent with no run, and spike's reads follow.</aside>
 </section>

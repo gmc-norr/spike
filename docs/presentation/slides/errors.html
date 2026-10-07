@@ -16,6 +16,6 @@
 <p style="font-size:24px;line-height:1.4;color:#4A5160"><b>Figure 6.</b> Mismatch rate by base quality with Wilson 95% CIs (some narrower than the dots); dashed: 10^(−Q/10). Soft-clipped bases are not counted, so the error rate of the poorest bases is underestimated in both groups.</p>
 </div>
 </div>
-<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 11 / 25</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6A7280">spike · Methods · 11 / 27</p>
 <aside>The error model is learned, not assumed: in the startup sample spike compares each read with the reference, leaving out the sample's own variants, adapter and other foreign ends, and counts errors by quality and by the read's state. Counts behind the table: real Q11 8,951 of 92,947 aligned bases, Q25 509 of 164,117, Q37 399 of 3,304,160; spike Q11 4,816 of 50,472, Q25 376 of 90,801, Q37 426 of 1,812,902. At Q11 the learned rate matches; at Q25 and Q37 spike's bases err more often than the real ones in these windows. Soft-clipped bases have no reference position and are not counted here.</aside>
 </section>
