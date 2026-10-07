@@ -1442,6 +1442,34 @@ mod tests {
         );
     }
 
+    /// `draw_classes` must read the table, not recompute the formula. Without
+    /// this, delegating `run_ratio_at` straight back to `run_ratio` throws the
+    /// whole speed fix away with every other test still green -- and only the
+    /// one-off S1 timing would notice (whole-branch review, finding 2).
+    #[test]
+    fn test_draw_classes_reads_the_table_rather_than_recomputing_it() {
+        let mut p = asymmetric_profile();
+        let runs = (3usize, 0usize);
+        let before: Vec<(usize, usize)> =
+            (0..40u64).map(|s| p.draw_classes(runs, None, &mut StdRng::seed_from_u64(s))).collect();
+        // One cell of mate 0's run bin 3 row made overwhelming. A `draw_classes`
+        // that reads the table must now draw that class for mate 0 every time;
+        // one that recomputes `run_ratio` cannot see the poke at all.
+        let (poked, at) = (5usize, |m: usize, h: usize, c: usize| (m * RUN_BINS + h) * READ_CLASSES + c);
+        p.run_ratios.as_mut().expect("the table is filled")[at(0, 3, poked)] = 1e12;
+        let after: Vec<(usize, usize)> =
+            (0..40u64).map(|s| p.draw_classes(runs, None, &mut StdRng::seed_from_u64(s))).collect();
+        assert!(
+            after.iter().all(|&(c1, _)| c1 == poked),
+            "poking (mate 0, run bin 3, class {poked}) to 1e12 left mate 0 drawing {:?}: draw_classes is not reading the table",
+            after.iter().map(|&(c1, _)| c1).collect::<HashSet<_>>()
+        );
+        assert!(
+            before.iter().any(|&(c1, _)| c1 != poked),
+            "mate 0 already drew class {poked} every time before the poke: the test proves nothing"
+        );
+    }
+
     /// `draw_classes` must pick what the weights built straight from
     /// `run_ratio` pick -- same product order, same one `f64` off the RNG.
     #[test]
