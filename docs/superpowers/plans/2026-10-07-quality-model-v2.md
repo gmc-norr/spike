@@ -247,3 +247,114 @@ All of this was measured before this plan, on the HG002 35x BAM unless said othe
 **Tests and speed.**
 - The whole suite passes, and the 7 mutants are caught. clippy shows no new warnings.
 - **Speed:** `dup:chr20:14550000-15550000` on the 35x BAM, `--seed 1 --threads 8`, 3 runs each. The new binary's median wall time is at most 1.25x master's (8.5-9.5 s on master for v1).
+
+## Result (2026-10-07): K1, K2, K7, tests and mutants pass; speed fails
+
+- **Code:** `e9a6f0c`.
+- **Binaries (md5):** new `961e2a3c`, master `e21d282b` (50ae8e1, as for v1).
+- **Scratch** (session scratchpad):
+  - `qtq2/`: `speed.sh`, `runs.sh`, `all.sh`, `k7.py`, `k1runs.py`, `k2runs.py`, `k6score.py`, and the runs;
+  - `qmp2/mutate.py`.
+
+The locked checks K1, K2 and K7 pass, as do the tests and the mutants. The speed check fails: 1.27x against a limit of 1.25x. The big held-out clip test matches the sample.
+
+**Deviations from the design**, all in `e9a6f0c`'s message:
+- **Class smoothing.** P(class | run bin) is shrunk toward P(class) by 8 reads, not +0.5/+4. With the plan's pseudo-counts, a run bin the sample barely holds drew every class alike.
+- **T3 is redesigned.** Every read has one class and a dense low stretch mid-read. In the plan's version the class alone told the reads apart.
+- **T3b is added**, because mutant 4 survived the planned tests.
+
+**Tests: 747 pass** (3 ignored), on stable and on Rust 1.82. clippy's warnings are master's.
+- **Mutants: 7 of 7 caught**, each by its own test:
+
+  | Mutant | Caught by |
+  |---|---|
+  | 1 | T1 |
+  | 2 | T1 |
+  | 3 | T2 |
+  | 4 | T3b; it survived T1-T5 |
+  | 5 | T4 |
+  | 6 | T5 |
+  | 7 | T7 |
+
+- With all seven parts back to v1's behaviour at once, 6 tests go red.
+
+**K1: PASS.** The 25-SNV run on the chr20 slice, seed 42.
+
+| | spike, new | spike, master | real |
+|---|---|---|---|
+| read-mean SD | 1.973 (ratio 0.931, pass) | 0.516 (0.248) | 2.118 |
+| perfect reads | 5.52% (z +0.19, pass) | 0.02% (z −27.17) | 5.47% |
+| crashed reads | 0.88% (z −2.49, pass) | 0.01% (z −11.88) | 1.16% |
+| R1-R2 corr (reported) | 0.514 | 0.034 | 0.543 |
+| mean below Q33 (reported) | 7.85% | 0% | 8.63% |
+
+- The control fires: master's run fails all three.
+- **Crashed share by the template's longest-run bin** (none / 7-8 / 9-11 / 12+), reported: spike 0.36 / 0.56 / 1.22 / 12.69%, real 0.52 / 0.59 / 1.33 / 15.23%.
+
+**K2: PASS.** The 22 events, re-planted on the hospital BAM; flank reads at MAPQ ≥ 20.
+
+| | spike, new | spike, master | sample's own |
+|---|---|---|---|
+| reads | 7,579 | 7,636 | 8,899 |
+| bad-end clip | 0.94% (z −2.64, pass) | 0.17% (z −8.60) | 1.38% |
+| any soft clip (reported) | 0.94% | 0.17% | 2.42% |
+| crashed (reported) | 1.49% (z +0.04) | 0.04% | 1.48% |
+| mismatches per 100 aligned bases (reported) | 0.270 | 0.243 | 0.308 |
+
+- **Bad-end share by run bin** (reported): spike 0.26 / 0.13 / 0.50 / 8.62%, own 0.73 / 0.98 / 0.95 / 8.16%.
+- On this BAM the shortfall is in reads without a long run. The reads after runs of 12+ match.
+- The pass is narrow: the plan predicted z ≈ −0.6 for an 8% gap, and this gap is 32%.
+
+**K2b, the big held-out clip test** (reported). The 35x BAM sampled by `sample_input`. The model learned from 63,040 even-hash pairs, and 62,682 odd-hash pairs were written (`docs/analysis/quality-model-v2/k2b.sh`).
+
+| set | bad-end clip | z | any clip | crashed (z) | by run bin |
+|---|---|---|---|---|---|
+| real | 1.26% | | 1.95% | 1.06% | 0.86 / 1.00 / 1.98 / 9.91% |
+| spike, seed 21 | 1.23% | −0.86 | 1.33% | 0.90% (−3.89) | 0.77 / 0.73 / 1.99 / 11.67% |
+| spike, seed 22 | 1.25% | −0.41 | 1.34% | 0.91% (−3.79) | 0.79 / 0.75 / 2.04 / 11.84% |
+| spike, seed 23 | 1.27% | +0.14 | 1.37% | 0.91% (−3.67) | 0.83 / 0.67 / 1.97 / 11.92% |
+
+- The real share is 1.26% here against 1.40% in the gate, because 50 kb blocks are other reads than the gate's 100 kb ones.
+- The crashed share stays about 15% short, as in the gate. Reads after runs of 12+ clip about 19% too often.
+
+**K3, mates (reported).** P(both crash) / (P(R1) · P(R2)) among spike's pairs at the K2 events: 4.74 (4,780 pairs), against the sample's 11.6 and v1's 10.16. Drawing each mate's class given its own run weakens the link.
+
+**K4, the startup sample (reported).**
+
+| input | blocks | pairs | read | learned |
+|---|---|---|---|---|
+| chr20 slice | 20, chr20:38,533,461 to 40,155,624 (all inside the slice) | 142,458 | 0.3 s | 1.4 s |
+| 35x HG002 | 20, chr1 to chrX | 126,228 | 0.6 s | 1.2 s |
+| hospital BAM | 20, chr1 to chrX | 113,938 | 2.8 s | 1.6 s |
+| `HG002.GRCh38.chr20.bam` | 20, chr20 | 143,080 | 2.4 s | 3.3 s |
+
+**K5, base dependence (reported).** The share below Q15 by called base at the K2 events:
+- spike A 0.0161, C 0.0171, G 0.0168, T 0.0167;
+- own A 0.0189, C 0.0185, G 0.0156, T 0.0124.
+
+Still flat: the base itself is not in the context, only its runs.
+
+**K6, a large alphabet (reported).** `HG002.GRCh38.chr20.bam` (novoalign), one SNV and the 10 kb DEL.
+- The run finishes, and the BAM's 31 values come out, and only those.
+- spike's 650 reads against 5,127 real reads in the two windows:
+  - read-mean SD 4.51 against 3.64 (ratio 1.24);
+  - crashed 24.3% against 14.4% (z +6.61).
+- This alphabet now over-crashes. v1 had 13.4%.
+
+**K7: PASS.** Master was run with `--seed` 42, 2, 3, 4 and 5.
+- The observed values differ between seeds, but no row's pass/fail does, so each round trip's `allele_freq` allowance is 0.
+- The new binary at seed 42: DEL+INS 15/15, small indels 12/12, hom DEL 10/10 and 25 SNVs 71/78, row for row as master. No row is lost.
+
+**Speed: FAIL.** `dup:chr20:14550000-15550000`, 35x BAM, `--seed 1 --threads 8`, alternating, 3 runs each.
+- Median: new 11.86 s against master 9.37 s, 1.27x. The limit is 1.25x.
+- The startup sample takes 1.8 s of that: 0.6 s to read, 1.2 s to learn.
+
+**What this means.**
+- spike's reads now carry the sample's read-to-read spread, perfect and crashed reads, and crashes after the DNA's own runs (K1).
+- They clip at a bad end as often as the sample's own reads on 125,000 held-out 35x reads (K2b). On the hospital events they clip 0.94% against 1.38% (K2, inside the limit).
+- **Still off:**
+  - crashed reads about 15% short on 35x (K1, K2b);
+  - run-free reads clip too little on the hospital BAM (K2);
+  - mates crash together less often (K3);
+  - a 31-value alphabet crashes too often (K6);
+  - the run is 1.27x slower on a single event.
