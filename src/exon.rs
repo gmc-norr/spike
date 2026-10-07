@@ -1432,7 +1432,11 @@ chr3\t8000\t8300\tGENEN_exon1\tGENEN
     fn test_the_bundled_ldlr_exons_are_manes() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/ldlr_deletions/ldlr_exons_hg38.bed");
         let genes = parse_exon_bed(path.to_str().unwrap()).unwrap();
-        let ldlr = genes.iter().find(|g| g.gene == "LDLR").expect("LDLR in the bundled BED");
+        let ldlr: Vec<_> = genes.iter().filter(|g| g.gene == "LDLR").collect();
+        assert_eq!(ldlr.len(), 1, "one LDLR in the bundled BED");
+        let ldlr = ldlr[0];
+        assert_eq!(ldlr.chrom, "chr19");
+        assert!(ldlr.exons.iter().all(|e| e.chrom == "chr19"), "every LDLR exon on chr19");
         let mane: [(u64, u64); 18] = [
             (11089462, 11089615),
             (11100222, 11100345),

@@ -1183,7 +1183,8 @@ pub fn choose_blocks(windows: &[(String, u64, u64)], n: usize, len: u64) -> Vec<
 }
 
 /// The startup sample: `SAMPLE_BLOCKS` blocks of `SAMPLE_BLOCK_LEN` bases
-/// placed by `choose_blocks` over `indexed_windows`, their pairs extracted as
+/// placed by `choose_blocks` over the `indexed_windows` on contigs the FASTA
+/// holds (an input with none is refused), their pairs extracted as
 /// donor pools are (`--min-mapq`, the same filters), on the thread pool, and
 /// deduplicated by name; each with the reference under its reads.
 pub fn sample_input(alignment_path: &str, ref_path: &str, min_mapq: u8) -> Result<Vec<DonorBlock>> {
@@ -1192,11 +1193,24 @@ pub fn sample_input(alignment_path: &str, ref_path: &str, min_mapq: u8) -> Resul
     // would abort the run.
     let fasta: HashSet<String> = crate::reference::fasta_contigs(ref_path)?.into_iter().map(|(name, _)| name).collect();
     let (windows, dropped) = windows_on_reference(indexed_windows(alignment_path, ref_path)?, &fasta);
+    let examples = dropped.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    if windows.is_empty() && !dropped.is_empty() {
+        bail!(
+            "none of the contigs {} lists ({} of them, e.g. {}) are in the reference FASTA {}: \
+             the input and the FASTA name their contigs differently (e.g. \"20\" against \"chr20\") \
+             or come from different builds",
+            alignment_path,
+            dropped.len(),
+            examples,
+            ref_path
+        );
+    }
     if !dropped.is_empty() {
         log::info!(
-            "Quality sample: {} contig(s) with reads are not in the reference FASTA and are left out (e.g. {})",
+            "Quality sample: {} contig(s) of {} are not in the reference FASTA and are left out (e.g. {})",
             dropped.len(),
-            dropped.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            alignment_path,
+            examples
         );
     }
     let placed = choose_blocks(&windows, SAMPLE_BLOCKS, SAMPLE_BLOCK_LEN);
@@ -1717,16 +1731,15 @@ mod tests {
         assert_eq!(dropped, vec!["HLA-A*01:01:01:01".to_string(), "chrUn_JTFH01000277v1_decoy".to_string()]);
     }
 
-    /// End to end: an input whose only reads sit on a contig the FASTA lacks
-    /// (the HG001 CRAM's decoys) must not abort the startup sample. Before the
-    /// fix a block landed there and `fetch_window` failed the run.
-    #[test]
-    fn test_the_startup_sample_does_not_abort_on_a_contig_the_fasta_lacks() {
+    /// A BAM in `dir` of 20 proper pairs on `contig` (200 kb), indexed by one
+    /// 16 kb leaf bin so the sampler offers a window there, and a FASTA that
+    /// holds only `chrA` (200 kb). Returns (BAM, FASTA).
+    fn sample_fixture(dir: &std::path::Path, contig: &str) -> (String, String) {
+        use noodles::sam::alignment::record::cigar::{op::Kind, Op};
         use noodles::sam::alignment::record::{Flags, MappingQuality};
         use noodles::sam::alignment::record_buf::{QualityScores, Sequence};
         use noodles::sam::alignment::RecordBuf;
-        let dir = std::env::temp_dir().join(format!("spike_decoy_sample_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir).unwrap();
         let read: Vec<u8> = (0..100).map(|i| b"ACGT"[i % 4]).collect();
         let mut records = Vec::new();
         for i in 0..20usize {
@@ -1740,12 +1753,7 @@ mod tests {
                         .set_reference_sequence_id(0)
                         .set_alignment_start(noodles::core::Position::new(pos).unwrap())
                         .set_mapping_quality(MappingQuality::new(60).unwrap())
-                        .set_cigar([noodles::sam::alignment::record::cigar::Op::new(
-                            noodles::sam::alignment::record::cigar::op::Kind::Match,
-                            100,
-                        )]
-                        .into_iter()
-                        .collect())
+                        .set_cigar([Op::new(Kind::Match, 100)].into_iter().collect())
                         .set_mate_reference_sequence_id(0)
                         .set_mate_alignment_start(noodles::core::Position::new(mate).unwrap())
                         .set_template_length(if first { 300 } else { -300 })
@@ -1756,22 +1764,52 @@ mod tests {
             }
         }
         records.sort_by_key(|r| r.alignment_start());
-        let bam = crate::extract::test_fixtures::write_one_contig_bam(&dir.join("decoy.bam"), "chrUn_decoy", 200_000, &records);
+        let bam = crate::extract::test_fixtures::write_one_contig_bam(&dir.join("sample.bam"), contig, 200_000, &records);
         // The fixture's .bai holds bin 0; make it the 16 kb leaf bin 4681 that
-        // the sampler reads windows from, so a window lands on the decoy.
+        // the sampler reads windows from.
         let bai_path = format!("{bam}.bai");
         let mut bai = std::fs::read(&bai_path).unwrap();
         bai[12..16].copy_from_slice(&4681u32.to_le_bytes());
         std::fs::write(&bai_path, bai).unwrap();
         let fasta = dir.join("ref.fa");
-        std::fs::write(&fasta, format!(">chrA\n{}\n", "A".repeat(1_000))).unwrap();
-        std::fs::write(dir.join("ref.fa.fai"), "chrA\t1000\t6\t1000\t1001\n").unwrap();
+        std::fs::write(&fasta, format!(">chrA\n{}\n", "ACGT".repeat(50_000))).unwrap();
+        std::fs::write(dir.join("ref.fa.fai"), "chrA\t200000\t6\t200000\t200001\n").unwrap();
         let windows = indexed_windows(&bam, fasta.to_str().unwrap()).unwrap();
-        assert!(windows.iter().any(|w| w.0 == "chrUn_decoy"), "the fixture must offer a window on the decoy: {windows:?}");
-        let blocks = sample_input(&bam, fasta.to_str().unwrap(), 20);
+        assert!(windows.iter().any(|w| w.0 == contig), "the fixture must offer a window on {contig}: {windows:?}");
+        (bam, fasta.to_str().unwrap().to_string())
+    }
+
+    /// End to end: the sample learns from reads on a contig the FASTA holds.
+    /// Guards the filter's wiring from the other side: one that drops every
+    /// window would leave this sample empty.
+    #[test]
+    fn test_the_startup_sample_reads_the_contigs_the_fasta_holds() {
+        let dir = std::env::temp_dir().join(format!("spike_sample_chra_{}", std::process::id()));
+        let (bam, fasta) = sample_fixture(&dir, "chrA");
+        let blocks = sample_input(&bam, &fasta, 20);
         std::fs::remove_dir_all(&dir).ok();
-        let blocks = blocks.expect("the startup sample aborted on a contig the FASTA lacks");
-        assert!(blocks.iter().all(|b| b.chrom != "chrUn_decoy"), "a block was placed on the decoy");
+        let blocks = blocks.expect("the startup sample of a chrA BAM against a chrA FASTA");
+        let pairs: usize = blocks.iter().map(|b| b.pairs.len()).sum();
+        assert_eq!(pairs, 20, "every pair on chrA is sampled");
+        assert!(blocks.iter().all(|b| b.chrom == "chrA"));
+    }
+
+    /// End to end: an input whose only reads sit on a contig the FASTA lacks
+    /// (a decoy, or "20" against "chr20") is refused with the reason named.
+    /// Before the fix a block landed there and the run aborted in
+    /// `fetch_window`; with the windows dropped but nothing said, it aborted
+    /// later blaming the index and --min-mapq.
+    #[test]
+    fn test_the_startup_sample_names_a_contig_the_fasta_lacks() {
+        let dir = std::env::temp_dir().join(format!("spike_sample_decoy_{}", std::process::id()));
+        let (bam, fasta) = sample_fixture(&dir, "chrUn_decoy");
+        let got = sample_input(&bam, &fasta, 20);
+        std::fs::remove_dir_all(&dir).ok();
+        let err = format!("{:#}", got.expect_err("an input with no contig in the FASTA must be refused"));
+        assert!(
+            err.contains("none of") && err.contains("chrUn_decoy") && err.contains("name their contigs differently"),
+            "the error must name the contig mismatch, got: {err}"
+        );
     }
 
     /// T8: a CRAM's windows are its slices' spans, by contig and position.
