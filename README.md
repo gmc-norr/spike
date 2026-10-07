@@ -1952,7 +1952,7 @@ The rate backs off to (quality, lows, run, errors), then to (quality, class), th
 
 Of real soft clips on HG002 chr20, 45% are such bad ends; the rest are adapter read-through, the sample's own variants, chimeric fragments and sequence not in the reference, which spike does not reproduce (docs/analysis/soft-clips). Sequence-set-off crashes, several reads clipping at one spot on one strand, sit among the sample's own variants there, so bad ends are more than 45%. The run log gives the counted bases and why the rest were left out.
 
-**How close.** On 125,000 held-out HG002 35x reads aligned with bwa-mem2, spike's reads clip at a bad end 1.23-1.27% of the time over three seeds, against the sample's own 1.26%. At the 22 hospital events of the plan's K2, they clip 0.94% against 1.38%; master's made 0.17%. Their crashed reads are about 15% short on 35x, and a 31-value alphabet crashes too often (24% against 14%) (`docs/superpowers/plans/2026-10-07-quality-model-v2.md`).
+**How close.** On 125,000 held-out HG002 35x reads aligned with bwa-mem2, spike's reads clip at a bad end 1.23-1.27% of the time over three seeds, against the sample's own 1.26%. At the 22 hospital events of the plan's K2, they clip 0.94% against 1.38%; master's made 0.17%. Their crashed reads are about 15% short on 35x (`docs/superpowers/plans/2026-10-07-quality-model-v2.md`).
 
 Both mates are generated in **sequencing order**, 5'→3' along the read. The reverse mate's template is complemented and walked right to left along the reference before generation, rather than being generated along the reference and reverse-complemented afterwards, so its history runs with the cycle counter like the forward mate's instead of against it.
 

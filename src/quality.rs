@@ -426,6 +426,13 @@ pub struct QualityProfile {
     census: Option<ErrorCensus>,
     n_pairs: usize,
     n_blocks: usize,
+    /// `run_ratio(mate, run bin, class)` for all `2 * RUN_BINS *
+    /// READ_CLASSES` cells, computed once in `learn` where `class_run`
+    /// becomes final, and read by `draw_classes` instead of being recomputed
+    /// for each of the 64 weights of each pair. `None` until it is filled;
+    /// `run_ratio_at` panics on `None` rather than falling back to a neutral
+    /// 1.0, which would silently change every draw.
+    run_ratios: Option<Vec<f64>>,
 }
 
 impl QualityProfile {
@@ -498,7 +505,27 @@ impl QualityProfile {
         Ok(profile)
     }
 
+    /// Learn everything, then fill the run-ratio table. The only way to a
+    /// `QualityProfile`: `learn_counts` is private and called from here
+    /// alone, so no profile can reach `draw_classes` with an unfilled table,
+    /// the empty-alphabet profile included.
     fn learn(blocks: &[DonorBlock], read_length: usize, with_reference: bool) -> Self {
+        let mut profile = Self::learn_counts(blocks, read_length, with_reference);
+        profile.fill_run_ratios();
+        profile
+    }
+
+    /// `run_ratio(m, h, c)` for every cell, from the final `class_run`
+    /// counts. Called once, from `learn`.
+    fn fill_run_ratios(&mut self) {
+        let table: Vec<f64> = (0..2)
+            .flat_map(|m| (0..RUN_BINS).flat_map(move |h| (0..READ_CLASSES).map(move |c| (m, h, c))))
+            .map(|(m, h, c)| self.run_ratio(m, h, c))
+            .collect();
+        self.run_ratios = Some(table);
+    }
+
+    fn learn_counts(blocks: &[DonorBlock], read_length: usize, with_reference: bool) -> Self {
         let pairs = || blocks.iter().flat_map(|b| b.pairs.iter());
         let mut seen = [false; 256];
         for p in pairs() {
@@ -532,6 +559,7 @@ impl QualityProfile {
             census: None,
             n_pairs: pairs().count(),
             n_blocks: blocks.len(),
+            run_ratios: None,
         };
         if profile.alphabet.is_empty() {
             log::info!("Quality profile: no sampled qualities; every base is Q20");
@@ -730,8 +758,8 @@ impl QualityProfile {
             .map(|i| {
                 let (c1, c2) = (i / READ_CLASSES, i % READ_CLASSES);
                 self.joint[i] as f64
-                    * self.run_ratio(0, runs.0, c1)
-                    * self.run_ratio(1, runs.1, c2)
+                    * self.run_ratio_at(0, runs.0, c1)
+                    * self.run_ratio_at(1, runs.1, c2)
                     * mix.r[0][c1]
                     * mix.r[1][c2]
             })
@@ -767,6 +795,13 @@ impl QualityProfile {
         let row = &self.class_run[(m * RUN_BINS + h.min(RUN_BINS - 1)) * READ_CLASSES..][..READ_CLASSES];
         let n_h: u64 = row.iter().sum();
         (row[c] as f64 + RUN_PRIOR_READS * self.class_share(m, c)) / (n_h as f64 + RUN_PRIOR_READS)
+    }
+
+    /// The learned `run_ratio(m, h, c)`, read from the table, with the run
+    /// bin clamped exactly as `class_given_run` clamps it.
+    fn run_ratio_at(&self, m: usize, h: usize, c: usize) -> f64 {
+        self.run_ratios.as_ref().expect("the run-ratio table is filled in QualityProfile::learn")
+            [(m * RUN_BINS + h.min(RUN_BINS - 1)) * READ_CLASSES + c]
     }
 
     /// P(class | run bin) / P(class), for mate `m`.
@@ -1314,6 +1349,169 @@ mod tests {
         assert_eq!(run_bin(b'N', 20), 0);
         assert_eq!(template_run_bin(b"ACGTttttttttttttACG"), 3, "12 T's in lowercase");
         assert_eq!(template_run_bin(b"ACGTTTTTTTTNTTTTACG"), 1, "an N breaks the run into 7 and 4");
+    }
+
+    // --- the run-ratio table (2026-10-07-quality-speed.md) ---
+
+    /// A learned profile whose class/run counts are asymmetric: R1's class
+    /// follows its template's run bin, R2's does not. Learned with no
+    /// reference, so each mate's template is its own called bases and the run
+    /// bin is set by the sequence here.
+    fn asymmetric_profile() -> QualityProfile {
+        let rl = 50usize;
+        // ACGT repeating: the longest run is 1, so run bin 0.
+        let plain = |n: usize| -> Vec<u8> { (0..rl).map(|c| b"ACGT"[(c + n) % 4]).collect() };
+        // Exactly 12 T's, walled by A on both sides: run bin 3.
+        let long_run = |n: usize| -> Vec<u8> {
+            let mut s = plain(n);
+            s[9] = b'A';
+            s[10..22].fill(b'T');
+            s[22] = b'A';
+            s
+        };
+        // Exactly 7 T's, walled the same way: run bin 1.
+        let short_run = |n: usize| -> Vec<u8> {
+            let mut s = plain(n);
+            s[9] = b'A';
+            s[10..17].fill(b'T');
+            s[17] = b'A';
+            s
+        };
+        let pairs: Vec<ReadPair> = (0..400usize)
+            .map(|i| {
+                // R1: a long run means a poor read, no run means a good one.
+                // The means are spread inside each half so every class is used.
+                let (seq1, q1) = if i % 2 == 0 {
+                    (long_run(i), 8 + (i / 2 % 10) as u8)
+                } else {
+                    (plain(i), 28 + (i / 2 % 10) as u8)
+                };
+                // R2: its run bin and its quality turn independently of each other.
+                let seq2 = match i % 3 {
+                    0 => plain(i),
+                    1 => short_run(i),
+                    _ => long_run(i),
+                };
+                let q2 = 5 + (i * 7 % 33) as u8;
+                ReadPair {
+                    name: format!("p{i}"),
+                    seq1,
+                    qual1: vec![b'!' + q1; rl],
+                    seq2,
+                    qual2: vec![b'!' + q2; rl],
+                    ref_start: 0,
+                    ref_end: rl as u64,
+                    insert_size: rl as i64,
+                    chrom: "chr1".to_string(),
+                    align: None,
+                }
+            })
+            .collect();
+        QualityProfile::from_read_pairs(&pairs, rl)
+    }
+
+    /// The table must hold `run_ratio(m, h, c)` itself, bit for bit, in every
+    /// one of its `2 * RUN_BINS * READ_CLASSES` cells.
+    #[test]
+    fn test_the_run_ratio_table_is_the_formula_cell_for_cell() {
+        let p = asymmetric_profile();
+        let cells = || {
+            (0..2).flat_map(|m| (0..RUN_BINS).flat_map(move |h| (0..READ_CLASSES).map(move |c| (m, h, c))))
+        };
+        for (m, h, c) in cells() {
+            assert_eq!(
+                p.run_ratio_at(m, h, c).to_bits(),
+                p.run_ratio(m, h, c).to_bits(),
+                "cell (mate {m}, run bin {h}, class {c}): table {} against the formula {}",
+                p.run_ratio_at(m, h, c),
+                p.run_ratio(m, h, c)
+            );
+        }
+        // And the table has teeth, so this test can go red.
+        assert!(
+            cells().any(|(m, h, c)| (p.run_ratio_at(m, h, c) - 1.0).abs() > 0.2),
+            "every ratio is about 1: a neutral table would pass unseen"
+        );
+        assert!(
+            (0..READ_CLASSES).any(|c| (p.run_ratio_at(0, 3, c) - p.run_ratio_at(1, 3, c)).abs() > 0.2),
+            "the two mates' rows are alike: a swapped mate would pass unseen"
+        );
+        assert!(
+            (0..READ_CLASSES).any(|c| (p.run_ratio_at(0, 3, c) - p.run_ratio_at(0, 0, c)).abs() > 0.2),
+            "run bin 3 and run bin 0 are alike: a clamped run bin would pass unseen"
+        );
+    }
+
+    /// `draw_classes` must read the table, not recompute the formula. Without
+    /// this, delegating `run_ratio_at` straight back to `run_ratio` throws the
+    /// whole speed fix away with every other test still green -- and only the
+    /// one-off S1 timing would notice (whole-branch review, finding 2).
+    #[test]
+    fn test_draw_classes_reads_the_table_rather_than_recomputing_it() {
+        let mut p = asymmetric_profile();
+        let runs = (3usize, 0usize);
+        let before: Vec<(usize, usize)> =
+            (0..40u64).map(|s| p.draw_classes(runs, None, &mut StdRng::seed_from_u64(s))).collect();
+        // One cell of mate 0's run bin 3 row made overwhelming. A `draw_classes`
+        // that reads the table must now draw that class for mate 0 every time;
+        // one that recomputes `run_ratio` cannot see the poke at all.
+        let (poked, at) = (5usize, |m: usize, h: usize, c: usize| (m * RUN_BINS + h) * READ_CLASSES + c);
+        p.run_ratios.as_mut().expect("the table is filled")[at(0, 3, poked)] = 1e12;
+        let after: Vec<(usize, usize)> =
+            (0..40u64).map(|s| p.draw_classes(runs, None, &mut StdRng::seed_from_u64(s))).collect();
+        assert!(
+            after.iter().all(|&(c1, _)| c1 == poked),
+            "poking (mate 0, run bin 3, class {poked}) to 1e12 left mate 0 drawing {:?}: draw_classes is not reading the table",
+            after.iter().map(|&(c1, _)| c1).collect::<HashSet<_>>()
+        );
+        assert!(
+            before.iter().any(|&(c1, _)| c1 != poked),
+            "mate 0 already drew class {poked} every time before the poke: the test proves nothing"
+        );
+    }
+
+    /// `draw_classes` must pick what the weights built straight from
+    /// `run_ratio` pick -- same product order, same one `f64` off the RNG.
+    #[test]
+    fn test_draw_classes_picks_what_the_run_ratio_formula_picks() {
+        let p = asymmetric_profile();
+        let neutral = ClassMix::default();
+        let oracle = |runs: (usize, usize), rng: &mut StdRng| -> (usize, usize) {
+            let weights: Vec<f64> = (0..READ_CLASSES * READ_CLASSES)
+                .map(|i| {
+                    let (c1, c2) = (i / READ_CLASSES, i % READ_CLASSES);
+                    p.joint[i] as f64
+                        * p.run_ratio(0, runs.0, c1)
+                        * p.run_ratio(1, runs.1, c2)
+                        * neutral.r[0][c1]
+                        * neutral.r[1][c2]
+                })
+                .collect();
+            let total: f64 = weights.iter().sum();
+            assert!(total > 0.0, "the oracle's weights are all zero");
+            let mut r = rng.gen::<f64>() * total;
+            for (i, &w) in weights.iter().enumerate() {
+                if r < w {
+                    return (i / READ_CLASSES, i % READ_CLASSES);
+                }
+                r -= w;
+            }
+            let i = weights.iter().rposition(|&w| w > 0.0).unwrap_or(0);
+            (i / READ_CLASSES, i % READ_CLASSES)
+        };
+        let mut checked = 0usize;
+        let mut seen = HashSet::new();
+        for runs in [(3usize, 0usize), (0, 3), (3, 1), (1, 3)] {
+            for s in 0..200u64 {
+                let got = p.draw_classes(runs, None, &mut StdRng::seed_from_u64(s));
+                let want = oracle(runs, &mut StdRng::seed_from_u64(s));
+                assert_eq!(got, want, "runs {runs:?}, seed {s}");
+                seen.insert(got);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 800);
+        assert!(seen.len() > 4, "only {} distinct pairs drawn: too few to see a wrong weight", seen.len());
     }
 
     #[test]
