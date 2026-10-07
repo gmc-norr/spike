@@ -1717,6 +1717,63 @@ mod tests {
         assert_eq!(dropped, vec!["HLA-A*01:01:01:01".to_string(), "chrUn_JTFH01000277v1_decoy".to_string()]);
     }
 
+    /// End to end: an input whose only reads sit on a contig the FASTA lacks
+    /// (the HG001 CRAM's decoys) must not abort the startup sample. Before the
+    /// fix a block landed there and `fetch_window` failed the run.
+    #[test]
+    fn test_the_startup_sample_does_not_abort_on_a_contig_the_fasta_lacks() {
+        use noodles::sam::alignment::record::{Flags, MappingQuality};
+        use noodles::sam::alignment::record_buf::{QualityScores, Sequence};
+        use noodles::sam::alignment::RecordBuf;
+        let dir = std::env::temp_dir().join(format!("spike_decoy_sample_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read: Vec<u8> = (0..100).map(|i| b"ACGT"[i % 4]).collect();
+        let mut records = Vec::new();
+        for i in 0..20usize {
+            let start = 1_000 + i * 500;
+            for first in [true, false] {
+                let (pos, mate) = if first { (start, start + 200) } else { (start + 200, start) };
+                records.push(
+                    RecordBuf::builder()
+                        .set_name(format!("p{i}"))
+                        .set_flags(Flags::from(if first { 0x63u16 } else { 0x93u16 }))
+                        .set_reference_sequence_id(0)
+                        .set_alignment_start(noodles::core::Position::new(pos).unwrap())
+                        .set_mapping_quality(MappingQuality::new(60).unwrap())
+                        .set_cigar([noodles::sam::alignment::record::cigar::Op::new(
+                            noodles::sam::alignment::record::cigar::op::Kind::Match,
+                            100,
+                        )]
+                        .into_iter()
+                        .collect())
+                        .set_mate_reference_sequence_id(0)
+                        .set_mate_alignment_start(noodles::core::Position::new(mate).unwrap())
+                        .set_template_length(if first { 300 } else { -300 })
+                        .set_sequence(Sequence::from(read.clone()))
+                        .set_quality_scores(QualityScores::from(vec![30u8; 100]))
+                        .build(),
+                );
+            }
+        }
+        records.sort_by_key(|r| r.alignment_start());
+        let bam = crate::extract::test_fixtures::write_one_contig_bam(&dir.join("decoy.bam"), "chrUn_decoy", 200_000, &records);
+        // The fixture's .bai holds bin 0; make it the 16 kb leaf bin 4681 that
+        // the sampler reads windows from, so a window lands on the decoy.
+        let bai_path = format!("{bam}.bai");
+        let mut bai = std::fs::read(&bai_path).unwrap();
+        bai[12..16].copy_from_slice(&4681u32.to_le_bytes());
+        std::fs::write(&bai_path, bai).unwrap();
+        let fasta = dir.join("ref.fa");
+        std::fs::write(&fasta, format!(">chrA\n{}\n", "A".repeat(1_000))).unwrap();
+        std::fs::write(dir.join("ref.fa.fai"), "chrA\t1000\t6\t1000\t1001\n").unwrap();
+        let windows = indexed_windows(&bam, fasta.to_str().unwrap()).unwrap();
+        assert!(windows.iter().any(|w| w.0 == "chrUn_decoy"), "the fixture must offer a window on the decoy: {windows:?}");
+        let blocks = sample_input(&bam, fasta.to_str().unwrap(), 20);
+        std::fs::remove_dir_all(&dir).ok();
+        let blocks = blocks.expect("the startup sample aborted on a contig the FASTA lacks");
+        assert!(blocks.iter().all(|b| b.chrom != "chrUn_decoy"), "a block was placed on the decoy");
+    }
+
     /// T8: a CRAM's windows are its slices' spans, by contig and position.
     #[test]
     fn test_crai_windows_are_the_slices_spans() {
