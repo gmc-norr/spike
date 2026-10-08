@@ -1,0 +1,7 @@
+unmutated: red=[] test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 675 filtered out; finished in 0.15s
+1 merge not called: CAUGHT by ['loh::tests::test_a_gvcf_without_het_calls_still_gives_its_hom_alt_calls']
+2 pileup het kept at a gVCF hom-alt: CAUGHT by ['loh::tests::test_the_gvcf_s_hom_alt_calls_go_on_top_of_the_pileup_s']
+3 pileup allele kept over the gVCF: CAUGHT by ['loh::tests::test_the_gvcf_s_hom_alt_calls_go_on_top_of_the_pileup_s']
+4 pileup other hets dropped: CAUGHT by ['loh::tests::test_the_gvcf_s_hom_alt_calls_go_on_top_of_the_pileup_s']
+5 pileup other hom-alts dropped: CAUGHT by ['loh::tests::test_the_gvcf_s_hom_alt_calls_go_on_top_of_the_pileup_s']
+caught 5 of 5

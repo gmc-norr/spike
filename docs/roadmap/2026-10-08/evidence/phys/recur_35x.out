@@ -1,0 +1,4 @@
+real: scored sites (depth>=8, in bench, unmasked) 905756; candidates (alt>=2 & AF>=0.12) 453 (500.1 per Mb), one-strand 366; same-strand same-alt >=2 reads 1247, >=3 reads 181 (opposite strand also has it: 9); >=3 sites by longest run within 15 bp before (seq orientation): {'5-6': 22, '<5': 111, '>=7': 48}
+spike21: scored sites (depth>=8, in bench, unmasked) 917247; candidates (alt>=2 & AF>=0.12) 85 (92.7 per Mb), one-strand 46; same-strand same-alt >=2 reads 329, >=3 reads 2 (opposite strand also has it: 0); >=3 sites by longest run within 15 bp before (seq orientation): {'<5': 2}
+spike22: scored sites (depth>=8, in bench, unmasked) 917156; candidates (alt>=2 & AF>=0.12) 74 (80.7 per Mb), one-strand 31; same-strand same-alt >=2 reads 284, >=3 reads 2 (opposite strand also has it: 0); >=3 sites by longest run within 15 bp before (seq orientation): {'<5': 2}
+background positions by longest run within 15 bp before (forward): {'<5': 17987, '5-6': 2044, '>=7': 407}

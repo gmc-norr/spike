@@ -1,0 +1,1762 @@
+path	bytes	reason
+c3fastp/o1.fq.gz	2425256	binary/sequence type
+c3fastp/o2.fq.gz	2485131	binary/sequence type
+c3fastp/orig.html	500734	over 100 kB
+c3fastp/orig.json	124300	over 100 kB
+c3fastp/orig_R1.fq	18152107	binary/sequence type
+c3fastp/orig_R2.fq	18151379	binary/sequence type
+c3fastp/origo1.fq	18152107	binary/sequence type
+c3fastp/origo2.fq	18151379	binary/sequence type
+c3fastp/spike.html	504323	over 100 kB
+c3fastp/spike.json	125831	over 100 kB
+c3fastp/spike_R1.fq.gz	4143226	binary/sequence type
+c3fastp/spike_R2.fq.gz	4214632	binary/sequence type
+c3fastp/syn.html	475751	over 100 kB
+c3fastp/syn.json	119013	over 100 kB
+c3fastp/syn_R1.fq	1732685	binary/sequence type
+c3fastp/syn_R2.fq	1732355	binary/sequence type
+c3fastp/syno1.fq	1722685	binary/sequence type
+c3fastp/syno2.fq	1722353	binary/sequence type
+c7/ex.bed	1556934	over 100 kB
+c7/h2c20.vcf.gz	1695671	binary/sequence type
+c7/h2c20.vcf.gz.csi	28017	binary/sequence type
+c7/hg001_path.txt	2616538	over 2 MB
+c7/hg002_path.txt	4671774	over 2 MB
+c7/hosp_chr20.vcf.gz	1695820	binary/sequence type
+c7/hosp_chr20.vcf.gz.csi	27980	binary/sequence type
+c7/hosp_ex.vcf.gz	66375	binary/sequence type
+c7/hosp_ex.vcf.gz.csi	20832	binary/sequence type
+c7/hosp_only_chr20.vcf.gz	20879	binary/sequence type
+cr3probe/gateb/recip.bam	169934	binary/sequence type
+cr3probe/gateb/recip.bam.bai	158024	binary/sequence type
+cr3probe/gateb/recip.call.vcf.gz	8077	binary/sequence type
+cr3probe/gateb/recip.unsorted.bam	169699	binary/sequence type
+cr3probe/gateb/view.bam	155318	binary/sequence type
+cr3probe/gateb/view.bam.bai	158024	binary/sequence type
+cr3probe/gateb/view.call.vcf.gz	7525	binary/sequence type
+cr3probe/gateb/view.unsorted.bam	156613	binary/sequence type
+cv/delsvt/R1.fq.gz	311797	binary/sequence type
+cv/delsvt/R2.fq.gz	333940	binary/sequence type
+cv/delsvt/README.md	3616	spike run output (rebuildable)
+cv/delsvt/align.sh	1043	spike run output (rebuildable)
+cv/delsvt/events.bed	24	spike run output (rebuildable)
+cv/delsvt/fastq.sh	8439	spike run output (rebuildable)
+cv/delsvt/fastq_removed_reads.txt	39248	spike run output (rebuildable)
+cv/delsvt/merge.sh	3400	spike run output (rebuildable)
+cv/delsvt/replaced_reads.txt	172157	spike run output (rebuildable)
+cv/delsvt/truth.vcf	11639	spike run output (rebuildable)
+cv/dupspec/R1.fq.gz	456572	binary/sequence type
+cv/dupspec/R2.fq.gz	483448	binary/sequence type
+cv/dupspec/README.md	4023	spike run output (rebuildable)
+cv/dupspec/align.sh	1043	spike run output (rebuildable)
+cv/dupspec/events.bed	24	spike run output (rebuildable)
+cv/dupspec/fastq.sh	8439	spike run output (rebuildable)
+cv/dupspec/fastq_removed_reads.txt	39364	spike run output (rebuildable)
+cv/dupspec/merge.sh	3400	spike run output (rebuildable)
+cv/dupspec/replaced_reads.txt	174675	spike run output (rebuildable)
+cv/dupspec/truth.vcf	11626	spike run output (rebuildable)
+cv/dupsvt/R1.fq.gz	456572	binary/sequence type
+cv/dupsvt/R2.fq.gz	483448	binary/sequence type
+cv/dupsvt/README.md	4106	spike run output (rebuildable)
+cv/dupsvt/align.sh	1043	spike run output (rebuildable)
+cv/dupsvt/events.bed	24	spike run output (rebuildable)
+cv/dupsvt/fastq.sh	8439	spike run output (rebuildable)
+cv/dupsvt/fastq_removed_reads.txt	39364	spike run output (rebuildable)
+cv/dupsvt/merge.sh	3400	spike run output (rebuildable)
+cv/dupsvt/replaced_reads.txt	174675	spike run output (rebuildable)
+cv/dupsvt/truth.vcf	11626	spike run output (rebuildable)
+cv/dupvcf/R1.fq.gz	261107	binary/sequence type
+cv/dupvcf/R2.fq.gz	278380	binary/sequence type
+cv/dupvcf/README.md	11717	spike run output (rebuildable)
+cv/dupvcf/align.sh	1043	spike run output (rebuildable)
+cv/dupvcf/events.bed	24	spike run output (rebuildable)
+cv/dupvcf/fastq.sh	8439	spike run output (rebuildable)
+cv/dupvcf/fastq_removed_reads.txt	12171	spike run output (rebuildable)
+cv/dupvcf/merge.sh	3400	spike run output (rebuildable)
+cv/dupvcf/replaced_reads.txt	122222	spike run output (rebuildable)
+cv/dupvcf/truth.vcf	19705	spike run output (rebuildable)
+cv/outchr19/R1.fq.gz	311767	binary/sequence type
+cv/outchr19/R2.fq.gz	333359	binary/sequence type
+cv/outchr19/README.md	11239	spike run output (rebuildable)
+cv/outchr19/align.sh	1043	spike run output (rebuildable)
+cv/outchr19/events.bed	24	spike run output (rebuildable)
+cv/outchr19/fastq.sh	8439	spike run output (rebuildable)
+cv/outchr19/fastq_removed_reads.txt	39248	spike run output (rebuildable)
+cv/outchr19/merge.sh	3400	spike run output (rebuildable)
+cv/outchr19/replaced_reads.txt	172157	spike run output (rebuildable)
+cv/outchr19/truth.vcf	19223	spike run output (rebuildable)
+dups/h/h1/out/R1.fq.gz	7251031	binary/sequence type
+dups/h/h1/out/R2.fq.gz	7318381	binary/sequence type
+dups/h/h1/out/README.md	8106	spike run output (rebuildable)
+dups/h/h1/out/align.log	3800	spike run output (rebuildable)
+dups/h/h1/out/align.sh	1102	spike run output (rebuildable)
+dups/h/h1/out/events.bed	1026	spike run output (rebuildable)
+dups/h/h1/out/fastq.sh	3806	spike run output (rebuildable)
+dups/h/h1/out/fastq_removed_reads.txt	575031	spike run output (rebuildable)
+dups/h/h1/out/merge.sh	3475	spike run output (rebuildable)
+dups/h/h1/out/replaced_reads.txt	4012995	over 2 MB
+dups/h/h1/out/sim.bam	9177933	binary/sequence type
+dups/h/h1/out/sim.bam.bai	1214296	binary/sequence type
+dups/h/h1/out/spiked_R1.fastq.gz	33291292	binary/sequence type
+dups/h/h1/out/spiked_R2.fastq.gz	33418122	binary/sequence type
+dups/h/h1/out/truth.vcf	16676	spike run output (rebuildable)
+dups/h/h4/out/R1.fq.gz	7251031	binary/sequence type
+dups/h/h4/out/R2.fq.gz	7318381	binary/sequence type
+dups/h/h4/out/README.md	8108	spike run output (rebuildable)
+dups/h/h4/out/S1_R1.fastq.gz	33291292	binary/sequence type
+dups/h/h4/out/S1_R2.fastq.gz	33418122	binary/sequence type
+dups/h/h4/out/align.log	3800	spike run output (rebuildable)
+dups/h/h4/out/align.sh	1102	spike run output (rebuildable)
+dups/h/h4/out/events.bed	1026	spike run output (rebuildable)
+dups/h/h4/out/fastq.sh	3806	spike run output (rebuildable)
+dups/h/h4/out/fastq_removed_reads.txt	575031	spike run output (rebuildable)
+dups/h/h4/out/merge.sh	3475	spike run output (rebuildable)
+dups/h/h4/out/replaced_reads.txt	4012995	over 2 MB
+dups/h/h4/out/sim.bam	9177933	binary/sequence type
+dups/h/h4/out/sim.bam.bai	1214296	binary/sequence type
+dups/h/h4/out/truth.vcf	16676	spike run output (rebuildable)
+dups/k2bad/R1.fq.gz	7251031	link
+dups/k2bad/R2.fq.gz	7318381	link
+dups/k2bad/fastq_removed_reads.txt	575821	spike run output (rebuildable)
+dups/k2bad/replaced_reads.txt	4013785	over 2 MB
+dups/k2bad/sim.bam	9177938	link
+dups/k2bad/sim.bam.bai	1214296	link
+dups/k2bad/truth.vcf	16676	link
+dups/k3/spike-dp/out/R1.fq.gz	7252149	binary/sequence type
+dups/k3/spike-dp/out/R2.fq.gz	7315928	binary/sequence type
+dups/k3/spike-dp/out/README.md	8334	spike run output (rebuildable)
+dups/k3/spike-dp/out/align.sh	1063	spike run output (rebuildable)
+dups/k3/spike-dp/out/events.bed	1026	spike run output (rebuildable)
+dups/k3/spike-dp/out/fastq.sh	3806	spike run output (rebuildable)
+dups/k3/spike-dp/out/fastq_removed_reads.txt	569539	spike run output (rebuildable)
+dups/k3/spike-dp/out/merge.sh	3407	spike run output (rebuildable)
+dups/k3/spike-dp/out/replaced_reads.txt	4011624	over 2 MB
+dups/k3/spike-dp/out/truth.vcf	16981	spike run output (rebuildable)
+dups/k3/spike-dp/spike.log	100172	over 100 kB
+dups/k3/spike-fix/out/R1.fq.gz	7252149	binary/sequence type
+dups/k3/spike-fix/out/R2.fq.gz	7315928	binary/sequence type
+dups/k3/spike-fix/out/README.md	8408	spike run output (rebuildable)
+dups/k3/spike-fix/out/align.sh	1063	spike run output (rebuildable)
+dups/k3/spike-fix/out/events.bed	1026	spike run output (rebuildable)
+dups/k3/spike-fix/out/fastq.sh	3806	spike run output (rebuildable)
+dups/k3/spike-fix/out/fastq_removed_reads.txt	569539	spike run output (rebuildable)
+dups/k3/spike-fix/out/merge.sh	3475	spike run output (rebuildable)
+dups/k3/spike-fix/out/replaced_reads.txt	4011624	over 2 MB
+dups/k3/spike-fix/out/truth.vcf	16981	spike run output (rebuildable)
+dups/k3/spike-fix/spike.log	100172	over 100 kB
+dups/readme/slice.bam	1604753	binary/sequence type
+dups/readme/slice.bam.bai	9032	binary/sequence type
+dups/readme/spike-dp-clean/out/R1.fq.gz	214165	binary/sequence type
+dups/readme/spike-dp-clean/out/R2.fq.gz	229186	binary/sequence type
+dups/readme/spike-dp-clean/out/README.md	2999	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/align.sh	1043	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/events.bed	24	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/fastq.sh	3805	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/fastq_removed_reads.txt	11149	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/merge.sh	3335	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/replaced_reads.txt	103911	spike run output (rebuildable)
+dups/readme/spike-dp-clean/out/truth.vcf	11042	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/R1.fq.gz	214497	binary/sequence type
+dups/readme/spike-dp-origin/out/R2.fq.gz	229206	binary/sequence type
+dups/readme/spike-dp-origin/out/README.md	3000	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/align.sh	1043	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/events.bed	24	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/fastq.sh	3805	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/fastq_removed_reads.txt	13150	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/merge.sh	3335	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/replaced_reads.txt	105763	spike run output (rebuildable)
+dups/readme/spike-dp-origin/out/truth.vcf	11347	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/R1.fq.gz	214165	binary/sequence type
+dups/readme/spike-fix-clean/out/R2.fq.gz	229186	binary/sequence type
+dups/readme/spike-fix-clean/out/README.md	3073	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/align.sh	1043	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/events.bed	24	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/fastq.sh	3805	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/fastq_removed_reads.txt	12528	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/merge.sh	3403	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/replaced_reads.txt	105290	spike run output (rebuildable)
+dups/readme/spike-fix-clean/out/truth.vcf	11042	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/R1.fq.gz	214497	binary/sequence type
+dups/readme/spike-fix-origin/out/R2.fq.gz	229206	binary/sequence type
+dups/readme/spike-fix-origin/out/README.md	3074	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/align.sh	1043	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/events.bed	24	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/fastq.sh	3805	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/fastq_removed_reads.txt	13150	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/merge.sh	3403	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/replaced_reads.txt	105763	spike run output (rebuildable)
+dups/readme/spike-fix-origin/out/truth.vcf	11347	spike run output (rebuildable)
+dups/rt/out_spike-doc/R1.fq.gz	55417871	binary/sequence type
+dups/rt/out_spike-doc/R2.fq.gz	57938586	binary/sequence type
+dups/rt/out_spike-doc/README.md	3907	spike run output (rebuildable)
+dups/rt/out_spike-doc/align.sh	1044	spike run output (rebuildable)
+dups/rt/out_spike-doc/events.bed	24	spike run output (rebuildable)
+dups/rt/out_spike-doc/fastq.sh	3806	spike run output (rebuildable)
+dups/rt/out_spike-doc/fastq_removed_reads.txt	8482218	over 2 MB
+dups/rt/out_spike-doc/merge.sh	3401	spike run output (rebuildable)
+dups/rt/out_spike-doc/replaced_reads.txt	16017882	over 2 MB
+dups/rt/out_spike-doc/truth.vcf	11032	spike run output (rebuildable)
+dups/rt/out_spike-dp/R1.fq.gz	55417871	binary/sequence type
+dups/rt/out_spike-dp/R2.fq.gz	57938586	binary/sequence type
+dups/rt/out_spike-dp/README.md	3832	spike run output (rebuildable)
+dups/rt/out_spike-dp/align.sh	1044	spike run output (rebuildable)
+dups/rt/out_spike-dp/events.bed	24	spike run output (rebuildable)
+dups/rt/out_spike-dp/fastq.sh	3806	spike run output (rebuildable)
+dups/rt/out_spike-dp/fastq_removed_reads.txt	7443041	over 2 MB
+dups/rt/out_spike-dp/merge.sh	3333	spike run output (rebuildable)
+dups/rt/out_spike-dp/replaced_reads.txt	14978705	over 2 MB
+dups/rt/out_spike-dp/truth.vcf	11032	spike run output (rebuildable)
+dups/run-fix/baseline.bam	44858750	binary/sequence type
+dups/run-fix/baseline.bam.bai	1498992	binary/sequence type
+dups/run-fix/baseline.sorted.bam	42718350	binary/sequence type
+dups/run-fix/baseline.sorted.bam.bai	1498992	binary/sequence type
+dups/run-fix/baseline.tagged.bam	45321187	binary/sequence type
+dups/run-fix/baseline.tagged.bam.bai	1499040	binary/sequence type
+dups/run-fix/c1.sorted.bam	42711584	binary/sequence type
+dups/run-fix/c1.sorted.bam.bai	1497304	binary/sequence type
+dups/run-fix/c1.tagged.bam	45312221	binary/sequence type
+dups/run-fix/c1.tagged.bam.bai	1497320	binary/sequence type
+dups/run-fix/c1_R1.fastq.gz	33657869	binary/sequence type
+dups/run-fix/c1_R2.fastq.gz	33790191	binary/sequence type
+dups/run-fix/spike/out/R1.fq.gz	7251031	binary/sequence type
+dups/run-fix/spike/out/R2.fq.gz	7318381	binary/sequence type
+dups/run-fix/spike/out/README.md	7822	spike run output (rebuildable)
+dups/run-fix/spike/out/align.log	3800	spike run output (rebuildable)
+dups/run-fix/spike/out/align.sh	1102	spike run output (rebuildable)
+dups/run-fix/spike/out/events.bed	1026	spike run output (rebuildable)
+dups/run-fix/spike/out/fastq.sh	3806	spike run output (rebuildable)
+dups/run-fix/spike/out/fastq_removed_reads.txt	575031	spike run output (rebuildable)
+dups/run-fix/spike/out/merge.sh	3475	spike run output (rebuildable)
+dups/run-fix/spike/out/replaced_reads.txt	4012995	over 2 MB
+dups/run-fix/spike/out/sim.bam	9177938	binary/sequence type
+dups/run-fix/spike/out/sim.bam.bai	1214296	binary/sequence type
+dups/run-fix/spike/out/spiked_R1.fastq.gz	33291292	binary/sequence type
+dups/run-fix/spike/out/spiked_R2.fastq.gz	33418122	binary/sequence type
+dups/run-fix/spike/out/truth.vcf	16676	spike run output (rebuildable)
+dups/run-fix/spiked.bam	44964481	binary/sequence type
+dups/run-fix/spiked.bam.bai	1499920	binary/sequence type
+dups/run-fix/spiked.sorted.bam	42813630	binary/sequence type
+dups/run-fix/spiked.sorted.bam.bai	1499888	binary/sequence type
+dups/run/baseline.bam	44858400	binary/sequence type
+dups/run/baseline.bam.bai	1498992	binary/sequence type
+dups/run/baseline.sorted.bam	42718345	binary/sequence type
+dups/run/baseline.sorted.bam.bai	1498992	binary/sequence type
+dups/run/baseline.tagged.bam	45321164	binary/sequence type
+dups/run/baseline.tagged.bam.bai	1499040	binary/sequence type
+dups/run/c1.sorted.bam	42711579	binary/sequence type
+dups/run/c1.sorted.bam.bai	1497304	binary/sequence type
+dups/run/c1.tagged.bam	45312251	binary/sequence type
+dups/run/c1.tagged.bam.bai	1497320	binary/sequence type
+dups/run/c1_R1.fastq.gz	33657869	binary/sequence type
+dups/run/c1_R2.fastq.gz	33790191	binary/sequence type
+dups/run/spike/out/R1.fq.gz	7251031	binary/sequence type
+dups/run/spike/out/R2.fq.gz	7318381	binary/sequence type
+dups/run/spike/out/README.md	7744	spike run output (rebuildable)
+dups/run/spike/out/align.log	3800	spike run output (rebuildable)
+dups/run/spike/out/align.sh	1102	spike run output (rebuildable)
+dups/run/spike/out/events.bed	1026	spike run output (rebuildable)
+dups/run/spike/out/fastq.sh	3806	spike run output (rebuildable)
+dups/run/spike/out/fastq_removed_reads.txt	549880	spike run output (rebuildable)
+dups/run/spike/out/merge.sh	3407	spike run output (rebuildable)
+dups/run/spike/out/replaced_reads.txt	3987844	over 2 MB
+dups/run/spike/out/sim.bam	9177934	binary/sequence type
+dups/run/spike/out/sim.bam.bai	1214296	binary/sequence type
+dups/run/spike/out/spiked_R1.fastq.gz	33337967	binary/sequence type
+dups/run/spike/out/spiked_R2.fastq.gz	33465687	binary/sequence type
+dups/run/spike/out/truth.vcf	16676	spike run output (rebuildable)
+dups/run/spiked.bam	45024608	binary/sequence type
+dups/run/spiked.bam.bai	1495328	binary/sequence type
+dups/run/spiked.sorted.bam	42874424	binary/sequence type
+dups/run/spiked.sorted.bam.bai	1495264	binary/sequence type
+dups/spike-doc	4790832	over 2 MB
+dups/spike-dp	4776248	over 2 MB
+dups/spike-fix	4790800	over 2 MB
+dups/spike-if	4795448	over 2 MB
+gvcf/h/h2a/new/out/R1.fq.gz	157445	binary/sequence type
+gvcf/h/h2a/new/out/R2.fq.gz	162643	binary/sequence type
+gvcf/h/h2a/new/out/README.md	3737	spike run output (rebuildable)
+gvcf/h/h2a/new/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2a/new/out/events.bed	24	spike run output (rebuildable)
+gvcf/h/h2a/new/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2a/new/out/fastq_removed_reads.txt	8098	spike run output (rebuildable)
+gvcf/h/h2a/new/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2a/new/out/replaced_reads.txt	91013	spike run output (rebuildable)
+gvcf/h/h2a/new/out/truth.vcf	10990	spike run output (rebuildable)
+gvcf/h/h2a/old/out/R1.fq.gz	157445	binary/sequence type
+gvcf/h/h2a/old/out/R2.fq.gz	162643	binary/sequence type
+gvcf/h/h2a/old/out/README.md	3741	spike run output (rebuildable)
+gvcf/h/h2a/old/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2a/old/out/events.bed	24	spike run output (rebuildable)
+gvcf/h/h2a/old/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2a/old/out/fastq_removed_reads.txt	8098	spike run output (rebuildable)
+gvcf/h/h2a/old/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2a/old/out/replaced_reads.txt	91013	spike run output (rebuildable)
+gvcf/h/h2a/old/out/truth.vcf	10990	spike run output (rebuildable)
+gvcf/h/h2b/new/out/R1.fq.gz	156647	binary/sequence type
+gvcf/h/h2b/new/out/R2.fq.gz	161886	binary/sequence type
+gvcf/h/h2b/new/out/README.md	3930	spike run output (rebuildable)
+gvcf/h/h2b/new/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2b/new/out/events.bed	24	spike run output (rebuildable)
+gvcf/h/h2b/new/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2b/new/out/fastq_removed_reads.txt	8586	spike run output (rebuildable)
+gvcf/h/h2b/new/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2b/new/out/replaced_reads.txt	90897	spike run output (rebuildable)
+gvcf/h/h2b/new/out/truth.vcf	10990	spike run output (rebuildable)
+gvcf/h/h2b/old/out/R1.fq.gz	156647	binary/sequence type
+gvcf/h/h2b/old/out/R2.fq.gz	161886	binary/sequence type
+gvcf/h/h2b/old/out/README.md	3934	spike run output (rebuildable)
+gvcf/h/h2b/old/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2b/old/out/events.bed	24	spike run output (rebuildable)
+gvcf/h/h2b/old/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2b/old/out/fastq_removed_reads.txt	8586	spike run output (rebuildable)
+gvcf/h/h2b/old/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2b/old/out/replaced_reads.txt	90897	spike run output (rebuildable)
+gvcf/h/h2b/old/out/truth.vcf	10990	spike run output (rebuildable)
+gvcf/h/h2c/new/out/R1.fq.gz	172495	binary/sequence type
+gvcf/h/h2c/new/out/R2.fq.gz	176068	binary/sequence type
+gvcf/h/h2c/new/out/README.md	3928	spike run output (rebuildable)
+gvcf/h/h2c/new/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2c/new/out/events.bed	22	spike run output (rebuildable)
+gvcf/h/h2c/new/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2c/new/out/fastq_removed_reads.txt	10322	spike run output (rebuildable)
+gvcf/h/h2c/new/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2c/new/out/replaced_reads.txt	97816	spike run output (rebuildable)
+gvcf/h/h2c/new/out/truth.vcf	10989	spike run output (rebuildable)
+gvcf/h/h2c/old/out/R1.fq.gz	172495	binary/sequence type
+gvcf/h/h2c/old/out/R2.fq.gz	176068	binary/sequence type
+gvcf/h/h2c/old/out/README.md	3932	spike run output (rebuildable)
+gvcf/h/h2c/old/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2c/old/out/events.bed	22	spike run output (rebuildable)
+gvcf/h/h2c/old/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2c/old/out/fastq_removed_reads.txt	10322	spike run output (rebuildable)
+gvcf/h/h2c/old/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2c/old/out/replaced_reads.txt	97816	spike run output (rebuildable)
+gvcf/h/h2c/old/out/truth.vcf	10989	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/R1.fq.gz	172495	binary/sequence type
+gvcf/h/h2c_try/old/out/R2.fq.gz	176068	binary/sequence type
+gvcf/h/h2c_try/old/out/README.md	3932	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/events.bed	22	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/fastq_removed_reads.txt	10322	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/replaced_reads.txt	97816	spike run output (rebuildable)
+gvcf/h/h2c_try/old/out/truth.vcf	10989	spike run output (rebuildable)
+gvcf/h/h3/new/out/R1.fq.gz	174526	binary/sequence type
+gvcf/h/h3/new/out/R2.fq.gz	174925	binary/sequence type
+gvcf/h/h3/new/out/README.md	3936	spike run output (rebuildable)
+gvcf/h/h3/new/out/align.log	3786	spike run output (rebuildable)
+gvcf/h/h3/new/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h3/new/out/events.bed	22	spike run output (rebuildable)
+gvcf/h/h3/new/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h3/new/out/fastq_removed_reads.txt	10310	spike run output (rebuildable)
+gvcf/h/h3/new/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h3/new/out/replaced_reads.txt	98695	spike run output (rebuildable)
+gvcf/h/h3/new/out/sim.bam	236351	binary/sequence type
+gvcf/h/h3/new/out/sim.bam.bai	26496	binary/sequence type
+gvcf/h/h3/new/out/truth.vcf	10989	spike run output (rebuildable)
+gvcf/h/h3/old/out/R1.fq.gz	174609	binary/sequence type
+gvcf/h/h3/old/out/R2.fq.gz	175014	binary/sequence type
+gvcf/h/h3/old/out/README.md	3940	spike run output (rebuildable)
+gvcf/h/h3/old/out/align.log	3786	spike run output (rebuildable)
+gvcf/h/h3/old/out/align.sh	1102	spike run output (rebuildable)
+gvcf/h/h3/old/out/events.bed	22	spike run output (rebuildable)
+gvcf/h/h3/old/out/fastq.sh	8440	spike run output (rebuildable)
+gvcf/h/h3/old/out/fastq_removed_reads.txt	10310	spike run output (rebuildable)
+gvcf/h/h3/old/out/merge.sh	3475	spike run output (rebuildable)
+gvcf/h/h3/old/out/replaced_reads.txt	98695	spike run output (rebuildable)
+gvcf/h/h3/old/out/sim.bam	236316	binary/sequence type
+gvcf/h/h3/old/out/sim.bam.bai	26496	binary/sequence type
+gvcf/h/h3/old/out/truth.vcf	10989	spike run output (rebuildable)
+gvcf/h1/target/debug/spike	97197040	link
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/alias_R1.fq.gz	63	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym.bam	67975	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym.bam.bai	96	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym.sam	1244746	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_R1.fq.gz	18048	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_R2.fq.gz	17500	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/R1.fq.gz	54022	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/R2.fq.gz	52924	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/README.md	3789	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/fastq_removed_reads.txt	8892	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/merge.sh	3469	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/replaced_reads.txt	10320	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/asym_out/truth.vcf	2462	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R1.fq.gz	8016	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R2.fq.gz	7883	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/README.md	3861	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/fastq_removed_reads.txt	1788	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/merge.sh	3486	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/replaced_reads.txt	2064	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/truth.vcf	2462	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/R1.fq.gz	6231	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/R2.fq.gz	6077	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/README.md	3863	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/fastq_removed_reads.txt	1788	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/merge.sh	3486	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/replaced_reads.txt	2064	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_origin/truth.vcf	2767	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/discordant_confidence.bam	18189	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/discordant_confidence.bam.bai	96	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/discordant_confidence.sam	217594	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/existing.bam	54287	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/existing.bam.bai	96	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/existing.sam	1040786	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/existing_R1.fq.gz	18049	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/existing_R2.fq.gz	16407	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/R1.fq.gz	7959	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/R2.fq.gz	7827	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/README.md	3945	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/fastq_removed_reads.txt	1788	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/merge.sh	3468	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/replaced_reads.txt	2064	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_and_het/truth.vcf	2462	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/R1.fq.gz	8004	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/R2.fq.gz	7886	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/README.md	3939	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/fastq_removed_reads.txt	1788	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/merge.sh	3468	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/replaced_reads.txt	2064	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/hom_only/truth.vcf	2462	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low.bam	17085	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low.bam.bai	96	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low.sam	208210	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_R1.fq.gz	6907	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_R2.fq.gz	6636	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/R1.fq.gz	4814	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/R2.fq.gz	4372	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/README.md	4196	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/align.sh	1080	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/events.bed	15	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/fastq.sh	8439	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/fastq_removed_reads.txt	0	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/merge.sh	3468	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/replaced_reads.txt	2064	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/low_fraction/truth.vcf	2462	spike run output (rebuildable)
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/ref.fa	12007	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/ref.fa.fai	25	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/route/R1.fq.gz	66	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/route/R2.fq.gz	66	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/true_del.bam	55255	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/true_del.bam.bai	96	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/true_del.sam	1057312	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/wrong_R1.fq.gz	63	binary/sequence type
+gvcf/h1/tmp/spike-review-20261004-3kosu8ox/wrong_R2.fq.gz	63	binary/sequence type
+hapcheck/out_s1/R1.fq.gz	168861	binary/sequence type
+hapcheck/out_s1/R2.fq.gz	182765	binary/sequence type
+hapcheck/out_s1/README.md	3460	spike run output (rebuildable)
+hapcheck/out_s1/align.sh	1132	spike run output (rebuildable)
+hapcheck/out_s1/events.bed	24	spike run output (rebuildable)
+hapcheck/out_s1/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/out_s1/fastq_removed_reads.txt	9648	spike run output (rebuildable)
+hapcheck/out_s1/merge.sh	3360	spike run output (rebuildable)
+hapcheck/out_s1/replaced_reads.txt	91988	spike run output (rebuildable)
+hapcheck/out_s1/truth.vcf	11587	spike run output (rebuildable)
+hapcheck/out_s2/R1.fq.gz	170076	binary/sequence type
+hapcheck/out_s2/R2.fq.gz	183267	binary/sequence type
+hapcheck/out_s2/README.md	3460	spike run output (rebuildable)
+hapcheck/out_s2/align.sh	1132	spike run output (rebuildable)
+hapcheck/out_s2/events.bed	24	spike run output (rebuildable)
+hapcheck/out_s2/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/out_s2/fastq_removed_reads.txt	9110	spike run output (rebuildable)
+hapcheck/out_s2/merge.sh	3360	spike run output (rebuildable)
+hapcheck/out_s2/replaced_reads.txt	91876	spike run output (rebuildable)
+hapcheck/out_s2/truth.vcf	11587	spike run output (rebuildable)
+hapcheck/out_s3/R1.fq.gz	169889	binary/sequence type
+hapcheck/out_s3/R2.fq.gz	183647	binary/sequence type
+hapcheck/out_s3/README.md	3460	spike run output (rebuildable)
+hapcheck/out_s3/align.sh	1132	spike run output (rebuildable)
+hapcheck/out_s3/events.bed	24	spike run output (rebuildable)
+hapcheck/out_s3/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/out_s3/fastq_removed_reads.txt	9346	spike run output (rebuildable)
+hapcheck/out_s3/merge.sh	3360	spike run output (rebuildable)
+hapcheck/out_s3/replaced_reads.txt	91878	spike run output (rebuildable)
+hapcheck/out_s3/truth.vcf	11587	spike run output (rebuildable)
+hapcheck/out_s4/R1.fq.gz	170535	binary/sequence type
+hapcheck/out_s4/R2.fq.gz	184792	binary/sequence type
+hapcheck/out_s4/README.md	3460	spike run output (rebuildable)
+hapcheck/out_s4/align.sh	1132	spike run output (rebuildable)
+hapcheck/out_s4/events.bed	24	spike run output (rebuildable)
+hapcheck/out_s4/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/out_s4/fastq_removed_reads.txt	8501	spike run output (rebuildable)
+hapcheck/out_s4/merge.sh	3360	spike run output (rebuildable)
+hapcheck/out_s4/replaced_reads.txt	91529	spike run output (rebuildable)
+hapcheck/out_s4/truth.vcf	11587	spike run output (rebuildable)
+hapcheck/pair_s1/R1.fq.gz	285127	binary/sequence type
+hapcheck/pair_s1/R2.fq.gz	307892	binary/sequence type
+hapcheck/pair_s1/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s1/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s1/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s1/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s1/fastq_removed_reads.txt	17660	spike run output (rebuildable)
+hapcheck/pair_s1/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s1/replaced_reads.txt	152094	spike run output (rebuildable)
+hapcheck/pair_s1/truth.vcf	11735	spike run output (rebuildable)
+hapcheck/pair_s2/R1.fq.gz	285544	binary/sequence type
+hapcheck/pair_s2/R2.fq.gz	307620	binary/sequence type
+hapcheck/pair_s2/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s2/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s2/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s2/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s2/fastq_removed_reads.txt	18396	spike run output (rebuildable)
+hapcheck/pair_s2/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s2/replaced_reads.txt	152706	spike run output (rebuildable)
+hapcheck/pair_s2/truth.vcf	11734	spike run output (rebuildable)
+hapcheck/pair_s3/R1.fq.gz	284795	binary/sequence type
+hapcheck/pair_s3/R2.fq.gz	308922	binary/sequence type
+hapcheck/pair_s3/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s3/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s3/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s3/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s3/fastq_removed_reads.txt	17912	spike run output (rebuildable)
+hapcheck/pair_s3/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s3/replaced_reads.txt	152088	spike run output (rebuildable)
+hapcheck/pair_s3/truth.vcf	11735	spike run output (rebuildable)
+hapcheck/pair_s4/R1.fq.gz	285578	binary/sequence type
+hapcheck/pair_s4/R2.fq.gz	307541	binary/sequence type
+hapcheck/pair_s4/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s4/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s4/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s4/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s4/fastq_removed_reads.txt	17871	spike run output (rebuildable)
+hapcheck/pair_s4/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s4/replaced_reads.txt	152138	spike run output (rebuildable)
+hapcheck/pair_s4/truth.vcf	11735	spike run output (rebuildable)
+hapcheck/pair_s5/R1.fq.gz	286769	binary/sequence type
+hapcheck/pair_s5/R2.fq.gz	309897	binary/sequence type
+hapcheck/pair_s5/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s5/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s5/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s5/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s5/fastq_removed_reads.txt	17593	spike run output (rebuildable)
+hapcheck/pair_s5/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s5/replaced_reads.txt	152098	spike run output (rebuildable)
+hapcheck/pair_s5/truth.vcf	11735	spike run output (rebuildable)
+hapcheck/pair_s6/R1.fq.gz	284750	binary/sequence type
+hapcheck/pair_s6/R2.fq.gz	306966	binary/sequence type
+hapcheck/pair_s6/README.md	3585	spike run output (rebuildable)
+hapcheck/pair_s6/align.sh	1132	spike run output (rebuildable)
+hapcheck/pair_s6/events.bed	48	spike run output (rebuildable)
+hapcheck/pair_s6/fastq.sh	8439	spike run output (rebuildable)
+hapcheck/pair_s6/fastq_removed_reads.txt	19199	spike run output (rebuildable)
+hapcheck/pair_s6/merge.sh	3360	spike run output (rebuildable)
+hapcheck/pair_s6/replaced_reads.txt	152749	spike run output (rebuildable)
+hapcheck/pair_s6/truth.vcf	11735	spike run output (rebuildable)
+m13skeptic/rmsk_chr19_ldlr.txt	145472	over 100 kB
+m14/ins250_400.tsv	1728974	over 100 kB
+m14/sv_calls.tsv	822741	over 100 kB
+m20/cleanallow/R1.fq.gz	53658	binary/sequence type
+m20/cleanallow/R2.fq.gz	54444	binary/sequence type
+m20/cleanallow/README.md	4629	spike run output (rebuildable)
+m20/cleanallow/align.sh	1154	spike run output (rebuildable)
+m20/cleanallow/events.bed	23	spike run output (rebuildable)
+m20/cleanallow/fastq.sh	8439	spike run output (rebuildable)
+m20/cleanallow/fastq_removed_reads.txt	11344	spike run output (rebuildable)
+m20/cleanallow/merge.sh	3474	spike run output (rebuildable)
+m20/cleanallow/replaced_reads.txt	39728	spike run output (rebuildable)
+m20/cleanallow/truth.vcf	11638	spike run output (rebuildable)
+m20/origin/R1.fq.gz	68509	binary/sequence type
+m20/origin/R2.fq.gz	69347	binary/sequence type
+m20/origin/README.md	4478	spike run output (rebuildable)
+m20/origin/align.sh	1154	spike run output (rebuildable)
+m20/origin/events.bed	23	spike run output (rebuildable)
+m20/origin/fastq.sh	8439	spike run output (rebuildable)
+m20/origin/fastq_removed_reads.txt	71319	spike run output (rebuildable)
+m20/origin/merge.sh	3474	spike run output (rebuildable)
+m20/origin/replaced_reads.txt	100747	spike run output (rebuildable)
+m20/origin/truth.vcf	11944	spike run output (rebuildable)
+m20/rem_sites.bam	5037	binary/sequence type
+m20/rem_sites.bam.bai	36288	binary/sequence type
+m23v/o1.fq	34941885	binary/sequence type
+m23v/o2.fq	34540449	binary/sequence type
+m23v/r1.fq	172733329	binary/sequence type
+m23v/r2.fq	172733329	binary/sequence type
+m23v/r2swap.fq	172733329	binary/sequence type
+m23v/run/R1.fq.gz	53	binary/sequence type
+m23v/run/R2.fq.gz	53	binary/sequence type
+m23v/run/o1.gz	34351477	binary/sequence type
+m23v/run/o2.gz	35364667	binary/sequence type
+m23v/run/raw1.gz	34402572	binary/sequence type
+m23v/run/raw2.gz	35417505	binary/sequence type
+m23v/s.fq	40000000	binary/sequence type
+m23v/t1.fq	172474228	binary/sequence type
+m23v/t2.fq	172474228	binary/sequence type
+m25prof/out/R1.fq.gz	18185172	binary/sequence type
+m25prof/out/R2.fq.gz	19005469	binary/sequence type
+m25prof/out/README.md	4129	spike run output (rebuildable)
+m25prof/out/align.sh	1043	spike run output (rebuildable)
+m25prof/out/events.bed	24	spike run output (rebuildable)
+m25prof/out/fastq.sh	8439	spike run output (rebuildable)
+m25prof/out/fastq_removed_reads.txt	2779507	over 2 MB
+m25prof/out/merge.sh	3400	spike run output (rebuildable)
+m25prof/out/replaced_reads.txt	5341948	over 2 MB
+m25prof/out/truth.vcf	11629	spike run output (rebuildable)
+m25prof/samples.txt	1355167	over 100 kB
+m25prof/spike-bin	5002768	over 2 MB
+m25v/bin/spike	5002768	over 2 MB
+m25v/out1/R1.fq.gz	18185172	binary/sequence type
+m25v/out1/R2.fq.gz	19005469	binary/sequence type
+m25v/out1/README.md	4124	spike run output (rebuildable)
+m25v/out1/align.sh	1043	spike run output (rebuildable)
+m25v/out1/events.bed	24	spike run output (rebuildable)
+m25v/out1/fastq.sh	8439	spike run output (rebuildable)
+m25v/out1/fastq_removed_reads.txt	2779507	over 2 MB
+m25v/out1/merge.sh	3400	spike run output (rebuildable)
+m25v/out1/replaced_reads.txt	5341948	over 2 MB
+m25v/out1/truth.vcf	11629	spike run output (rebuildable)
+m25v/win.tsv	12135668	over 2 MB
+m25v/win2.tsv	12135668	over 2 MB
+m26/out2/R1.fq.gz	5214242	binary/sequence type
+m26/out2/R2.fq.gz	5555795	binary/sequence type
+m26/out2/README.md	7131	spike run output (rebuildable)
+m26/out2/align.sh	1043	spike run output (rebuildable)
+m26/out2/events.bed	542	spike run output (rebuildable)
+m26/out2/fastq.sh	8439	spike run output (rebuildable)
+m26/out2/fastq_removed_reads.txt	253578	spike run output (rebuildable)
+m26/out2/merge.sh	3400	spike run output (rebuildable)
+m26/out2/replaced_reads.txt	2508329	over 2 MB
+m26/out2/truth.vcf	14846	spike run output (rebuildable)
+m43_reality/alu.bed	31670664	over 2 MB
+m43_reality/h1_all.tsv	840622	over 100 kB
+m43_reality/h2_all.tsv	855821	over 100 kB
+m46_order/A.k	1082864	over 100 kB
+m46_order/A.sam	7293543	binary/sequence type
+m46_order/A2.k	1082864	over 100 kB
+m46_order/A2.sam	7293543	binary/sequence type
+m46_order/A_R1.fq	2970534	binary/sequence type
+m46_order/A_R2.fq	2970534	binary/sequence type
+m46_order/B.k	1082818	over 100 kB
+m46_order/B.sam	7293499	binary/sequence type
+m46_order/B_R1.fq	2970534	binary/sequence type
+m46_order/B_R2.fq	2970534	binary/sequence type
+m46_order/big_R1.fq	90070509	binary/sequence type
+m46_order/big_R2.fq	90070509	binary/sequence type
+m46_order/fp1.json	127644	over 100 kB
+m46_order/fp1_R1.fq	89644626	binary/sequence type
+m46_order/fp1_R2.fq	89644626	binary/sequence type
+m46_order/fp2.json	127641	over 100 kB
+m46_order/fp2_R1.fq	89644626	binary/sequence type
+m46_order/fp2_R2.fq	89644626	binary/sequence type
+m46_order/in.idx	12826374	over 2 MB
+m46_order/in.order	12826374	over 2 MB
+m46_order/n1.json	127881	over 100 kB
+m46_order/n1_R1.fq	89638326	binary/sequence type
+m46_order/n1_R2.fq	89642706	binary/sequence type
+m46_order/n2.json	127881	over 100 kB
+m46_order/n2_R1.fq	89638326	binary/sequence type
+m46_order/n2_R2.fq	89642706	binary/sequence type
+m46_order/no1	11089146	over 2 MB
+m46_order/no2	11089146	over 2 MB
+m46_order/o1	11089146	over 2 MB
+m46_order/o2	11089146	over 2 MB
+m46_order/ow1	11089146	over 2 MB
+m46_order/ref.fa	65942	binary/sequence type
+m46_order/ref.fa.0123	130000	binary
+m46_order/ref.fa.bwt.2bit.64	211359	binary
+m46_order/ref.fa.pac	16252	binary
+m46_order/reg.bam	939061	binary/sequence type
+m46_order/s1	89644626	over 2 MB
+m46_order/s2	89644626	over 2 MB
+m46_order/w1.json	127766	over 100 kB
+m46_order/w1_R1.fq	89644626	binary/sequence type
+m46_order/w1_R2.fq	89644626	binary/sequence type
+m46value/a.R1.fq.gz	9194951	binary/sequence type
+m46value/a.R2.fq.gz	9141547	binary/sequence type
+m46value/a.html	476685	over 100 kB
+m46value/a.json	125622	over 100 kB
+m46value/a.names	5011897	over 2 MB
+m46value/b.R1.fq.gz	9194588	binary/sequence type
+m46value/b.R2.fq.gz	9141314	binary/sequence type
+m46value/b.html	476543	over 100 kB
+m46value/b.json	125634	over 100 kB
+m46value/b.names	5011897	over 2 MB
+m46value/c.R1.fq.gz	9194772	binary/sequence type
+m46value/c.R2.fq.gz	9141501	binary/sequence type
+m46value/c.html	494417	over 100 kB
+m46value/c.json	126736	over 100 kB
+m46value/c.names	5011897	over 2 MB
+m46value/d.R1.fq.gz	9194622	binary/sequence type
+m46value/d.R2.fq.gz	9141341	binary/sequence type
+m46value/d.html	494392	over 100 kB
+m46value/d.json	126733	over 100 kB
+m46value/d.names	5011897	over 2 MB
+m46value/in.names	5011897	over 2 MB
+m46value/in_kept.names	5011897	over 2 MB
+m48/dv.tsv	107794	over 100 kB
+phys/hosp_blocks.bam	10942411	binary/sequence type
+phys/hosp_blocks.bam.bai	765744	binary/sequence type
+phys/hosp_blocks.coll.bam	22106906	binary/sequence type
+qm2gate/clips/new.bam	21169193	binary/sequence type
+qm2gate/clips/newA.bam	21160178	binary/sequence type
+qm2gate/clips/newAB.bam	21184402	binary/sequence type
+qm2gate/clips/newAB_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newAB_R2.fq	41034236	binary/sequence type
+qm2gate/clips/newAB_s22.bam	21190471	binary/sequence type
+qm2gate/clips/newAB_s22_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newAB_s22_R2.fq	41034236	binary/sequence type
+qm2gate/clips/newAB_s23.bam	21206313	binary/sequence type
+qm2gate/clips/newAB_s23_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newAB_s23_R2.fq	41034236	binary/sequence type
+qm2gate/clips/newA_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newA_R2.fq	41034236	binary/sequence type
+qm2gate/clips/newA_s22.bam	21177578	binary/sequence type
+qm2gate/clips/newA_s22_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newA_s22_R2.fq	41034236	binary/sequence type
+qm2gate/clips/newA_s23.bam	21192542	binary/sequence type
+qm2gate/clips/newA_s23_R1.fq	41034236	binary/sequence type
+qm2gate/clips/newA_s23_R2.fq	41034236	binary/sequence type
+qm2gate/clips/new_R1.fq	41034236	binary/sequence type
+qm2gate/clips/new_R2.fq	41034236	binary/sequence type
+qm2gate/clips/real.bam	21737926	binary/sequence type
+qm2gate/clips/real_R1.fq	41034236	binary/sequence type
+qm2gate/clips/real_R2.fq	41034236	binary/sequence type
+qm2gate/clips/v1.bam	21233764	binary/sequence type
+qm2gate/clips/v1_R1.fq	41034236	binary/sequence type
+qm2gate/clips/v1_R2.fq	41034236	binary/sequence type
+qm2gate/q100_blocks.tsv	124696	over 100 kB
+qtq2/k2b/real.bam	11084668	binary/sequence type
+qtq2/k2b/real_R1.fq	21654586	binary/sequence type
+qtq2/k2b/real_R2.fq	21654586	binary/sequence type
+qtq2/k2b/spike21.bam	10825324	binary/sequence type
+qtq2/k2b/spike21_R1.fq	21654586	binary/sequence type
+qtq2/k2b/spike21_R2.fq	21654586	binary/sequence type
+qtq2/k2b/spike22.bam	10811870	binary/sequence type
+qtq2/k2b/spike22_R1.fq	21654586	binary/sequence type
+qtq2/k2b/spike22_R2.fq	21654586	binary/sequence type
+qtq2/k2b/spike23.bam	10820459	binary/sequence type
+qtq2/k2b/spike23_R1.fq	21654586	binary/sequence type
+qtq2/k2b/spike23_R2.fq	21654586	binary/sequence type
+qtq2/k2v2/aa1/base.bam	510599	binary/sequence type
+qtq2/k2v2/aa1/base.bam.bai	27416	binary/sequence type
+qtq2/k2v2/aa1/real.bam	518346	binary/sequence type
+qtq2/k2v2/aa1/real.bam.bai	27440	binary/sequence type
+qtq2/k2v2/aa1/run/R1.fq.gz	178012	binary/sequence type
+qtq2/k2v2/aa1/run/R2.fq.gz	179228	binary/sequence type
+qtq2/k2v2/aa1/run/README.md	3851	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/align.log	3837	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/fastq_removed_reads.txt	14004	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/replaced_reads.txt	103316	spike run output (rebuildable)
+qtq2/k2v2/aa1/run/sim.bam	245995	binary/sequence type
+qtq2/k2v2/aa1/run/sim.bam.bai	85056	binary/sequence type
+qtq2/k2v2/aa1/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa1/spiked.bam	498828	binary/sequence type
+qtq2/k2v2/aa1/spiked.bam.bai	85096	binary/sequence type
+qtq2/k2v2/aa10/base.bam	561340	binary/sequence type
+qtq2/k2v2/aa10/base.bam.bai	7400	binary/sequence type
+qtq2/k2v2/aa10/real.bam	544628	binary/sequence type
+qtq2/k2v2/aa10/real.bam.bai	7400	binary/sequence type
+qtq2/k2v2/aa10/run/R1.fq.gz	190109	binary/sequence type
+qtq2/k2v2/aa10/run/R2.fq.gz	192677	binary/sequence type
+qtq2/k2v2/aa10/run/README.md	3851	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/fastq_removed_reads.txt	14970	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/replaced_reads.txt	108863	spike run output (rebuildable)
+qtq2/k2v2/aa10/run/sim.bam	259586	binary/sequence type
+qtq2/k2v2/aa10/run/sim.bam.bai	258248	binary/sequence type
+qtq2/k2v2/aa10/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa10/spiked.bam	552324	binary/sequence type
+qtq2/k2v2/aa10/spiked.bam.bai	258296	binary/sequence type
+qtq2/k2v2/aa11/base.bam	538097	binary/sequence type
+qtq2/k2v2/aa11/base.bam.bai	23152	binary/sequence type
+qtq2/k2v2/aa11/real.bam	520858	binary/sequence type
+qtq2/k2v2/aa11/real.bam.bai	23152	binary/sequence type
+qtq2/k2v2/aa11/run/R1.fq.gz	189544	binary/sequence type
+qtq2/k2v2/aa11/run/R2.fq.gz	191795	binary/sequence type
+qtq2/k2v2/aa11/run/README.md	3851	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/fastq_removed_reads.txt	15648	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/replaced_reads.txt	112173	spike run output (rebuildable)
+qtq2/k2v2/aa11/run/sim.bam	255356	binary/sequence type
+qtq2/k2v2/aa11/run/sim.bam.bai	222288	binary/sequence type
+qtq2/k2v2/aa11/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa11/spiked.bam	525600	binary/sequence type
+qtq2/k2v2/aa11/spiked.bam.bai	222336	binary/sequence type
+qtq2/k2v2/aa12/base.bam	577864	binary/sequence type
+qtq2/k2v2/aa12/base.bam.bai	116688	binary/sequence type
+qtq2/k2v2/aa12/real.bam	555463	binary/sequence type
+qtq2/k2v2/aa12/real.bam.bai	116688	binary/sequence type
+qtq2/k2v2/aa12/run/R1.fq.gz	182296	binary/sequence type
+qtq2/k2v2/aa12/run/R2.fq.gz	186690	binary/sequence type
+qtq2/k2v2/aa12/run/README.md	3853	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/events.bed	25	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/fastq_removed_reads.txt	12598	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/replaced_reads.txt	102584	spike run output (rebuildable)
+qtq2/k2v2/aa12/run/sim.bam	264419	binary/sequence type
+qtq2/k2v2/aa12/run/sim.bam.bai	376656	binary/sequence type
+qtq2/k2v2/aa12/run/truth.vcf	11640	spike run output (rebuildable)
+qtq2/k2v2/aa12/spiked.bam	570275	binary/sequence type
+qtq2/k2v2/aa12/spiked.bam.bai	376720	binary/sequence type
+qtq2/k2v2/aa13/base.bam	455304	binary/sequence type
+qtq2/k2v2/aa13/base.bam.bai	40032	binary/sequence type
+qtq2/k2v2/aa13/real.bam	469867	binary/sequence type
+qtq2/k2v2/aa13/real.bam.bai	40032	binary/sequence type
+qtq2/k2v2/aa13/run/R1.fq.gz	163610	binary/sequence type
+qtq2/k2v2/aa13/run/R2.fq.gz	165079	binary/sequence type
+qtq2/k2v2/aa13/run/README.md	3851	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/align.log	3835	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/fastq_removed_reads.txt	11809	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/replaced_reads.txt	94400	spike run output (rebuildable)
+qtq2/k2v2/aa13/run/sim.bam	217418	binary/sequence type
+qtq2/k2v2/aa13/run/sim.bam.bai	130744	binary/sequence type
+qtq2/k2v2/aa13/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa13/spiked.bam	447501	binary/sequence type
+qtq2/k2v2/aa13/spiked.bam.bai	130792	binary/sequence type
+qtq2/k2v2/aa14/base.bam	670824	binary/sequence type
+qtq2/k2v2/aa14/base.bam.bai	69400	binary/sequence type
+qtq2/k2v2/aa14/real.bam	568720	binary/sequence type
+qtq2/k2v2/aa14/real.bam.bai	69400	binary/sequence type
+qtq2/k2v2/aa14/run/R1.fq.gz	230316	binary/sequence type
+qtq2/k2v2/aa14/run/R2.fq.gz	234763	binary/sequence type
+qtq2/k2v2/aa14/run/README.md	3855	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/events.bed	25	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/fastq_removed_reads.txt	34772	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/replaced_reads.txt	150648	spike run output (rebuildable)
+qtq2/k2v2/aa14/run/sim.bam	315077	binary/sequence type
+qtq2/k2v2/aa14/run/sim.bam.bai	297568	binary/sequence type
+qtq2/k2v2/aa14/run/truth.vcf	11640	spike run output (rebuildable)
+qtq2/k2v2/aa14/spiked.bam	614453	binary/sequence type
+qtq2/k2v2/aa14/spiked.bam.bai	297656	binary/sequence type
+qtq2/k2v2/aa2/base.bam	553539	binary/sequence type
+qtq2/k2v2/aa2/base.bam.bai	29744	binary/sequence type
+qtq2/k2v2/aa2/real.bam	538918	binary/sequence type
+qtq2/k2v2/aa2/real.bam.bai	29744	binary/sequence type
+qtq2/k2v2/aa2/run/R1.fq.gz	192406	binary/sequence type
+qtq2/k2v2/aa2/run/R2.fq.gz	196193	binary/sequence type
+qtq2/k2v2/aa2/run/README.md	3850	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/align.log	3837	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/fastq_removed_reads.txt	13277	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/replaced_reads.txt	109203	spike run output (rebuildable)
+qtq2/k2v2/aa2/run/sim.bam	264932	binary/sequence type
+qtq2/k2v2/aa2/run/sim.bam.bai	500864	binary/sequence type
+qtq2/k2v2/aa2/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa2/spiked.bam	546286	binary/sequence type
+qtq2/k2v2/aa2/spiked.bam.bai	500936	binary/sequence type
+qtq2/k2v2/aa3/base.bam	574780	binary/sequence type
+qtq2/k2v2/aa3/base.bam.bai	28576	binary/sequence type
+qtq2/k2v2/aa3/real.bam	543860	binary/sequence type
+qtq2/k2v2/aa3/real.bam.bai	28576	binary/sequence type
+qtq2/k2v2/aa3/run/R1.fq.gz	182725	binary/sequence type
+qtq2/k2v2/aa3/run/R2.fq.gz	186902	binary/sequence type
+qtq2/k2v2/aa3/run/README.md	3850	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/align.log	3837	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/fastq_removed_reads.txt	12439	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/replaced_reads.txt	100292	spike run output (rebuildable)
+qtq2/k2v2/aa3/run/sim.bam	262962	binary/sequence type
+qtq2/k2v2/aa3/run/sim.bam.bai	224760	binary/sequence type
+qtq2/k2v2/aa3/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa3/spiked.bam	569257	binary/sequence type
+qtq2/k2v2/aa3/spiked.bam.bai	224808	binary/sequence type
+qtq2/k2v2/aa4/base.bam	521822	binary/sequence type
+qtq2/k2v2/aa4/base.bam.bai	29840	binary/sequence type
+qtq2/k2v2/aa4/real.bam	503662	binary/sequence type
+qtq2/k2v2/aa4/real.bam.bai	29840	binary/sequence type
+qtq2/k2v2/aa4/run/R1.fq.gz	185216	binary/sequence type
+qtq2/k2v2/aa4/run/R2.fq.gz	189408	binary/sequence type
+qtq2/k2v2/aa4/run/README.md	3850	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/align.log	3838	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/fastq_removed_reads.txt	14236	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/replaced_reads.txt	106690	spike run output (rebuildable)
+qtq2/k2v2/aa4/run/sim.bam	244610	binary/sequence type
+qtq2/k2v2/aa4/run/sim.bam.bai	220712	binary/sequence type
+qtq2/k2v2/aa4/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/aa4/spiked.bam	515074	binary/sequence type
+qtq2/k2v2/aa4/spiked.bam.bai	220776	binary/sequence type
+qtq2/k2v2/aa5/base.bam	567533	binary/sequence type
+qtq2/k2v2/aa5/base.bam.bai	16928	binary/sequence type
+qtq2/k2v2/aa5/real.bam	520004	binary/sequence type
+qtq2/k2v2/aa5/real.bam.bai	16928	binary/sequence type
+qtq2/k2v2/aa5/run/R1.fq.gz	199794	binary/sequence type
+qtq2/k2v2/aa5/run/R2.fq.gz	205423	binary/sequence type
+qtq2/k2v2/aa5/run/README.md	3848	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/align.log	3837	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/events.bed	23	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/fastq_removed_reads.txt	15294	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/replaced_reads.txt	111516	spike run output (rebuildable)
+qtq2/k2v2/aa5/run/sim.bam	277901	binary/sequence type
+qtq2/k2v2/aa5/run/sim.bam.bai	143552	binary/sequence type
+qtq2/k2v2/aa5/run/truth.vcf	11638	spike run output (rebuildable)
+qtq2/k2v2/aa5/spiked.bam	559778	binary/sequence type
+qtq2/k2v2/aa5/spiked.bam.bai	143600	binary/sequence type
+qtq2/k2v2/aa6/base.bam	564742	binary/sequence type
+qtq2/k2v2/aa6/base.bam.bai	21064	binary/sequence type
+qtq2/k2v2/aa6/real.bam	519656	binary/sequence type
+qtq2/k2v2/aa6/real.bam.bai	21064	binary/sequence type
+qtq2/k2v2/aa6/run/R1.fq.gz	198766	binary/sequence type
+qtq2/k2v2/aa6/run/R2.fq.gz	200556	binary/sequence type
+qtq2/k2v2/aa6/run/README.md	3848	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/align.log	3837	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/events.bed	23	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/fastq_removed_reads.txt	17706	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/replaced_reads.txt	117979	spike run output (rebuildable)
+qtq2/k2v2/aa6/run/sim.bam	272554	binary/sequence type
+qtq2/k2v2/aa6/run/sim.bam.bai	164832	binary/sequence type
+qtq2/k2v2/aa6/run/truth.vcf	11638	spike run output (rebuildable)
+qtq2/k2v2/aa6/spiked.bam	547400	binary/sequence type
+qtq2/k2v2/aa6/spiked.bam.bai	164896	binary/sequence type
+qtq2/k2v2/aa7/base.bam	538233	binary/sequence type
+qtq2/k2v2/aa7/base.bam.bai	6848	binary/sequence type
+qtq2/k2v2/aa7/real.bam	527954	binary/sequence type
+qtq2/k2v2/aa7/real.bam.bai	6848	binary/sequence type
+qtq2/k2v2/aa7/run/R1.fq.gz	193697	binary/sequence type
+qtq2/k2v2/aa7/run/R2.fq.gz	198484	binary/sequence type
+qtq2/k2v2/aa7/run/README.md	3848	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/events.bed	23	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/fastq_removed_reads.txt	14664	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/replaced_reads.txt	112281	spike run output (rebuildable)
+qtq2/k2v2/aa7/run/sim.bam	261968	binary/sequence type
+qtq2/k2v2/aa7/run/sim.bam.bai	162888	binary/sequence type
+qtq2/k2v2/aa7/run/truth.vcf	11638	spike run output (rebuildable)
+qtq2/k2v2/aa7/spiked.bam	532113	binary/sequence type
+qtq2/k2v2/aa7/spiked.bam.bai	162952	binary/sequence type
+qtq2/k2v2/aa8/base.bam	621298	binary/sequence type
+qtq2/k2v2/aa8/base.bam.bai	120376	binary/sequence type
+qtq2/k2v2/aa8/real.bam	606628	binary/sequence type
+qtq2/k2v2/aa8/real.bam.bai	120376	binary/sequence type
+qtq2/k2v2/aa8/run/R1.fq.gz	174814	binary/sequence type
+qtq2/k2v2/aa8/run/R2.fq.gz	178105	binary/sequence type
+qtq2/k2v2/aa8/run/README.md	3852	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/align.log	3833	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/events.bed	25	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/fastq_removed_reads.txt	13378	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/replaced_reads.txt	102257	spike run output (rebuildable)
+qtq2/k2v2/aa8/run/sim.bam	296444	binary/sequence type
+qtq2/k2v2/aa8/run/sim.bam.bai	334208	binary/sequence type
+qtq2/k2v2/aa8/run/truth.vcf	11640	spike run output (rebuildable)
+qtq2/k2v2/aa8/spiked.bam	615917	binary/sequence type
+qtq2/k2v2/aa8/spiked.bam.bai	334256	binary/sequence type
+qtq2/k2v2/aa9/base.bam	583533	binary/sequence type
+qtq2/k2v2/aa9/base.bam.bai	4616	binary/sequence type
+qtq2/k2v2/aa9/real.bam	543514	binary/sequence type
+qtq2/k2v2/aa9/real.bam.bai	4616	binary/sequence type
+qtq2/k2v2/aa9/run/R1.fq.gz	207202	binary/sequence type
+qtq2/k2v2/aa9/run/R2.fq.gz	212321	binary/sequence type
+qtq2/k2v2/aa9/run/README.md	3846	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/events.bed	22	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/fastq_removed_reads.txt	19006	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/replaced_reads.txt	121347	spike run output (rebuildable)
+qtq2/k2v2/aa9/run/sim.bam	282951	binary/sequence type
+qtq2/k2v2/aa9/run/sim.bam.bai	253480	binary/sequence type
+qtq2/k2v2/aa9/run/truth.vcf	11637	spike run output (rebuildable)
+qtq2/k2v2/aa9/spiked.bam	567537	binary/sequence type
+qtq2/k2v2/aa9/spiked.bam.bai	253544	binary/sequence type
+qtq2/k2v2/ld1/base.bam	592624	binary/sequence type
+qtq2/k2v2/ld1/base.bam.bai	7200	binary/sequence type
+qtq2/k2v2/ld1/real.bam	571293	binary/sequence type
+qtq2/k2v2/ld1/real.bam.bai	7200	binary/sequence type
+qtq2/k2v2/ld1/run/R1.fq.gz	202731	binary/sequence type
+qtq2/k2v2/ld1/run/R2.fq.gz	207017	binary/sequence type
+qtq2/k2v2/ld1/run/README.md	3850	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/fastq_removed_reads.txt	15219	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/replaced_reads.txt	111405	spike run output (rebuildable)
+qtq2/k2v2/ld1/run/sim.bam	294367	binary/sequence type
+qtq2/k2v2/ld1/run/sim.bam.bai	285128	binary/sequence type
+qtq2/k2v2/ld1/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/ld1/spiked.bam	581513	binary/sequence type
+qtq2/k2v2/ld1/spiked.bam.bai	285200	binary/sequence type
+qtq2/k2v2/ld2/base.bam	672445	binary/sequence type
+qtq2/k2v2/ld2/base.bam.bai	7224	binary/sequence type
+qtq2/k2v2/ld2/real.bam	632833	binary/sequence type
+qtq2/k2v2/ld2/real.bam.bai	7208	binary/sequence type
+qtq2/k2v2/ld2/run/R1.fq.gz	229900	binary/sequence type
+qtq2/k2v2/ld2/run/R2.fq.gz	233593	binary/sequence type
+qtq2/k2v2/ld2/run/README.md	3852	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/fastq_removed_reads.txt	29601	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/replaced_reads.txt	141143	spike run output (rebuildable)
+qtq2/k2v2/ld2/run/sim.bam	326519	binary/sequence type
+qtq2/k2v2/ld2/run/sim.bam.bai	291264	binary/sequence type
+qtq2/k2v2/ld2/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/ld2/spiked.bam	630374	binary/sequence type
+qtq2/k2v2/ld2/spiked.bam.bai	291352	binary/sequence type
+qtq2/k2v2/nn1/base.bam	502738	binary/sequence type
+qtq2/k2v2/nn1/base.bam.bai	88448	binary/sequence type
+qtq2/k2v2/nn1/real.bam	511505	binary/sequence type
+qtq2/k2v2/nn1/real.bam.bai	88448	binary/sequence type
+qtq2/k2v2/nn1/run/R1.fq.gz	185844	binary/sequence type
+qtq2/k2v2/nn1/run/R2.fq.gz	187926	binary/sequence type
+qtq2/k2v2/nn1/run/README.md	3852	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/events.bed	25	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/fastq_removed_reads.txt	16971	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/replaced_reads.txt	112399	spike run output (rebuildable)
+qtq2/k2v2/nn1/run/sim.bam	246476	binary/sequence type
+qtq2/k2v2/nn1/run/sim.bam.bai	188936	binary/sequence type
+qtq2/k2v2/nn1/run/truth.vcf	11640	spike run output (rebuildable)
+qtq2/k2v2/nn1/spiked.bam	488594	binary/sequence type
+qtq2/k2v2/nn1/spiked.bam.bai	188984	binary/sequence type
+qtq2/k2v2/nn2/base.bam	413481	binary/sequence type
+qtq2/k2v2/nn2/base.bam.bai	29792	binary/sequence type
+qtq2/k2v2/nn2/real.bam	444399	binary/sequence type
+qtq2/k2v2/nn2/real.bam.bai	29792	binary/sequence type
+qtq2/k2v2/nn2/run/R1.fq.gz	151551	binary/sequence type
+qtq2/k2v2/nn2/run/R2.fq.gz	152282	binary/sequence type
+qtq2/k2v2/nn2/run/README.md	3850	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/fastq_removed_reads.txt	12838	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/replaced_reads.txt	90503	spike run output (rebuildable)
+qtq2/k2v2/nn2/run/sim.bam	202527	binary/sequence type
+qtq2/k2v2/nn2/run/sim.bam.bai	129512	binary/sequence type
+qtq2/k2v2/nn2/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/nn2/spiked.bam	404813	binary/sequence type
+qtq2/k2v2/nn2/spiked.bam.bai	129560	binary/sequence type
+qtq2/k2v2/nn3/base.bam	435170	binary/sequence type
+qtq2/k2v2/nn3/base.bam.bai	12728	binary/sequence type
+qtq2/k2v2/nn3/real.bam	460426	binary/sequence type
+qtq2/k2v2/nn3/real.bam.bai	12728	binary/sequence type
+qtq2/k2v2/nn3/run/R1.fq.gz	162434	binary/sequence type
+qtq2/k2v2/nn3/run/R2.fq.gz	164107	binary/sequence type
+qtq2/k2v2/nn3/run/README.md	3848	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/events.bed	23	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/fastq_removed_reads.txt	11705	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/replaced_reads.txt	96843	spike run output (rebuildable)
+qtq2/k2v2/nn3/run/sim.bam	211189	binary/sequence type
+qtq2/k2v2/nn3/run/sim.bam.bai	12664	binary/sequence type
+qtq2/k2v2/nn3/run/truth.vcf	11638	spike run output (rebuildable)
+qtq2/k2v2/nn3/spiked.bam	426466	binary/sequence type
+qtq2/k2v2/nn3/spiked.bam.bai	12728	binary/sequence type
+qtq2/k2v2/nn4/base.bam	490316	binary/sequence type
+qtq2/k2v2/nn4/base.bam.bai	17864	binary/sequence type
+qtq2/k2v2/nn4/real.bam	485717	binary/sequence type
+qtq2/k2v2/nn4/real.bam.bai	17864	binary/sequence type
+qtq2/k2v2/nn4/run/R1.fq.gz	179370	binary/sequence type
+qtq2/k2v2/nn4/run/R2.fq.gz	183156	binary/sequence type
+qtq2/k2v2/nn4/run/README.md	3852	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/fastq_removed_reads.txt	22589	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/replaced_reads.txt	115261	spike run output (rebuildable)
+qtq2/k2v2/nn4/run/sim.bam	236895	binary/sequence type
+qtq2/k2v2/nn4/run/sim.bam.bai	54056	binary/sequence type
+qtq2/k2v2/nn4/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/nn4/spiked.bam	463459	binary/sequence type
+qtq2/k2v2/nn4/spiked.bam.bai	54128	binary/sequence type
+qtq2/k2v2/nn5/base.bam	489839	binary/sequence type
+qtq2/k2v2/nn5/base.bam.bai	28256	binary/sequence type
+qtq2/k2v2/nn5/real.bam	516057	binary/sequence type
+qtq2/k2v2/nn5/real.bam.bai	28272	binary/sequence type
+qtq2/k2v2/nn5/run/R1.fq.gz	172276	binary/sequence type
+qtq2/k2v2/nn5/run/R2.fq.gz	174413	binary/sequence type
+qtq2/k2v2/nn5/run/README.md	4264	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/events.bed	24	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/fastq_removed_reads.txt	11185	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/replaced_reads.txt	102011	spike run output (rebuildable)
+qtq2/k2v2/nn5/run/sim.bam	234063	binary/sequence type
+qtq2/k2v2/nn5/run/sim.bam.bai	28208	binary/sequence type
+qtq2/k2v2/nn5/run/truth.vcf	11639	spike run output (rebuildable)
+qtq2/k2v2/nn5/spiked.bam	482002	binary/sequence type
+qtq2/k2v2/nn5/spiked.bam.bai	28280	binary/sequence type
+qtq2/k2v2/nn6/base.bam	525158	binary/sequence type
+qtq2/k2v2/nn6/base.bam.bai	40224	binary/sequence type
+qtq2/k2v2/nn6/real.bam	489534	binary/sequence type
+qtq2/k2v2/nn6/real.bam.bai	40224	binary/sequence type
+qtq2/k2v2/nn6/run/R1.fq.gz	190613	binary/sequence type
+qtq2/k2v2/nn6/run/R2.fq.gz	194514	binary/sequence type
+qtq2/k2v2/nn6/run/README.md	3848	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/align.log	3834	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/align.sh	1099	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/events.bed	23	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/fastq_removed_reads.txt	16331	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/merge.sh	3474	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/replaced_reads.txt	115654	spike run output (rebuildable)
+qtq2/k2v2/nn6/run/sim.bam	252376	binary/sequence type
+qtq2/k2v2/nn6/run/sim.bam.bai	208776	binary/sequence type
+qtq2/k2v2/nn6/run/truth.vcf	11638	spike run output (rebuildable)
+qtq2/k2v2/nn6/spiked.bam	511479	binary/sequence type
+qtq2/k2v2/nn6/spiked.bam.bai	208824	binary/sequence type
+qtq2/k6/R1.fq.gz	1268400	binary/sequence type
+qtq2/k6/R2.fq.gz	1393244	binary/sequence type
+qtq2/k6/README.md	3551	spike run output (rebuildable)
+qtq2/k6/align.log	3807	spike run output (rebuildable)
+qtq2/k6/align.sh	1041	spike run output (rebuildable)
+qtq2/k6/events.bed	48	spike run output (rebuildable)
+qtq2/k6/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k6/fastq_removed_reads.txt	41917	spike run output (rebuildable)
+qtq2/k6/merge.sh	3364	spike run output (rebuildable)
+qtq2/k6/merged.bam	2720337963	binary/sequence type
+qtq2/k6/merged.bam.bai	1121504	binary/sequence type
+qtq2/k6/replaced_reads.txt	283707	spike run output (rebuildable)
+qtq2/k6/sim.bam	1952785	binary/sequence type
+qtq2/k6/sim.bam.bai	921328	binary/sequence type
+qtq2/k6/truth.vcf	11787	spike run output (rebuildable)
+qtq2/k6b/real_R1.fq	21865605	binary/sequence type
+qtq2/k6b/real_R2.fq	21865605	binary/sequence type
+qtq2/k6b/spike_R1.fq	21865605	binary/sequence type
+qtq2/k6b/spike_R2.fq	21865605	binary/sequence type
+qtq2/k6dbg/R1.fq.gz	1268400	binary/sequence type
+qtq2/k6dbg/R2.fq.gz	1393244	binary/sequence type
+qtq2/k6dbg/README.md	3460	spike run output (rebuildable)
+qtq2/k6dbg/align.sh	1041	spike run output (rebuildable)
+qtq2/k6dbg/events.bed	48	spike run output (rebuildable)
+qtq2/k6dbg/fastq.sh	8439	spike run output (rebuildable)
+qtq2/k6dbg/fastq_removed_reads.txt	41917	spike run output (rebuildable)
+qtq2/k6dbg/merge.sh	3364	spike run output (rebuildable)
+qtq2/k6dbg/replaced_reads.txt	283707	spike run output (rebuildable)
+qtq2/k6dbg/truth.vcf	11787	spike run output (rebuildable)
+qtq2/master_s2/het/R1.fq.gz	549220	binary/sequence type
+qtq2/master_s2/het/R2.fq.gz	586535	binary/sequence type
+qtq2/master_s2/het/README.md	3633	spike run output (rebuildable)
+qtq2/master_s2/het/align.log	3808	spike run output (rebuildable)
+qtq2/master_s2/het/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s2/het/events.bed	48	spike run output (rebuildable)
+qtq2/master_s2/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s2/het/fastq_removed_reads.txt	56482	spike run output (rebuildable)
+qtq2/master_s2/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s2/het/merged.bam	30113452	binary/sequence type
+qtq2/master_s2/het/merged.bam.bai	425192	binary/sequence type
+qtq2/master_s2/het/replaced_reads.txt	295379	spike run output (rebuildable)
+qtq2/master_s2/het/sim.bam	714543	binary/sequence type
+qtq2/master_s2/het/sim.bam.bai	420424	binary/sequence type
+qtq2/master_s2/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/master_s2/hom/R1.fq.gz	262106	binary/sequence type
+qtq2/master_s2/hom/R2.fq.gz	279092	binary/sequence type
+qtq2/master_s2/hom/README.md	3512	spike run output (rebuildable)
+qtq2/master_s2/hom/align.log	3802	spike run output (rebuildable)
+qtq2/master_s2/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s2/hom/events.bed	24	spike run output (rebuildable)
+qtq2/master_s2/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s2/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/master_s2/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s2/hom/merged.bam	30023969	binary/sequence type
+qtq2/master_s2/hom/merged.bam.bai	503712	binary/sequence type
+qtq2/master_s2/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/master_s2/hom/sim.bam	343039	binary/sequence type
+qtq2/master_s2/hom/sim.bam.bai	498832	binary/sequence type
+qtq2/master_s2/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/master_s2/m4/R1.fq.gz	714834	binary/sequence type
+qtq2/master_s2/m4/R2.fq.gz	768813	binary/sequence type
+qtq2/master_s2/m4/README.md	3744	spike run output (rebuildable)
+qtq2/master_s2/m4/align.log	3808	spike run output (rebuildable)
+qtq2/master_s2/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s2/m4/events.bed	72	spike run output (rebuildable)
+qtq2/master_s2/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s2/m4/fastq_removed_reads.txt	33800	spike run output (rebuildable)
+qtq2/master_s2/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s2/m4/merged.bam	30188728	binary/sequence type
+qtq2/master_s2/m4/merged.bam.bai	175984	binary/sequence type
+qtq2/master_s2/m4/replaced_reads.txt	348308	spike run output (rebuildable)
+qtq2/master_s2/m4/sim.bam	913310	binary/sequence type
+qtq2/master_s2/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/master_s2/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/master_s2/snv/R1.fq.gz	5838265	binary/sequence type
+qtq2/master_s2/snv/R2.fq.gz	6229228	binary/sequence type
+qtq2/master_s2/snv/README.md	7522	spike run output (rebuildable)
+qtq2/master_s2/snv/align.log	3816	spike run output (rebuildable)
+qtq2/master_s2/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s2/snv/events.bed	600	spike run output (rebuildable)
+qtq2/master_s2/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s2/snv/fastq_removed_reads.txt	292744	spike run output (rebuildable)
+qtq2/master_s2/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s2/snv/merged.bam	29896437	binary/sequence type
+qtq2/master_s2/snv/merged.bam.bai	943528	binary/sequence type
+qtq2/master_s2/snv/replaced_reads.txt	2836657	over 2 MB
+qtq2/master_s2/snv/sim.bam	7516334	binary/sequence type
+qtq2/master_s2/snv/sim.bam.bai	940840	binary/sequence type
+qtq2/master_s2/snv/truth.vcf	15148	spike run output (rebuildable)
+qtq2/master_s3/het/R1.fq.gz	547091	binary/sequence type
+qtq2/master_s3/het/R2.fq.gz	587345	binary/sequence type
+qtq2/master_s3/het/README.md	3633	spike run output (rebuildable)
+qtq2/master_s3/het/align.log	3808	spike run output (rebuildable)
+qtq2/master_s3/het/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s3/het/events.bed	48	spike run output (rebuildable)
+qtq2/master_s3/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s3/het/fastq_removed_reads.txt	56130	spike run output (rebuildable)
+qtq2/master_s3/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s3/het/merged.bam	30111313	binary/sequence type
+qtq2/master_s3/het/merged.bam.bai	523584	binary/sequence type
+qtq2/master_s3/het/replaced_reads.txt	295697	spike run output (rebuildable)
+qtq2/master_s3/het/sim.bam	713404	binary/sequence type
+qtq2/master_s3/het/sim.bam.bai	518848	binary/sequence type
+qtq2/master_s3/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/master_s3/hom/R1.fq.gz	262269	binary/sequence type
+qtq2/master_s3/hom/R2.fq.gz	279142	binary/sequence type
+qtq2/master_s3/hom/README.md	3512	spike run output (rebuildable)
+qtq2/master_s3/hom/align.log	3802	spike run output (rebuildable)
+qtq2/master_s3/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s3/hom/events.bed	24	spike run output (rebuildable)
+qtq2/master_s3/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s3/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/master_s3/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s3/hom/merged.bam	30026974	binary/sequence type
+qtq2/master_s3/hom/merged.bam.bai	503712	binary/sequence type
+qtq2/master_s3/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/master_s3/hom/sim.bam	341112	binary/sequence type
+qtq2/master_s3/hom/sim.bam.bai	498832	binary/sequence type
+qtq2/master_s3/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/master_s3/m4/R1.fq.gz	714694	binary/sequence type
+qtq2/master_s3/m4/R2.fq.gz	771110	binary/sequence type
+qtq2/master_s3/m4/README.md	3744	spike run output (rebuildable)
+qtq2/master_s3/m4/align.log	3808	spike run output (rebuildable)
+qtq2/master_s3/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s3/m4/events.bed	72	spike run output (rebuildable)
+qtq2/master_s3/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s3/m4/fastq_removed_reads.txt	32318	spike run output (rebuildable)
+qtq2/master_s3/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s3/m4/merged.bam	30184764	binary/sequence type
+qtq2/master_s3/m4/merged.bam.bai	175984	binary/sequence type
+qtq2/master_s3/m4/replaced_reads.txt	347423	spike run output (rebuildable)
+qtq2/master_s3/m4/sim.bam	915320	binary/sequence type
+qtq2/master_s3/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/master_s3/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/master_s3/snv/R1.fq.gz	5847686	binary/sequence type
+qtq2/master_s3/snv/R2.fq.gz	6247304	binary/sequence type
+qtq2/master_s3/snv/README.md	7521	spike run output (rebuildable)
+qtq2/master_s3/snv/align.log	3816	spike run output (rebuildable)
+qtq2/master_s3/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s3/snv/events.bed	600	spike run output (rebuildable)
+qtq2/master_s3/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s3/snv/fastq_removed_reads.txt	287522	spike run output (rebuildable)
+qtq2/master_s3/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s3/snv/merged.bam	29911950	binary/sequence type
+qtq2/master_s3/snv/merged.bam.bai	994024	binary/sequence type
+qtq2/master_s3/snv/replaced_reads.txt	2835774	over 2 MB
+qtq2/master_s3/snv/sim.bam	7530814	binary/sequence type
+qtq2/master_s3/snv/sim.bam.bai	991352	binary/sequence type
+qtq2/master_s3/snv/truth.vcf	15148	spike run output (rebuildable)
+qtq2/master_s4/het/R1.fq.gz	544605	binary/sequence type
+qtq2/master_s4/het/R2.fq.gz	582564	binary/sequence type
+qtq2/master_s4/het/README.md	3633	spike run output (rebuildable)
+qtq2/master_s4/het/align.log	3808	spike run output (rebuildable)
+qtq2/master_s4/het/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s4/het/events.bed	48	spike run output (rebuildable)
+qtq2/master_s4/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s4/het/fastq_removed_reads.txt	57679	spike run output (rebuildable)
+qtq2/master_s4/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s4/het/merged.bam	30109923	binary/sequence type
+qtq2/master_s4/het/merged.bam.bai	386240	binary/sequence type
+qtq2/master_s4/het/replaced_reads.txt	295722	spike run output (rebuildable)
+qtq2/master_s4/het/sim.bam	709553	binary/sequence type
+qtq2/master_s4/het/sim.bam.bai	381472	binary/sequence type
+qtq2/master_s4/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/master_s4/hom/R1.fq.gz	262062	binary/sequence type
+qtq2/master_s4/hom/R2.fq.gz	279069	binary/sequence type
+qtq2/master_s4/hom/README.md	3512	spike run output (rebuildable)
+qtq2/master_s4/hom/align.log	3802	spike run output (rebuildable)
+qtq2/master_s4/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s4/hom/events.bed	24	spike run output (rebuildable)
+qtq2/master_s4/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s4/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/master_s4/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s4/hom/merged.bam	30027625	binary/sequence type
+qtq2/master_s4/hom/merged.bam.bai	503712	binary/sequence type
+qtq2/master_s4/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/master_s4/hom/sim.bam	342033	binary/sequence type
+qtq2/master_s4/hom/sim.bam.bai	498832	binary/sequence type
+qtq2/master_s4/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/master_s4/m4/R1.fq.gz	715821	binary/sequence type
+qtq2/master_s4/m4/R2.fq.gz	767664	binary/sequence type
+qtq2/master_s4/m4/README.md	3744	spike run output (rebuildable)
+qtq2/master_s4/m4/align.log	3808	spike run output (rebuildable)
+qtq2/master_s4/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s4/m4/events.bed	72	spike run output (rebuildable)
+qtq2/master_s4/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s4/m4/fastq_removed_reads.txt	33491	spike run output (rebuildable)
+qtq2/master_s4/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s4/m4/merged.bam	30184787	binary/sequence type
+qtq2/master_s4/m4/merged.bam.bai	175968	binary/sequence type
+qtq2/master_s4/m4/replaced_reads.txt	348038	spike run output (rebuildable)
+qtq2/master_s4/m4/sim.bam	913337	binary/sequence type
+qtq2/master_s4/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/master_s4/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/master_s4/snv/R1.fq.gz	5842555	binary/sequence type
+qtq2/master_s4/snv/R2.fq.gz	6241648	binary/sequence type
+qtq2/master_s4/snv/README.md	7522	spike run output (rebuildable)
+qtq2/master_s4/snv/align.log	3816	spike run output (rebuildable)
+qtq2/master_s4/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s4/snv/events.bed	600	spike run output (rebuildable)
+qtq2/master_s4/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s4/snv/fastq_removed_reads.txt	290491	spike run output (rebuildable)
+qtq2/master_s4/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s4/snv/merged.bam	29902730	binary/sequence type
+qtq2/master_s4/snv/merged.bam.bai	1010760	binary/sequence type
+qtq2/master_s4/snv/replaced_reads.txt	2836440	over 2 MB
+qtq2/master_s4/snv/sim.bam	7519246	binary/sequence type
+qtq2/master_s4/snv/sim.bam.bai	1008088	binary/sequence type
+qtq2/master_s4/snv/truth.vcf	15150	spike run output (rebuildable)
+qtq2/master_s42/het/R1.fq.gz	546303	binary/sequence type
+qtq2/master_s42/het/R2.fq.gz	584642	binary/sequence type
+qtq2/master_s42/het/README.md	3634	spike run output (rebuildable)
+qtq2/master_s42/het/align.log	3805	spike run output (rebuildable)
+qtq2/master_s42/het/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s42/het/events.bed	48	spike run output (rebuildable)
+qtq2/master_s42/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s42/het/fastq_removed_reads.txt	57308	spike run output (rebuildable)
+qtq2/master_s42/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s42/het/merged.bam	30110449	binary/sequence type
+qtq2/master_s42/het/merged.bam.bai	415792	binary/sequence type
+qtq2/master_s42/het/replaced_reads.txt	295622	spike run output (rebuildable)
+qtq2/master_s42/het/sim.bam	710575	binary/sequence type
+qtq2/master_s42/het/sim.bam.bai	411024	binary/sequence type
+qtq2/master_s42/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/master_s42/hom/R1.fq.gz	262277	binary/sequence type
+qtq2/master_s42/hom/R2.fq.gz	278646	binary/sequence type
+qtq2/master_s42/hom/README.md	3513	spike run output (rebuildable)
+qtq2/master_s42/hom/align.log	3796	spike run output (rebuildable)
+qtq2/master_s42/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s42/hom/events.bed	24	spike run output (rebuildable)
+qtq2/master_s42/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s42/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/master_s42/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s42/hom/merged.bam	30026289	binary/sequence type
+qtq2/master_s42/hom/merged.bam.bai	314640	binary/sequence type
+qtq2/master_s42/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/master_s42/hom/sim.bam	341538	binary/sequence type
+qtq2/master_s42/hom/sim.bam.bai	309760	binary/sequence type
+qtq2/master_s42/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/master_s42/m4/R1.fq.gz	715599	binary/sequence type
+qtq2/master_s42/m4/R2.fq.gz	771248	binary/sequence type
+qtq2/master_s42/m4/README.md	3745	spike run output (rebuildable)
+qtq2/master_s42/m4/align.log	3802	spike run output (rebuildable)
+qtq2/master_s42/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s42/m4/events.bed	72	spike run output (rebuildable)
+qtq2/master_s42/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s42/m4/fastq_removed_reads.txt	32618	spike run output (rebuildable)
+qtq2/master_s42/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s42/m4/merged.bam	30185621	binary/sequence type
+qtq2/master_s42/m4/merged.bam.bai	175984	binary/sequence type
+qtq2/master_s42/m4/replaced_reads.txt	347657	spike run output (rebuildable)
+qtq2/master_s42/m4/sim.bam	915560	binary/sequence type
+qtq2/master_s42/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/master_s42/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/master_s42/snv/R1.fq.gz	5836178	binary/sequence type
+qtq2/master_s42/snv/R2.fq.gz	6234101	binary/sequence type
+qtq2/master_s42/snv/README.md	7523	spike run output (rebuildable)
+qtq2/master_s42/snv/align.log	3813	spike run output (rebuildable)
+qtq2/master_s42/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s42/snv/events.bed	600	spike run output (rebuildable)
+qtq2/master_s42/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s42/snv/fastq_removed_reads.txt	292511	spike run output (rebuildable)
+qtq2/master_s42/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s42/snv/merged.bam	29893094	binary/sequence type
+qtq2/master_s42/snv/merged.bam.bai	974080	binary/sequence type
+qtq2/master_s42/snv/replaced_reads.txt	2837051	over 2 MB
+qtq2/master_s42/snv/sim.bam	7511249	binary/sequence type
+qtq2/master_s42/snv/sim.bam.bai	971392	binary/sequence type
+qtq2/master_s42/snv/truth.vcf	15147	spike run output (rebuildable)
+qtq2/master_s5/het/R1.fq.gz	542244	binary/sequence type
+qtq2/master_s5/het/R2.fq.gz	580016	binary/sequence type
+qtq2/master_s5/het/README.md	3633	spike run output (rebuildable)
+qtq2/master_s5/het/align.log	3808	spike run output (rebuildable)
+qtq2/master_s5/het/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s5/het/events.bed	48	spike run output (rebuildable)
+qtq2/master_s5/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s5/het/fastq_removed_reads.txt	58762	spike run output (rebuildable)
+qtq2/master_s5/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s5/het/merged.bam	30108014	binary/sequence type
+qtq2/master_s5/het/merged.bam.bai	682192	binary/sequence type
+qtq2/master_s5/het/replaced_reads.txt	295542	spike run output (rebuildable)
+qtq2/master_s5/het/sim.bam	706182	binary/sequence type
+qtq2/master_s5/het/sim.bam.bai	677424	binary/sequence type
+qtq2/master_s5/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/master_s5/hom/R1.fq.gz	261947	binary/sequence type
+qtq2/master_s5/hom/R2.fq.gz	279282	binary/sequence type
+qtq2/master_s5/hom/README.md	3512	spike run output (rebuildable)
+qtq2/master_s5/hom/align.log	3802	spike run output (rebuildable)
+qtq2/master_s5/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s5/hom/events.bed	24	spike run output (rebuildable)
+qtq2/master_s5/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s5/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/master_s5/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s5/hom/merged.bam	30028452	binary/sequence type
+qtq2/master_s5/hom/merged.bam.bai	503712	binary/sequence type
+qtq2/master_s5/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/master_s5/hom/sim.bam	341929	binary/sequence type
+qtq2/master_s5/hom/sim.bam.bai	498832	binary/sequence type
+qtq2/master_s5/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/master_s5/m4/R1.fq.gz	711760	binary/sequence type
+qtq2/master_s5/m4/R2.fq.gz	767231	binary/sequence type
+qtq2/master_s5/m4/README.md	3744	spike run output (rebuildable)
+qtq2/master_s5/m4/align.log	3808	spike run output (rebuildable)
+qtq2/master_s5/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s5/m4/events.bed	72	spike run output (rebuildable)
+qtq2/master_s5/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s5/m4/fastq_removed_reads.txt	36185	spike run output (rebuildable)
+qtq2/master_s5/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s5/m4/merged.bam	30179390	binary/sequence type
+qtq2/master_s5/m4/merged.bam.bai	176016	binary/sequence type
+qtq2/master_s5/m4/replaced_reads.txt	348883	spike run output (rebuildable)
+qtq2/master_s5/m4/sim.bam	910767	binary/sequence type
+qtq2/master_s5/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/master_s5/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/master_s5/snv/R1.fq.gz	5829838	binary/sequence type
+qtq2/master_s5/snv/R2.fq.gz	6234801	binary/sequence type
+qtq2/master_s5/snv/README.md	7522	spike run output (rebuildable)
+qtq2/master_s5/snv/align.log	3815	spike run output (rebuildable)
+qtq2/master_s5/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/master_s5/snv/events.bed	600	spike run output (rebuildable)
+qtq2/master_s5/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/master_s5/snv/fastq_removed_reads.txt	292998	spike run output (rebuildable)
+qtq2/master_s5/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/master_s5/snv/merged.bam	29891737	binary/sequence type
+qtq2/master_s5/snv/merged.bam.bai	963032	binary/sequence type
+qtq2/master_s5/snv/replaced_reads.txt	2836715	over 2 MB
+qtq2/master_s5/snv/sim.bam	7511277	binary/sequence type
+qtq2/master_s5/snv/sim.bam.bai	960392	binary/sequence type
+qtq2/master_s5/snv/truth.vcf	15148	spike run output (rebuildable)
+qtq2/same_probe/R1.fq.gz	18412382	binary/sequence type
+qtq2/same_probe/R2.fq.gz	19249533	binary/sequence type
+qtq2/same_probe/README.md	4451	spike run output (rebuildable)
+qtq2/same_probe/align.sh	1043	spike run output (rebuildable)
+qtq2/same_probe/events.bed	48	spike run output (rebuildable)
+qtq2/same_probe/fastq.sh	8439	spike run output (rebuildable)
+qtq2/same_probe/fastq_removed_reads.txt	2782162	over 2 MB
+qtq2/same_probe/merge.sh	3400	spike run output (rebuildable)
+qtq2/same_probe/replaced_reads.txt	5455373	over 2 MB
+qtq2/same_probe/truth.vcf	11776	spike run output (rebuildable)
+qtq2/same_v2/R1.fq.gz	18412382	binary/sequence type
+qtq2/same_v2/R2.fq.gz	19249533	binary/sequence type
+qtq2/same_v2/README.md	4445	spike run output (rebuildable)
+qtq2/same_v2/align.sh	1043	spike run output (rebuildable)
+qtq2/same_v2/events.bed	48	spike run output (rebuildable)
+qtq2/same_v2/fastq.sh	8439	spike run output (rebuildable)
+qtq2/same_v2/fastq_removed_reads.txt	2782162	over 2 MB
+qtq2/same_v2/merge.sh	3400	spike run output (rebuildable)
+qtq2/same_v2/replaced_reads.txt	5455373	over 2 MB
+qtq2/same_v2/truth.vcf	11776	spike run output (rebuildable)
+qtq2/speed_master/R1.fq.gz	18612899	binary/sequence type
+qtq2/speed_master/R2.fq.gz	19437200	binary/sequence type
+qtq2/speed_master/README.md	3932	spike run output (rebuildable)
+qtq2/speed_master/align.sh	1043	spike run output (rebuildable)
+qtq2/speed_master/events.bed	24	spike run output (rebuildable)
+qtq2/speed_master/fastq.sh	8439	spike run output (rebuildable)
+qtq2/speed_master/fastq_removed_reads.txt	2779507	over 2 MB
+qtq2/speed_master/merge.sh	3400	spike run output (rebuildable)
+qtq2/speed_master/replaced_reads.txt	5341948	over 2 MB
+qtq2/speed_master/truth.vcf	11629	spike run output (rebuildable)
+qtq2/speed_v2/R1.fq.gz	18185172	binary/sequence type
+qtq2/speed_v2/R2.fq.gz	19005469	binary/sequence type
+qtq2/speed_v2/README.md	3922	spike run output (rebuildable)
+qtq2/speed_v2/align.sh	1043	spike run output (rebuildable)
+qtq2/speed_v2/events.bed	24	spike run output (rebuildable)
+qtq2/speed_v2/fastq.sh	8439	spike run output (rebuildable)
+qtq2/speed_v2/fastq_removed_reads.txt	2779507	over 2 MB
+qtq2/speed_v2/merge.sh	3400	spike run output (rebuildable)
+qtq2/speed_v2/replaced_reads.txt	5341948	over 2 MB
+qtq2/speed_v2/truth.vcf	11629	spike run output (rebuildable)
+qtq2/spike-probe	5000168	over 2 MB
+qtq2/spike-v2	4998816	over 2 MB
+qtq2/v2_s42/het/R1.fq.gz	546809	binary/sequence type
+qtq2/v2_s42/het/R2.fq.gz	584587	binary/sequence type
+qtq2/v2_s42/het/README.md	3631	spike run output (rebuildable)
+qtq2/v2_s42/het/align.log	3802	spike run output (rebuildable)
+qtq2/v2_s42/het/align.sh	1043	spike run output (rebuildable)
+qtq2/v2_s42/het/events.bed	48	spike run output (rebuildable)
+qtq2/v2_s42/het/fastq.sh	8439	spike run output (rebuildable)
+qtq2/v2_s42/het/fastq_removed_reads.txt	56298	spike run output (rebuildable)
+qtq2/v2_s42/het/merge.sh	3395	spike run output (rebuildable)
+qtq2/v2_s42/het/merged.bam	30113865	binary/sequence type
+qtq2/v2_s42/het/merged.bam.bai	548720	binary/sequence type
+qtq2/v2_s42/het/replaced_reads.txt	295588	spike run output (rebuildable)
+qtq2/v2_s42/het/sim.bam	714427	binary/sequence type
+qtq2/v2_s42/het/sim.bam.bai	543984	binary/sequence type
+qtq2/v2_s42/het/truth.vcf	12109	spike run output (rebuildable)
+qtq2/v2_s42/hom/R1.fq.gz	262417	binary/sequence type
+qtq2/v2_s42/hom/R2.fq.gz	278536	binary/sequence type
+qtq2/v2_s42/hom/README.md	3510	spike run output (rebuildable)
+qtq2/v2_s42/hom/align.log	3799	spike run output (rebuildable)
+qtq2/v2_s42/hom/align.sh	1043	spike run output (rebuildable)
+qtq2/v2_s42/hom/events.bed	24	spike run output (rebuildable)
+qtq2/v2_s42/hom/fastq.sh	8439	spike run output (rebuildable)
+qtq2/v2_s42/hom/fastq_removed_reads.txt	93412	spike run output (rebuildable)
+qtq2/v2_s42/hom/merge.sh	3395	spike run output (rebuildable)
+qtq2/v2_s42/hom/merged.bam	30032066	binary/sequence type
+qtq2/v2_s42/hom/merged.bam.bai	435640	binary/sequence type
+qtq2/v2_s42/hom/replaced_reads.txt	189461	spike run output (rebuildable)
+qtq2/v2_s42/hom/sim.bam	346380	binary/sequence type
+qtq2/v2_s42/hom/sim.bam.bai	430760	binary/sequence type
+qtq2/v2_s42/hom/truth.vcf	11640	spike run output (rebuildable)
+qtq2/v2_s42/m4/R1.fq.gz	706734	binary/sequence type
+qtq2/v2_s42/m4/R2.fq.gz	763267	binary/sequence type
+qtq2/v2_s42/m4/README.md	3742	spike run output (rebuildable)
+qtq2/v2_s42/m4/align.log	3808	spike run output (rebuildable)
+qtq2/v2_s42/m4/align.sh	1043	spike run output (rebuildable)
+qtq2/v2_s42/m4/events.bed	72	spike run output (rebuildable)
+qtq2/v2_s42/m4/fastq.sh	8439	spike run output (rebuildable)
+qtq2/v2_s42/m4/fastq_removed_reads.txt	35189	spike run output (rebuildable)
+qtq2/v2_s42/m4/merge.sh	3395	spike run output (rebuildable)
+qtq2/v2_s42/m4/merged.bam	30173161	binary/sequence type
+qtq2/v2_s42/m4/merged.bam.bai	175968	binary/sequence type
+qtq2/v2_s42/m4/replaced_reads.txt	348120	spike run output (rebuildable)
+qtq2/v2_s42/m4/sim.bam	904447	binary/sequence type
+qtq2/v2_s42/m4/sim.bam.bai	171360	binary/sequence type
+qtq2/v2_s42/m4/truth.vcf	11891	spike run output (rebuildable)
+qtq2/v2_s42/snv/R1.fq.gz	5814176	binary/sequence type
+qtq2/v2_s42/snv/R2.fq.gz	6218763	binary/sequence type
+qtq2/v2_s42/snv/README.md	7520	spike run output (rebuildable)
+qtq2/v2_s42/snv/align.log	3816	spike run output (rebuildable)
+qtq2/v2_s42/snv/align.sh	1043	spike run output (rebuildable)
+qtq2/v2_s42/snv/events.bed	600	spike run output (rebuildable)
+qtq2/v2_s42/snv/fastq.sh	8439	spike run output (rebuildable)
+qtq2/v2_s42/snv/fastq_removed_reads.txt	291133	spike run output (rebuildable)
+qtq2/v2_s42/snv/merge.sh	3395	spike run output (rebuildable)
+qtq2/v2_s42/snv/merged.bam	29884658	binary/sequence type
+qtq2/v2_s42/snv/merged.bam.bai	1034768	binary/sequence type
+qtq2/v2_s42/snv/replaced_reads.txt	2835790	over 2 MB
+qtq2/v2_s42/snv/sim.bam	7500239	binary/sequence type
+qtq2/v2_s42/snv/sim.bam.bai	1032096	binary/sequence type
+qtq2/v2_s42/snv/truth.vcf	15147	spike run output (rebuildable)
+robust/chm13/out/R1.fq.gz	144553	binary/sequence type
+robust/chm13/out/R2.fq.gz	159012	binary/sequence type
+robust/chm13/out/README.md	3504	spike run output (rebuildable)
+robust/chm13/out/align.sh	1048	spike run output (rebuildable)
+robust/chm13/out/events.bed	24	spike run output (rebuildable)
+robust/chm13/out/fastq.sh	8439	spike run output (rebuildable)
+robust/chm13/out/fastq_removed_reads.txt	7224	spike run output (rebuildable)
+robust/chm13/out/merge.sh	3349	spike run output (rebuildable)
+robust/chm13/out/replaced_reads.txt	55650	spike run output (rebuildable)
+robust/chm13/out/truth.vcf	11639	spike run output (rebuildable)
+robust/chrm/out/R1.fq.gz	68811036	binary/sequence type
+robust/chrm/out/R2.fq.gz	73817203	binary/sequence type
+robust/chrm/out/README.md	3586	spike run output (rebuildable)
+robust/chrm/out/align.sh	1043	spike run output (rebuildable)
+robust/chrm/out/events.bed	13	spike run output (rebuildable)
+robust/chrm/out/fastq.sh	8439	spike run output (rebuildable)
+robust/chrm/out/fastq_removed_reads.txt	3445351	over 2 MB
+robust/chrm/out/merge.sh	3400	spike run output (rebuildable)
+robust/chrm/out/replaced_reads.txt	36742011	over 2 MB
+robust/chrm/out/truth.vcf	11584	spike run output (rebuildable)
+robust/chrx_het/out/R1.fq.gz	118225	binary/sequence type
+robust/chrx_het/out/R2.fq.gz	124798	binary/sequence type
+robust/chrx_het/out/README.md	3606	spike run output (rebuildable)
+robust/chrx_het/out/align.sh	1043	spike run output (rebuildable)
+robust/chrx_het/out/events.bed	23	spike run output (rebuildable)
+robust/chrx_het/out/fastq.sh	8439	spike run output (rebuildable)
+robust/chrx_het/out/fastq_removed_reads.txt	7241	spike run output (rebuildable)
+robust/chrx_het/out/merge.sh	3400	spike run output (rebuildable)
+robust/chrx_het/out/replaced_reads.txt	56419	spike run output (rebuildable)
+robust/chrx_het/out/truth.vcf	11638	spike run output (rebuildable)
+robust/chrx_hom/out/R1.fq.gz	114411	binary/sequence type
+robust/chrx_hom/out/R2.fq.gz	120763	binary/sequence type
+robust/chrx_hom/out/README.md	3606	spike run output (rebuildable)
+robust/chrx_hom/out/align.sh	1043	spike run output (rebuildable)
+robust/chrx_hom/out/events.bed	23	spike run output (rebuildable)
+robust/chrx_hom/out/fastq.sh	8439	spike run output (rebuildable)
+robust/chrx_hom/out/fastq_removed_reads.txt	16014	spike run output (rebuildable)
+robust/chrx_hom/out/merge.sh	3400	spike run output (rebuildable)
+robust/chrx_hom/out/replaced_reads.txt	57652	spike run output (rebuildable)
+robust/chrx_hom/out/truth.vcf	11638	spike run output (rebuildable)
+robust/gv2_HG001/out/R1.fq.gz	235120	binary/sequence type
+robust/gv2_HG001/out/R2.fq.gz	251545	binary/sequence type
+robust/gv2_HG001/out/README.md	3697	spike run output (rebuildable)
+robust/gv2_HG001/out/align.sh	1043	spike run output (rebuildable)
+robust/gv2_HG001/out/events.bed	24	spike run output (rebuildable)
+robust/gv2_HG001/out/fastq.sh	8439	spike run output (rebuildable)
+robust/gv2_HG001/out/fastq_removed_reads.txt	13103	spike run output (rebuildable)
+robust/gv2_HG001/out/merge.sh	3400	spike run output (rebuildable)
+robust/gv2_HG001/out/replaced_reads.txt	113890	spike run output (rebuildable)
+robust/gv2_HG001/out/truth.vcf	11638	spike run output (rebuildable)
+robust/gv2_HG002/out/R1.fq.gz	235744	binary/sequence type
+robust/gv2_HG002/out/R2.fq.gz	252593	binary/sequence type
+robust/gv2_HG002/out/README.md	3697	spike run output (rebuildable)
+robust/gv2_HG002/out/align.sh	1043	spike run output (rebuildable)
+robust/gv2_HG002/out/events.bed	24	spike run output (rebuildable)
+robust/gv2_HG002/out/fastq.sh	8439	spike run output (rebuildable)
+robust/gv2_HG002/out/fastq_removed_reads.txt	12720	spike run output (rebuildable)
+robust/gv2_HG002/out/merge.sh	3400	spike run output (rebuildable)
+robust/gv2_HG002/out/replaced_reads.txt	113926	spike run output (rebuildable)
+robust/gv2_HG002/out/truth.vcf	11638	spike run output (rebuildable)
+robust/gvcf_HG001/out/R1.fq.gz	277189	binary/sequence type
+robust/gvcf_HG001/out/R2.fq.gz	299721	binary/sequence type
+robust/gvcf_HG001/out/README.md	3700	spike run output (rebuildable)
+robust/gvcf_HG001/out/align.sh	1043	spike run output (rebuildable)
+robust/gvcf_HG001/out/events.bed	24	spike run output (rebuildable)
+robust/gvcf_HG001/out/fastq.sh	8439	spike run output (rebuildable)
+robust/gvcf_HG001/out/fastq_removed_reads.txt	17564	spike run output (rebuildable)
+robust/gvcf_HG001/out/merge.sh	3400	spike run output (rebuildable)
+robust/gvcf_HG001/out/replaced_reads.txt	139405	spike run output (rebuildable)
+robust/gvcf_HG001/out/truth.vcf	11639	spike run output (rebuildable)
+robust/gvcf_HG002/out/R1.fq.gz	277189	binary/sequence type
+robust/gvcf_HG002/out/R2.fq.gz	299721	binary/sequence type
+robust/gvcf_HG002/out/README.md	3700	spike run output (rebuildable)
+robust/gvcf_HG002/out/align.sh	1043	spike run output (rebuildable)
+robust/gvcf_HG002/out/events.bed	24	spike run output (rebuildable)
+robust/gvcf_HG002/out/fastq.sh	8439	spike run output (rebuildable)
+robust/gvcf_HG002/out/fastq_removed_reads.txt	17564	spike run output (rebuildable)
+robust/gvcf_HG002/out/merge.sh	3400	spike run output (rebuildable)
+robust/gvcf_HG002/out/replaced_reads.txt	139405	spike run output (rebuildable)
+robust/gvcf_HG002/out/truth.vcf	11639	spike run output (rebuildable)
+robust/hg001_chr20.tsv	1197888	over 100 kB
+robust/hg001cram_old/out/R1.fq.gz	176343	binary/sequence type
+robust/hg001cram_old/out/R2.fq.gz	188612	binary/sequence type
+robust/hg001cram_old/out/README.md	3459	spike run output (rebuildable)
+robust/hg001cram_old/out/align.sh	1132	spike run output (rebuildable)
+robust/hg001cram_old/out/events.bed	24	spike run output (rebuildable)
+robust/hg001cram_old/out/fastq.sh	8439	spike run output (rebuildable)
+robust/hg001cram_old/out/fastq_removed_reads.txt	13571	spike run output (rebuildable)
+robust/hg001cram_old/out/merge.sh	3360	spike run output (rebuildable)
+robust/hg001cram_old/out/replaced_reads.txt	100705	spike run output (rebuildable)
+robust/hg001cram_old/out/truth.vcf	11639	spike run output (rebuildable)
+robust/hg002/out/R1.fq.gz	278136	binary/sequence type
+robust/hg002/out/R2.fq.gz	301640	binary/sequence type
+robust/hg002/out/README.md	3599	spike run output (rebuildable)
+robust/hg002/out/align.sh	1043	spike run output (rebuildable)
+robust/hg002/out/events.bed	24	spike run output (rebuildable)
+robust/hg002/out/fastq.sh	8439	spike run output (rebuildable)
+robust/hg002/out/fastq_removed_reads.txt	16722	spike run output (rebuildable)
+robust/hg002/out/merge.sh	3400	spike run output (rebuildable)
+robust/hg002/out/replaced_reads.txt	139559	spike run output (rebuildable)
+robust/hg002/out/truth.vcf	11639	spike run output (rebuildable)
+robust/hg002_chr20.tsv	1232574	over 100 kB
+robust/hg002q_chr20.tsv	2884143	over 2 MB
+robust/ngap/out/R1.fq.gz	185720	binary/sequence type
+robust/ngap/out/R2.fq.gz	190163	binary/sequence type
+robust/ngap/out/README.md	4487	spike run output (rebuildable)
+robust/ngap/out/align.sh	1043	spike run output (rebuildable)
+robust/ngap/out/events.bed	18	spike run output (rebuildable)
+robust/ngap/out/fastq.sh	8439	spike run output (rebuildable)
+robust/ngap/out/fastq_removed_reads.txt	14132	spike run output (rebuildable)
+robust/ngap/out/merge.sh	3400	spike run output (rebuildable)
+robust/ngap/out/replaced_reads.txt	82644	spike run output (rebuildable)
+robust/ngap/out/truth.vcf	11633	spike run output (rebuildable)
+robust/order/AB.r1names	255678	over 100 kB
+robust/order/AB.r2names	255678	over 100 kB
+robust/order/AB.rr	253414	over 100 kB
+robust/order/AB/R1.fq.gz	514316	binary/sequence type
+robust/order/AB/R2.fq.gz	554661	binary/sequence type
+robust/order/AB/README.md	3741	spike run output (rebuildable)
+robust/order/AB/align.sh	1043	spike run output (rebuildable)
+robust/order/AB/events.bed	48	spike run output (rebuildable)
+robust/order/AB/fastq.sh	8439	spike run output (rebuildable)
+robust/order/AB/fastq_removed_reads.txt	29369	spike run output (rebuildable)
+robust/order/AB/merge.sh	3400	spike run output (rebuildable)
+robust/order/AB/replaced_reads.txt	253414	spike run output (rebuildable)
+robust/order/AB/truth.vcf	11838	spike run output (rebuildable)
+robust/order/B/R1.fq.gz	235744	binary/sequence type
+robust/order/B/R2.fq.gz	252593	binary/sequence type
+robust/order/B/README.md	3595	spike run output (rebuildable)
+robust/order/B/align.sh	1043	spike run output (rebuildable)
+robust/order/B/events.bed	24	spike run output (rebuildable)
+robust/order/B/fastq.sh	8439	spike run output (rebuildable)
+robust/order/B/fastq_removed_reads.txt	12720	spike run output (rebuildable)
+robust/order/B/merge.sh	3400	spike run output (rebuildable)
+robust/order/B/replaced_reads.txt	113926	spike run output (rebuildable)
+robust/order/B/truth.vcf	11638	spike run output (rebuildable)
+robust/stale/out/R1.fq.gz	278136	binary/sequence type
+robust/stale/out/R2.fq.gz	301640	binary/sequence type
+robust/stale/out/README.md	3599	spike run output (rebuildable)
+robust/stale/out/align.sh	1043	spike run output (rebuildable)
+robust/stale/out/events.bed	24	spike run output (rebuildable)
+robust/stale/out/fastq.sh	8439	spike run output (rebuildable)
+robust/stale/out/fastq_removed_reads.txt	16722	spike run output (rebuildable)
+robust/stale/out/merge.sh	3400	spike run output (rebuildable)
+robust/stale/out/replaced_reads.txt	139559	spike run output (rebuildable)
+robust/stale/out/truth.vcf	11639	spike run output (rebuildable)
+robust/strobe/out/R1.fq.gz	306178	binary/sequence type
+robust/strobe/out/R2.fq.gz	331631	binary/sequence type
+robust/strobe/out/README.md	3588	spike run output (rebuildable)
+robust/strobe/out/align.sh	1041	spike run output (rebuildable)
+robust/strobe/out/events.bed	24	spike run output (rebuildable)
+robust/strobe/out/fastq.sh	8439	spike run output (rebuildable)
+robust/strobe/out/fastq_removed_reads.txt	17432	spike run output (rebuildable)
+robust/strobe/out/merge.sh	3394	spike run output (rebuildable)
+robust/strobe/out/replaced_reads.txt	156287	spike run output (rebuildable)
+robust/strobe/out/truth.vcf	11639	spike run output (rebuildable)
+robust/strobe_md.bam	5372316	binary/sequence type
+sk/hosp_half.bam	6347032	binary/sequence type
+sk/hosp_half.bam.bai	765624	binary/sequence type
+skeptic_gw.tsv	6081103	over 2 MB
+valid_lens/alu.bed	31670664	over 2 MB
+valid_lens/ev.tsv	113439	over 100 kB
+valid_lens/fp_real.html	487868	over 100 kB
+valid_lens/fp_real.json	126841	over 100 kB
+valid_lens/fp_spike21.html	487226	over 100 kB
+valid_lens/fp_spike21.json	125015	over 100 kB
+valid_lens/fp_spike22.html	485889	over 100 kB
+valid_lens/fp_spike22.json	124827	over 100 kB
+valid_lens/h1_sv.tsv	357553	over 100 kB
+valid_lens/h2_sv.tsv	367343	over 100 kB

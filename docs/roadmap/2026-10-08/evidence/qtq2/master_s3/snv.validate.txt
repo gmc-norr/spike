@@ -1,0 +1,86 @@
+
+spike validate -- 78 checks
+
+Event                               Check              Expected                  Observed        Status
+----------------------------------------------------------------------------------------------------
+SNP chr20:38549999-38550000 (un...  allele_freq        0.10                      too shallow...  FAIL
+SNP chr20:38549999-38550000 (un...  resistant          <=0.100                   0.113           FAIL (advisory)
+SNP chr20:38549999-38550000 (un...  depth_fold         <=1.50                    1.10            PASS (advisory)
+SNP chr20:38609999-38610000 (un...  allele_freq        0.25                      0.15            PASS
+SNP chr20:38609999-38610000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38609999-38610000 (un...  depth_fold         <=1.50                    1.24            PASS (advisory)
+SNP chr20:38669999-38670000 (un...  allele_freq        0.50                      0.55            PASS
+SNP chr20:38669999-38670000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38669999-38670000 (un...  depth_fold         <=1.50                    1.30            PASS (advisory)
+SNP chr20:38729999-38730000 (un...  allele_freq        0.75                      0.80            PASS
+SNP chr20:38729999-38730000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38729999-38730000 (un...  depth_fold         <=1.50                    1.18            PASS (advisory)
+SNP chr20:38789999-38790000 (un...  allele_freq        1.00                      1.00            PASS
+SNP chr20:38789999-38790000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38789999-38790000 (un...  depth_fold         <=1.50                    1.30            PASS (advisory)
+SNP chr20:38849999-38850000 (un...  allele_freq        0.10                      too shallow...  FAIL
+SNP chr20:38849999-38850000 (un...  resistant          <=0.100                   0.027           PASS (advisory)
+SNP chr20:38849999-38850000 (un...  depth_fold         <=1.50                    1.07            PASS (advisory)
+SNP chr20:38909999-38910000 (un...  allele_freq        0.25                      0.26            PASS
+SNP chr20:38909999-38910000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38909999-38910000 (un...  depth_fold         <=1.50                    1.20            PASS (advisory)
+SNP chr20:38969999-38970000 (un...  allele_freq        0.50                      0.46            PASS
+SNP chr20:38969999-38970000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:38969999-38970000 (un...  depth_fold         <=1.50                    1.19            PASS (advisory)
+SNP chr20:39029999-39030000 (un...  allele_freq        0.75                      0.67            PASS
+SNP chr20:39029999-39030000 (un...  resistant          <=0.100                   0.018           PASS (advisory)
+SNP chr20:39029999-39030000 (un...  depth_fold         <=1.50                    1.17            PASS (advisory)
+SNP chr20:39089999-39090000 (un...  allele_freq        1.00                      0.94            PASS
+SNP chr20:39089999-39090000 (un...  resistant          <=0.100                   0.054           PASS (advisory)
+SNP chr20:39089999-39090000 (un...  depth_fold         <=1.50                    1.61            FAIL (advisory)
+SNP chr20:39149999-39150000 (un...  allele_freq        0.10                      too shallow...  FAIL
+SNP chr20:39149999-39150000 (un...  resistant          <=0.100                   0.054           PASS (advisory)
+SNP chr20:39149999-39150000 (un...  depth_fold         <=1.50                    1.22            PASS (advisory)
+SNP chr20:39209999-39210000 (un...  allele_freq        0.25                      0.30            PASS
+SNP chr20:39209999-39210000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39209999-39210000 (un...  depth_fold         <=1.50                    1.27            PASS (advisory)
+SNP chr20:39269999-39270000 (un...  allele_freq        0.50                      0.52            PASS
+SNP chr20:39269999-39270000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39269999-39270000 (un...  depth_fold         <=1.50                    1.26            PASS (advisory)
+SNP chr20:39329999-39330000 (un...  allele_freq        0.75                      0.65            PASS
+SNP chr20:39329999-39330000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39329999-39330000 (un...  depth_fold         <=1.50                    1.13            PASS (advisory)
+SNP chr20:39389999-39390000 (un...  allele_freq        1.00                      1.00            PASS
+SNP chr20:39389999-39390000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39389999-39390000 (un...  depth_fold         <=1.50                    1.18            PASS (advisory)
+SNP chr20:39449999-39450000 (un...  allele_freq        0.10                      too shallow...  FAIL
+SNP chr20:39449999-39450000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39449999-39450000 (un...  depth_fold         <=1.50                    1.09            PASS (advisory)
+SNP chr20:39509999-39510000 (un...  allele_freq        0.25                      0.24            PASS
+SNP chr20:39509999-39510000 (un...  resistant          <=0.100                   0.044           PASS (advisory)
+SNP chr20:39509999-39510000 (un...  depth_fold         <=1.50                    1.12            PASS (advisory)
+SNP chr20:39569999-39570000 (un...  allele_freq        0.50                      0.45            PASS
+SNP chr20:39569999-39570000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39569999-39570000 (un...  depth_fold         <=1.50                    1.35            PASS (advisory)
+SNP chr20:39629999-39630000 (un...  allele_freq        0.75                      0.55            PASS
+SNP chr20:39629999-39630000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39629999-39630000 (un...  depth_fold         <=1.50                    1.18            PASS (advisory)
+SNP chr20:39689999-39690000 (un...  allele_freq        1.00                      1.00            PASS
+SNP chr20:39689999-39690000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39689999-39690000 (un...  depth_fold         <=1.50                    1.23            PASS (advisory)
+SNP chr20:39749999-39750000 (un...  allele_freq        0.10                      too shallow...  FAIL
+SNP chr20:39749999-39750000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39749999-39750000 (un...  depth_fold         <=1.50                    1.17            PASS (advisory)
+SNP chr20:39809999-39810000 (un...  allele_freq        0.25                      0.34            PASS
+SNP chr20:39809999-39810000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39809999-39810000 (un...  depth_fold         <=1.50                    1.16            PASS (advisory)
+SNP chr20:39869999-39870000 (un...  allele_freq        0.50                      0.47            PASS
+SNP chr20:39869999-39870000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39869999-39870000 (un...  depth_fold         <=1.50                    1.44            PASS (advisory)
+SNP chr20:39929999-39930000 (un...  allele_freq        0.75                      0.83            PASS
+SNP chr20:39929999-39930000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39929999-39930000 (un...  depth_fold         <=1.50                    1.20            PASS (advisory)
+SNP chr20:39989999-39990000 (un...  allele_freq        1.00                      1.00            PASS
+SNP chr20:39989999-39990000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39989999-39990000 (un...  depth_fold         <=1.50                    1.21            PASS (advisory)
+[global]                            insert_size        mean 50-1000, sd 5-300    421+/-179       PASS
+[global]                            dup_rate           <50%                      10.3%           PASS
+[global]                            mean_mapq          >20                       59.7            PASS
+
+Result: 71/78 PASS
+Advisory: 50 checks, 48 PASS, 2 FAIL (not in the exit status; --strict includes them)

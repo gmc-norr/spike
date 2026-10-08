@@ -1,0 +1,47 @@
+[2026-10-07T12:46:35Z INFO  spike] Parsed 2 --event spec(s) + 0 VCF event(s)
+[2026-10-07T12:46:35Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T12:46:35Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 13793 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T12:46:35Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1018-32940, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:24974:11939
+[2026-10-07T12:46:35Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-07T12:46:36Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-10-07T12:46:36Z INFO  spike] Processing event 1/2: Deletion { chrom: "chr20", del_start: 38900000, del_end: 38910000, gene: "unknown", exons: [], allele_fraction: None }
+[2026-10-07T12:46:36Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T12:46:36Z INFO  spike::extract] Extracting read pairs from chr20:38890000-38920000 (MAPQ >= 20)
+[2026-10-07T12:46:36Z INFO  spike::extract] Pass 1: collected 4584 read1 + 4583 read2 records (4539 pairs already complete)
+[2026-10-07T12:46:36Z INFO  spike::extract] Extracted 4623 complete read pairs from chr20:38890000-38920000
+[2026-10-07T12:46:36Z INFO  spike::stats] Fragment distribution: mean=423.7, stddev=176.3, n=4591
+[2026-10-07T12:46:36Z INFO  spike::extract] Built read pool: 4623 pairs
+[2026-10-07T12:46:36Z INFO  spike]   Reads over the event spike cannot edit: 22 of 3183 (0.007)
+[2026-10-07T12:46:36Z INFO  spike::synth] Quality profile: 4623 pairs, 151 cycles. R1 mean Q: start=35.9 mid=35.8 end=34.3, R2: start=35.7 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 3167/4832, cycle 900/1208 usable
+[2026-10-07T12:46:36Z INFO  spike::loh] chr20:38898000-38912000: 2 het SNPs, 1 hom-alt SNPs
+[2026-10-07T12:46:36Z INFO  spike::loh] phased 2 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T12:46:36Z INFO  spike::loh] classified 32 fragments (9 event copy, 23 other); 16 ambiguous ties left unclassified
+[2026-10-07T12:46:36Z INFO  spike::simulate] Tiling 303 synthetic reads across 4000bp haplotype (cov=71.8, vaf=0.50, bp_only=false)
+[2026-10-07T12:46:36Z INFO  spike::simulate] simulate_event: 3584 kept, 1039 suppressed, 303 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T12:46:36Z INFO  spike] Event 1: 3584 kept + 303 chimeric, 1039 suppressed
+[2026-10-07T12:46:36Z INFO  spike] Processing event 2/2: Insertion { chrom: "chr20", pos: 39000000, ins_seq: None, ins_len: 300, gene: "unknown", allele_fraction: None }
+[2026-10-07T12:46:36Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T12:46:36Z INFO  spike::extract] Extracting read pairs from chr20:38990000-39010000 (MAPQ >= 20)
+[2026-10-07T12:46:36Z INFO  spike::extract] Pass 1: collected 2833 read1 + 2840 read2 records (2801 pairs already complete)
+[2026-10-07T12:46:36Z INFO  spike::extract] Extracted 2871 complete read pairs from chr20:38990000-39010000
+[2026-10-07T12:46:36Z INFO  spike::stats] Fragment distribution: mean=420.2, stddev=176.4, n=2850
+[2026-10-07T12:46:36Z INFO  spike::extract] Built read pool: 2871 pairs
+[2026-10-07T12:46:36Z INFO  spike]   Reads over the event spike cannot edit: 1 of 49 (0.020)
+[2026-10-07T12:46:36Z INFO  spike::synth] Quality profile: 2871 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.1 end=34.6, R2: start=35.8 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2019/4832, cycle 896/1208 usable
+[2026-10-07T12:46:36Z INFO  spike::loh] chr20:38998000-39002000: 0 het SNPs, 0 hom-alt SNPs
+[2026-10-07T12:46:36Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-07T12:46:36Z INFO  spike::simulate] Tiling 259 synthetic reads across 4300bp haplotype (cov=56.2, vaf=0.50, bp_only=false)
+[2026-10-07T12:46:36Z INFO  spike::simulate] simulate_event: 2626 kept, 245 suppressed, 259 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T12:46:36Z INFO  spike] Event 2: 2626 kept + 259 chimeric, 245 suppressed
+[2026-10-07T12:46:36Z INFO  spike] Duplicates of the removed originals: 184 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-07T12:46:36Z INFO  spike::fastq] Wrote 6772 read pairs to het/R1.fq.gz and het/R2.fq.gz
+[2026-10-07T12:46:36Z INFO  spike::truth] Wrote truth VCF with 2 events to het/truth.vcf
+[2026-10-07T12:46:36Z INFO  spike] Originals removed from the BAM: 7678 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-07T12:46:36Z INFO  spike] Originals to remove from the raw FASTQ: 1468 read pairs (fastq_removed_reads.txt); the 6210 spike kept stay as the raw reads they are
+[2026-10-07T12:46:36Z INFO  spike] === spike complete ===
+[2026-10-07T12:46:36Z INFO  spike] Output directory: het
+[2026-10-07T12:46:36Z INFO  spike] spike's reads, around the events only (not the whole sample): het/R1.fq.gz and het/R2.fq.gz
+[2026-10-07T12:46:36Z INFO  spike] Truth VCF: het/truth.vcf
+[2026-10-07T12:46:36Z INFO  spike] Total read pairs: 6772
+[2026-10-07T12:46:36Z INFO  spike] README: het/README.md
+[2026-10-07T12:46:36Z INFO  spike] Next steps: bash het/align.sh  →  bash het/merge.sh; or, for the whole sample as spiked FASTQ: bash het/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)

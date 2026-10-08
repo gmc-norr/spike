@@ -1,0 +1,23 @@
+==================== hospital reads 218708
+N bases 782 (2.39e-05/base); Q2 bases 782, Q2 on non-N 0
+ R1 mismatch by Q: Q9 8.9789% (n=137701); Q24 0.2644% (n=522763); Q40 0.0072% (n=14913878)
+ R2 mismatch by Q: Q9 10.9815% (n=142011); Q24 0.3889% (n=505279); Q40 0.0149% (n=14861248)
+ Q<15 R1 top-alt share 0.837 | A->C0.92/G0.07/T0.00(6272) C->A0.73/G0.02/T0.25(2526) G->A0.65/C0.01/T0.35(2060) T->A0.00/C0.91/G0.08(1506)
+ Q<15 R2 top-alt share 0.819 | A->C0.89/G0.11/T0.00(7164) C->A0.80/G0.03/T0.17(3301) G->A0.64/C0.01/T0.35(2898) T->A0.00/C0.85/G0.14(2232)
+ Q15-29 R1 top-alt share 0.864 | A->C0.92/G0.08/T0.00(859) C->A0.77/G0.00/T0.23(185) G->A0.62/C0.01/T0.37(152) T->A0.03/C0.91/G0.06(186)
+ Q15-29 R2 top-alt share 0.833 | A->C0.86/G0.12/T0.02(1052) C->A0.82/G0.04/T0.14(376) G->A0.65/C0.02/T0.33(243) T->A0.00/C0.88/G0.11(294)
+ Q>=30 R1 top-alt share 0.625 | A->C0.24/G0.66/T0.11(294) C->A0.30/G0.05/T0.64(188) G->A0.33/C0.15/T0.53(255) T->A0.26/C0.66/G0.08(340)
+ Q>=30 R2 top-alt share 0.592 | A->C0.13/G0.29/T0.57(920) C->A0.37/G0.11/T0.52(415) G->A0.39/C0.08/T0.53(468) T->A0.07/C0.78/G0.15(406)
+ R1 mismatch% cycles 1-5 0.153, 6-10 0.088, 50-100 0.088, 141-145 0.130, 146-150 0.125, 151 0.249
+ R2 mismatch% cycles 1-5 0.108, 6-10 0.090, 50-100 0.122, 141-145 0.208, 146-150 0.179, 151 0.293
+ high-Q (>=30) mismatch rate by preceding dinucleotide (seq orientation), ratio to overall 1.10e-04:
+   CC 1.36x(228) TT 1.19x(389) AC 1.16x(192) GC 1.14x(158) CT 1.13x(258) TG 1.08x(257) CG 1.05x(32) AG 1.04x(238) TC 1.04x(201) GG 1.02x(172) GT 0.99x(163) AT 0.90x(234) GA 0.89x(171) CA 0.81x(192) AA 0.74x(240) TA 0.73x(161)
+ recurrent same-strand same-alt error sites: keys 31743, >=2 reads 1809, >=3 reads 543; mismatches in >=2 sites 4658 of 34592 (13.47%)
+ slips (1-2 bp indels) per read pass over a homopolymer run, by run length:
+      4-5 passes   596900  ins    14  del    52  rate 0.0111%
+      6-7 passes    59642  ins     9  del    10  rate 0.0319%
+      8-9 passes     8992  ins    17  del    10  rate 0.3003%
+    10-11 passes     2616  ins    25  del    26  rate 1.9495%
+    12-14 passes     1660  ins    31  del    12  rate 2.5904%
+      15+ passes     1153  ins    57  del    26  rate 7.1986%
+   outside runs>=4: 512 indels over 29537822 bases (1.73e-05/base)

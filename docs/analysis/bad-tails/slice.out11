@@ -1,0 +1,4 @@
+reads 60302; crashed 0.96%
+  runs 7-8  (3026 runs): cycles +1-5:  1.35  cycles +6-10:  1.22  cycles +11-20:  1.25  cycles +21-40:  1.32  cycles +41-60:  1.31
+  runs 9-11 ( 879 runs): cycles +1-5:  2.54  cycles +6-10:  2.36  cycles +11-20:  2.18  cycles +21-40:  2.24  cycles +41-60:  2.15
+  runs 12+  ( 830 runs): cycles +1-5:  9.84  cycles +6-10:  8.95  cycles +11-20:  9.38  cycles +21-40:  7.69  cycles +41-60:  7.04

@@ -1,0 +1,9 @@
+spike-dp: exit 0 (wall 15.88 s)
+spike-fix: exit 0 (wall 13.79 s)
+PASS  replaced_reads.txt identical (101541 lines)
+PASS  fastq_removed_reads.txt identical (14418 lines)
+PASS  truth.vcf identical (261 lines)
+PASS  R1.fq.gz identical decompressed (100605 records)
+PASS  R2.fq.gz identical decompressed (100605 records)
+clean-mode duplicate log lines in the origin run (want 0): 0
+K3: PASS

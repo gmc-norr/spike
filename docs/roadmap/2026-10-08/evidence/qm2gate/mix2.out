@@ -1,0 +1,4 @@
+== HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam
+mean |error| of the crash share, points: genome 0.40  class 0.19  run 0.29  class x run 0.18
+== D24-14230_Seq25-7600_30x_sorted_md.bam
+mean |error| of the crash share, points: genome 0.22  class 0.13  run 0.13  class x run 0.09

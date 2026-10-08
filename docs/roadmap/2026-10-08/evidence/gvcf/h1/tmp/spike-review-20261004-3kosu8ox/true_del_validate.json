@@ -1,0 +1,13 @@
+{
+  "summary": { "total": 8, "pass": 5, "fail": 3, "counted_total": 5, "counted_pass": 4, "counted_fail": 1, "strict": false },
+  "checks": [
+    { "event": "DEL chr1:5000-5050 (unknown)", "check": "coverage_ratio", "expected": "0.00", "observed": "0.00", "pass": true, "advisory": false },
+    { "event": "DEL chr1:5000-5050 (unknown)", "check": "coverage_any_mapq", "expected": "0.00", "observed": "0.00", "pass": true, "advisory": true },
+    { "event": "DEL chr1:5000-5050 (unknown)", "check": "del_planted", "expected": ">=1 ev0001 read carrying", "observed": "28", "pass": true, "advisory": false },
+    { "event": "DEL chr1:5000-5050 (unknown)", "check": "split_reads", "expected": ">=2 joining chr1:5051", "observed": "0", "pass": false, "advisory": true },
+    { "event": "DEL chr1:5000-5050 (unknown)", "check": "split_reads_each_end", "expected": ">=2 at each end", "observed": "0/0", "pass": false, "advisory": true },
+    { "event": "[global]", "check": "insert_size", "expected": "mean 50-1000, sd 5-300", "observed": "302+/-9", "pass": true, "advisory": false },
+    { "event": "[global]", "check": "dup_rate", "expected": "<50%", "observed": "no dup flags", "pass": false, "advisory": false },
+    { "event": "[global]", "check": "mean_mapq", "expected": ">20", "observed": "60.0", "pass": true, "advisory": false }
+  ]
+}

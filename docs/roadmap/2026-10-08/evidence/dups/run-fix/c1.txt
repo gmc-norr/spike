@@ -1,0 +1,1 @@
+freed sets: 100 of 100 with the kept pair removed (>= 95), 0 of 100 untouched (<= 5); C1: PASS

@@ -1,0 +1,7 @@
+events 22; reads: spike 7579, sample's own 8899
+K2 bad-end clip: spike 71/7579 = 0.94%, own 123/8899 = 1.38%, z = -2.64 -> PASS
+reported any soft clip: spike 0.94%, own 2.42%, z = -7.25
+reported crash: spike 1.49%, own 1.48%, z = +0.04
+reported mismatches per 100 aligned bases: spike 0.270, own 0.308
+K5 share of bases < Q15 by base: A: spike 0.0161 own 0.0189; C: spike 0.0171 own 0.0185; G: spike 0.0168 own 0.0156; T: spike 0.0167 own 0.0124
+K3 spike pairs 4780: P(R1 crash) 0.0121 P(R2 crash) 0.0182 P(both) 0.00105 ratio 4.74

@@ -1,0 +1,2 @@
+K6 (31-value BAM): real values 31, spike's values 31 (all from the real set: True)
+reads spike 650, real 5127; read-mean SD spike 4.51, real 3.64 (ratio 1.237); perfect spike 0.00% real 0.00% (z +0.00); crashed spike 24.31% real 14.36% (z +6.61)

@@ -1,0 +1,47 @@
+diff --git a/src/quality.rs b/src/quality.rs
+index 73a5806..90e56e1 100644
+--- a/src/quality.rs
++++ b/src/quality.rs
+@@ -426,6 +426,8 @@ pub struct QualityProfile {
+     census: Option<ErrorCensus>,
+     n_pairs: usize,
+     n_blocks: usize,
++    /// Throwaway speed probe: run_ratio per (mate, run bin, class), filled once learned.
++    ratios: Vec<f64>,
+ }
+ 
+ impl QualityProfile {
+@@ -532,6 +534,7 @@ impl QualityProfile {
+             census: None,
+             n_pairs: pairs().count(),
+             n_blocks: blocks.len(),
++            ratios: Vec::new(),
+         };
+         if profile.alphabet.is_empty() {
+             log::info!("Quality profile: no sampled qualities; every base is Q20");
+@@ -622,6 +625,10 @@ impl QualityProfile {
+             profile.errors = errors;
+             profile.census = Some(census);
+         }
++        profile.ratios = (0..2)
++            .flat_map(|m| (0..RUN_BINS).flat_map(move |h| (0..READ_CLASSES).map(move |c| (m, h, c))))
++            .map(|(m, h, c)| profile.run_ratio(m, h, c))
++            .collect();
+         profile.log_summary();
+         profile
+     }
+@@ -729,9 +736,12 @@ impl QualityProfile {
+         let weights: Vec<f64> = (0..READ_CLASSES * READ_CLASSES)
+             .map(|i| {
+                 let (c1, c2) = (i / READ_CLASSES, i % READ_CLASSES);
++                let r = |m: usize, h: usize, c: usize| {
++                    self.ratios.get((m * RUN_BINS + h.min(RUN_BINS - 1)) * READ_CLASSES + c).copied().unwrap_or(1.0)
++                };
+                 self.joint[i] as f64
+-                    * self.run_ratio(0, runs.0, c1)
+-                    * self.run_ratio(1, runs.1, c2)
++                    * r(0, runs.0, c1)
++                    * r(1, runs.1, c2)
+                     * mix.r[0][c1]
+                     * mix.r[1][c2]
+             })

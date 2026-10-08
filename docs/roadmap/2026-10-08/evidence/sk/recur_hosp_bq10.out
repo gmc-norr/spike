@@ -1,0 +1,7 @@
+hosp_full: scored sites (depth>=8, in bench, unmasked) 945424; candidates (alt>=2 & AF>=0.12) 49 (51.8 per Mb), one-strand 33; same-strand same-alt >=2 reads 137, >=3 reads 36 (opposite strand also has it: 2); >=3 sites by longest run within 15 bp before (seq orientation): {'>=7': 9, '<5': 21, '5-6': 6}
+hosp_half: scored sites (depth>=8, in bench, unmasked) 917811; candidates (alt>=2 & AF>=0.12) 58 (63.2 per Mb), one-strand 38; same-strand same-alt >=2 reads 73, >=3 reads 10 (opposite strand also has it: 1); >=3 sites by longest run within 15 bp before (seq orientation): {'<5': 6, '>=7': 3, '5-6': 1}
+background positions by longest run within 15 bp before (forward): {'<5': 17987, '5-6': 2044, '>=7': 407}
+
+real	0m24,167s
+user	0m26,856s
+sys	0m0,203s

@@ -1,0 +1,1 @@
+hosp minBQ 0 {'scored': 945661, 'cand': 319, 'cand_one_strand': 284, 'ss_sa>=2': 1761, 'ss_sa>=3': 534, 'ss_any>=3': 578, 'ss_any>=2': 1917, 'mismatches': 33887, 'bases': 30760638} cand/Mb 337.3

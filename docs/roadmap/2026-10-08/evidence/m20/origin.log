@@ -1,0 +1,63 @@
+[2026-10-07T21:23:18Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T21:23:18Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T21:23:18Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 16 of 31295 full-length reads end in A, so the library was adapter-trimmed (50000 records sampled)
+[2026-10-07T21:23:18Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:45:227NC2LT1:2:TILE:X:Y, 247 tiles, x 1000-52208, y 1016-29759, e.g. SPIKE_ev0001_hap_000000:45:227NC2LT1:2:2218:22853:29387
+[2026-10-07T21:23:18Z INFO  spike] Simulated read group: @RG ID:sim SM:D24-14230_Seq25-7600_30x
+[2026-10-07T21:23:18Z INFO  spike] align.sh's bwa-mem2 takes the input's own options, from @PG ID:bwa-mem2: -M -K 100000000
+[2026-10-07T21:23:19Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (173 MB)
+[2026-10-07T21:23:19Z INFO  spike] --edit-model origin (experimental): reads are removed by their chance of having come from each event's edited copy, at the event and at its look-alikes. The BAM keeps XA tags (the first is on record 19).
+[2026-10-07T21:23:19Z INFO  spike] Processing event 1/1: Deletion { chrom: "chr5", del_start: 70924941, del_end: 70953015, gene: "unknown", exons: [], allele_fraction: Some(0.5) }
+[2026-10-07T21:23:19Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:23:19Z INFO  spike::extract] Extracting read pairs from chr5:70914941-70963015 (MAPQ >= 20)
+[2026-10-07T21:23:19Z INFO  spike::extract] Pass 1: collected 996 read1 + 995 read2 records (995 pairs already complete)
+[2026-10-07T21:23:19Z INFO  spike::extract] Extracted 995 complete read pairs from chr5:70914941-70963015
+[2026-10-07T21:23:19Z INFO  spike::stats] Fragment distribution: mean=389.7, stddev=124.1, n=995
+[2026-10-07T21:23:19Z INFO  spike::extract] Built read pool: 995 pairs
+[2026-10-07T21:23:22Z INFO  spike]   origin: 8024 fragment(s) could have come from chr5:70922941-70955015; look-alike region(s): chr1:28349607-28350066, chr1:42641810-42642267, chr1:46426816-46427273, chr1:179189798-179190258, chr1:180387844-180388230, chr1:242541801-242542291, chr11:3821976-3822492, chr12:83631543-83631977, chr12:128908561-128909075, chr13:80012598-80013067, chr13:98042513-98042958, chr14:84913770-84914243, chr15:20179882-20180250, chr15:36647807-36648290, chr15:56961865-56962299, chr16:79413058-79413425, chr16:81085997-81086375, chr17:54794667-54795027, chr17:68733638-68733998, chr17:78218607-78219014, chr19:13911743-13912143, chr19:17930062-17930507, chr3:18116250-18116684, chr4:166603572-166603930, chr5:70047241-70079854, chr5:139362348-139362824, chr6:156496475-156496861, chr7:100426214-100426590, chrX:37474253-37474613, chrX:45879090-45879545
+[2026-10-07T21:23:22Z INFO  spike]   Reads over the event spike cannot edit: 56 of 6733 (0.008)
+[2026-10-07T21:23:22Z INFO  spike::synth] Quality profile: 995 pairs, 151 cycles. R1 mean Q: start=39.1 mid=38.9 end=37.1, R2: start=38.7 end=36.6. Base-conditioned bins: 1206/1208 usable. Markov bins: base 1200/4832, cycle 630/1208 usable
+[2026-10-07T21:23:22Z WARN  spike::synth] Quality profile learned from 995 donor pairs; below 1000 its low-quality runs come out shorter than the sample's (measured on HG002 35x). Base-conditioned bins: 1206/1208 usable. Markov bins: base 1200/4832, cycle 630/1208 usable. Widen --flank or --region for a larger pool.
+[2026-10-07T21:23:22Z INFO  spike::loh] chr5:70922941-70955015: 1 het SNPs, 3 hom-alt SNPs
+[2026-10-07T21:23:23Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:23:23Z INFO  spike::loh] classified 18 fragments (15 event copy, 3 other); 1 ambiguous ties left unclassified
+[2026-10-07T21:23:23Z INFO  spike::haplotype] Applied 2 het SNP variants to haplotype sequence
+[2026-10-07T21:23:23Z INFO  spike::simulate]   origin depth at chr5:70924940: 31.4x (the donor pool's there: 4.7x)
+[2026-10-07T21:23:23Z INFO  spike::simulate] Tiling 146 synthetic reads across 4000bp haplotype (cov=31.4, vaf=0.50, bp_only=false)
+[2026-10-07T21:23:23Z INFO  spike::simulate] simulate_event: 995 kept, 0 suppressed, 146 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:23:23Z INFO  spike] Event 1: 995 kept + 146 chimeric, 0 suppressed
+[2026-10-07T21:23:23Z WARN  spike] DEL  chr5:70924942-70953015 (28074bp): the donor's depth over chr5:70922941-70923941 is 6.2x, but every fragment this event tiles is scaled by the 31.4x measured at one of its breakpoints (4.52-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2). Under --edit-model origin a read origin may remove counts as editable, and the depth fold compares origin depths; the thresholds (warn above a 0.1 share, refuse above 0.5, warn above a 1.5-fold) were set for --edit-model clean and are not yet checked for origin.
+[2026-10-07T21:23:23Z INFO  spike] DEL  chr5:70924942-70953015 (28074bp): origin removed 1028 fragment(s) at the spot and 776 at its look-alikes
+[2026-10-07T21:23:23Z INFO  spike::fastq] Wrote 891 read pairs to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/R2.fq.gz
+[2026-10-07T21:23:23Z INFO  spike::truth] Wrote truth VCF with 1 events to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/truth.vcf
+[2026-10-07T21:23:23Z INFO  spike] Originals removed from the BAM: 2549 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-07T21:23:23Z INFO  spike] Originals to remove from the raw FASTQ: 1804 read pairs (fastq_removed_reads.txt); the 745 spike kept stay as the raw reads they are
+[2026-10-07T21:23:23Z INFO  spike] === spike complete ===
+[2026-10-07T21:23:23Z INFO  spike] Output directory: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin
+[2026-10-07T21:23:23Z INFO  spike] spike's reads, around the events only (not the whole sample): /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/R2.fq.gz
+[2026-10-07T21:23:23Z INFO  spike] Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/truth.vcf
+[2026-10-07T21:23:23Z INFO  spike] Total read pairs: 891
+[2026-10-07T21:23:23Z INFO  spike] README: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/README.md
+[2026-10-07T21:23:23Z INFO  spike] Next steps: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/align.sh  →  bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/merge.sh; or, for the whole sample as spiked FASTQ: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)
+	Command being timed: "timeout 100 /home/parlar_ai/dev/spike/target/release/spike --bam /home/parlar_ai/dev/cnv_validation/from_rv/raredisease_seracare_na12878_resample/D24-14230_Seq25-7600_30x_resample/raredisease_results/alignment/D24-14230_Seq25-7600_30x_sorted_md.bam --reference /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta --event del:chr5:70924941-70953015;af=het --output /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/origin --seed 1 --threads 4 --edit-model origin"
+	User time (seconds): 2.22
+	System time (seconds): 1.13
+	Percent of CPU this job got: 67%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.98
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 538492
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 32
+	Minor (reclaiming a frame) page faults: 179687
+	Voluntary context switches: 701
+	Involuntary context switches: 883
+	Swaps: 0
+	File system inputs: 884259
+	File system outputs: 728
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

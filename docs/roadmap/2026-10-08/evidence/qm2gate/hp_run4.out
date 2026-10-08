@@ -1,0 +1,10 @@
+QX 83: SD ratio 0.989 perfect z 2.42 crash z -5.86 (fake 0.96% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.45% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.73% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.57% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 11.99% real 14.57%
+QX 82: SD ratio 0.996 perfect z 1.62 crash z -6.23 (fake 0.95% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.43% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.79% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.16% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 13.18% real 14.57%

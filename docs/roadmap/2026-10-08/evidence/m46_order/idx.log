@@ -1,0 +1,17 @@
+Looking to launch executable "/home/parlar_ai/.pixi/envs/bwa-mem2/bin/bwa-mem2.avx512bw", simd = .avx512bw
+Launching executable "/home/parlar_ai/.pixi/envs/bwa-mem2/bin/bwa-mem2.avx512bw"
+[bwa_index] Pack FASTA... 0.00 sec
+* Entering FMI_search
+init ticks = 8677446
+ref seq len = 130000
+binary seq ticks = 5517430
+build suffix-array ticks = 42270454
+ref_seq_len = 130000
+count = 0, 40824, 65000, 89176, 130000
+BWT[5903] = 4
+CP_SHIFT = 6, CP_MASK = 63
+sizeof CP_OCC = 64
+pos: 16251, ref_seq_len__: 16250
+max_occ_ind = 2031
+build fm-index ticks = 12749442
+Total time taken: 0.0257

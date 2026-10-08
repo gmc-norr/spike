@@ -1,0 +1,406 @@
+[2026-10-07T21:36:45Z INFO  spike] Parsed 23 --event spec(s) + 0 VCF event(s)
+[2026-10-07T21:36:45Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T21:36:45Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 12879 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T21:36:45Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1036-32931, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:17027:11939
+[2026-10-07T21:36:45Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-07T21:36:54Z INFO  spike::reference] Loaded 23 chromosome(s) into shared reference (2890 MB)
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr1:92113876 G>A: 0 of 54 reads carry another allele here
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr2:89611605 G>A: 0 of 83 reads carry another allele here
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr3:73369356 T>C: 0 of 41 reads carry another allele here
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr4:70379385 T>C: 0 of 32 reads carry another allele here
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr5:67169155 G>A: 0 of 50 reads carry another allele here
+[2026-10-07T21:36:54Z INFO  spike] SNV  chr6:63198212 A>G: 0 of 38 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr7:45000000 G>A: 0 of 63 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr8:53701295 T>C: 0 of 48 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr10:49505046 A>G: 0 of 43 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr11:49982050 A>G: 0 of 30 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr12:49311864 G>A: 0 of 45 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr13:42314801 T>C: 0 of 45 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr14:39606175 A>G: 0 of 30 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr15:37736739 A>G: 0 of 30 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr16:20000000 T>C: 0 of 44 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr17:30805253 C>T: 0 of 67 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr18:29738115 C>T: 0 of 44 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr19:21688517 C>T: 0 of 42 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr20:23844341 A>G: 0 of 36 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr21:17282693 A>G: 0 of 28 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr22:30000000 A>G: 0 of 53 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chrX:57735131 T>C: 0 of 11 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] SNV  chr9:33000000 T>C: 0 of 60 reads carry another allele here
+[2026-10-07T21:36:55Z INFO  spike] Processing event 1/23: SmallVariant { chrom: "chr1", pos: 92113875, ref_allele: [71], alt_allele: [65], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:55Z INFO  spike::extract] Extracting read pairs from chr1:92103875-92123876 (MAPQ >= 20)
+[2026-10-07T21:36:55Z INFO  spike::extract] Pass 1: collected 2794 read1 + 2776 read2 records (2747 pairs already complete)
+[2026-10-07T21:36:55Z INFO  spike::extract] Extracted 2819 complete read pairs from chr1:92103875-92123876
+[2026-10-07T21:36:55Z INFO  spike::stats] Fragment distribution: mean=420.2, stddev=176.4, n=2795
+[2026-10-07T21:36:55Z INFO  spike::extract] Built read pool: 2819 pairs
+[2026-10-07T21:36:55Z INFO  spike]   Reads over the event spike cannot edit: 0 of 54 (0.000)
+[2026-10-07T21:36:55Z INFO  spike::synth] Quality profile: 2819 pairs, 151 cycles. R1 mean Q: start=36.1 mid=35.8 end=34.3, R2: start=35.8 end=33.3. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2260/4832, cycle 895/1208 usable
+[2026-10-07T21:36:55Z INFO  spike::loh] chr1:92111875-92115876: 4 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:36:55Z INFO  spike::loh] phased 4 het SNPs into 2 block(s); one haplotype picked per block
+[2026-10-07T21:36:55Z INFO  spike::loh] classified 158 fragments (85 event copy, 73 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:55Z INFO  spike::haplotype] Applied 4 het SNP variants to haplotype sequence
+[2026-10-07T21:36:55Z INFO  spike::simulate] Tiling 263 synthetic reads across 4001bp haplotype (cov=61.7, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:55Z INFO  spike::simulate] simulate_event: 2552 kept, 267 suppressed, 263 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:55Z INFO  spike] Event 1: 2552 kept + 263 chimeric, 267 suppressed
+[2026-10-07T21:36:55Z INFO  spike] Processing event 2/23: SmallVariant { chrom: "chr2", pos: 89611604, ref_allele: [71], alt_allele: [65], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:55Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:55Z INFO  spike::extract] Extracting read pairs from chr2:89601604-89621605 (MAPQ >= 20)
+[2026-10-07T21:36:55Z INFO  spike::extract] Pass 1: collected 4584 read1 + 4590 read2 records (4522 pairs already complete)
+[2026-10-07T21:36:55Z INFO  spike::extract] Extracted 4647 complete read pairs from chr2:89601604-89621605
+[2026-10-07T21:36:55Z INFO  spike::stats] Fragment distribution: mean=427.4, stddev=179.2, n=4624
+[2026-10-07T21:36:55Z INFO  spike::extract] Built read pool: 4647 pairs
+[2026-10-07T21:36:55Z INFO  spike]   Reads over the event spike cannot edit: 1 of 84 (0.012)
+[2026-10-07T21:36:55Z INFO  spike::synth] Quality profile: 4647 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.1 end=34.5, R2: start=35.8 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2920/4832, cycle 900/1208 usable
+[2026-10-07T21:36:56Z INFO  spike::loh] chr2:89609604-89613605: 2 het SNPs, 3 hom-alt SNPs
+[2026-10-07T21:36:56Z INFO  spike::loh] phased 2 het SNPs into 2 block(s); one haplotype picked per block
+[2026-10-07T21:36:56Z INFO  spike::loh] classified 156 fragments (76 event copy, 80 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:56Z INFO  spike::haplotype] Applied 5 het SNP variants to haplotype sequence
+[2026-10-07T21:36:56Z INFO  spike::simulate] Tiling 544 synthetic reads across 4001bp haplotype (cov=130.1, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:56Z INFO  spike::simulate] simulate_event: 4180 kept, 467 suppressed, 544 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:56Z INFO  spike] Event 2: 4180 kept + 544 chimeric, 467 suppressed
+[2026-10-07T21:36:56Z WARN  spike] SNV  chr2:89611605 G>A: the donor's depth over chr2:89612605-89613605 is 85.6x, but every fragment this event tiles is scaled by the 130.1x measured at one of its breakpoints (1.51-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).
+[2026-10-07T21:36:56Z INFO  spike] Processing event 3/23: SmallVariant { chrom: "chr3", pos: 73369355, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracting read pairs from chr3:73359355-73379356 (MAPQ >= 20)
+[2026-10-07T21:36:56Z INFO  spike::extract] Pass 1: collected 2642 read1 + 2637 read2 records (2615 pairs already complete)
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracted 2658 complete read pairs from chr3:73359355-73379356
+[2026-10-07T21:36:56Z INFO  spike::stats] Fragment distribution: mean=421.4, stddev=177.7, n=2635
+[2026-10-07T21:36:56Z INFO  spike::extract] Built read pool: 2658 pairs
+[2026-10-07T21:36:56Z INFO  spike]   Reads over the event spike cannot edit: 4 of 45 (0.089)
+[2026-10-07T21:36:56Z INFO  spike::synth] Quality profile: 2658 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.2 end=35.1, R2: start=35.7 end=34.2. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1831/4832, cycle 890/1208 usable
+[2026-10-07T21:36:56Z INFO  spike::loh] chr3:73367355-73371356: 9 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:36:56Z INFO  spike::loh] phased 9 het SNPs into 2 block(s); one haplotype picked per block
+[2026-10-07T21:36:56Z INFO  spike::loh] classified 175 fragments (90 event copy, 85 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:56Z INFO  spike::haplotype] Applied 9 het SNP variants to haplotype sequence
+[2026-10-07T21:36:56Z INFO  spike::simulate] Tiling 185 synthetic reads across 4001bp haplotype (cov=43.6, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:56Z INFO  spike::simulate] simulate_event: 2442 kept, 216 suppressed, 185 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:56Z INFO  spike] Event 3: 2442 kept + 185 chimeric, 216 suppressed
+[2026-10-07T21:36:56Z INFO  spike] Processing event 4/23: SmallVariant { chrom: "chr4", pos: 70379384, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracting read pairs from chr4:70369384-70389385 (MAPQ >= 20)
+[2026-10-07T21:36:56Z INFO  spike::extract] Pass 1: collected 2661 read1 + 2661 read2 records (2615 pairs already complete)
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracted 2704 complete read pairs from chr4:70369384-70389385
+[2026-10-07T21:36:56Z INFO  spike::stats] Fragment distribution: mean=418.8, stddev=181.3, n=2690
+[2026-10-07T21:36:56Z INFO  spike::extract] Built read pool: 2704 pairs
+[2026-10-07T21:36:56Z INFO  spike]   Reads over the event spike cannot edit: 0 of 32 (0.000)
+[2026-10-07T21:36:56Z INFO  spike::synth] Quality profile: 2704 pairs, 151 cycles. R1 mean Q: start=36.3 mid=36.1 end=34.8, R2: start=35.9 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1936/4832, cycle 896/1208 usable
+[2026-10-07T21:36:56Z INFO  spike::loh] chr4:70377384-70381385: 6 het SNPs, 5 hom-alt SNPs
+[2026-10-07T21:36:56Z INFO  spike::loh] phased 6 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:56Z INFO  spike::loh] classified 117 fragments (62 event copy, 55 other); 6 ambiguous ties left unclassified
+[2026-10-07T21:36:56Z INFO  spike::haplotype] Applied 11 het SNP variants to haplotype sequence
+[2026-10-07T21:36:56Z INFO  spike::simulate] Tiling 250 synthetic reads across 4001bp haplotype (cov=58.6, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:56Z INFO  spike::simulate] simulate_event: 2459 kept, 245 suppressed, 250 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:56Z INFO  spike] Event 4: 2459 kept + 250 chimeric, 245 suppressed
+[2026-10-07T21:36:56Z INFO  spike] Processing event 5/23: SmallVariant { chrom: "chr5", pos: 67169154, ref_allele: [71], alt_allele: [65], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:56Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracting read pairs from chr5:67159154-67179155 (MAPQ >= 20)
+[2026-10-07T21:36:56Z INFO  spike::extract] Pass 1: collected 2800 read1 + 2802 read2 records (2763 pairs already complete)
+[2026-10-07T21:36:56Z INFO  spike::extract] Extracted 2839 complete read pairs from chr5:67159154-67179155
+[2026-10-07T21:36:56Z INFO  spike::stats] Fragment distribution: mean=422.8, stddev=179.5, n=2825
+[2026-10-07T21:36:56Z INFO  spike::extract] Built read pool: 2839 pairs
+[2026-10-07T21:36:56Z INFO  spike]   Reads over the event spike cannot edit: 0 of 51 (0.000)
+[2026-10-07T21:36:56Z INFO  spike::synth] Quality profile: 2839 pairs, 151 cycles. R1 mean Q: start=35.9 mid=36.0 end=34.5, R2: start=35.7 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2074/4832, cycle 899/1208 usable
+[2026-10-07T21:36:56Z INFO  spike::loh] chr5:67167154-67171155: 1 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:36:57Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:57Z INFO  spike::loh] classified 30 fragments (11 event copy, 19 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:57Z INFO  spike::haplotype] Applied 1 het SNP variants to haplotype sequence
+[2026-10-07T21:36:57Z INFO  spike::simulate] Tiling 230 synthetic reads across 4001bp haplotype (cov=54.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:57Z INFO  spike::simulate] simulate_event: 2601 kept, 238 suppressed, 230 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:57Z INFO  spike] Event 5: 2601 kept + 230 chimeric, 238 suppressed
+[2026-10-07T21:36:57Z INFO  spike] Processing event 6/23: SmallVariant { chrom: "chr6", pos: 63198211, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:57Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:57Z INFO  spike::extract] Extracting read pairs from chr6:63188211-63208212 (MAPQ >= 20)
+[2026-10-07T21:36:57Z INFO  spike::extract] Pass 1: collected 2615 read1 + 2594 read2 records (2566 pairs already complete)
+[2026-10-07T21:36:57Z INFO  spike::extract] Extracted 2642 complete read pairs from chr6:63188211-63208212
+[2026-10-07T21:36:57Z INFO  spike::stats] Fragment distribution: mean=422.3, stddev=179.2, n=2615
+[2026-10-07T21:36:57Z INFO  spike::extract] Built read pool: 2642 pairs
+[2026-10-07T21:36:57Z INFO  spike]   Reads over the event spike cannot edit: 1 of 39 (0.026)
+[2026-10-07T21:36:57Z INFO  spike::synth] Quality profile: 2642 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.0 end=34.7, R2: start=35.9 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1928/4832, cycle 885/1208 usable
+[2026-10-07T21:36:57Z INFO  spike::loh] chr6:63196211-63200212: 1 het SNPs, 14 hom-alt SNPs
+[2026-10-07T21:36:57Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:57Z INFO  spike::loh] classified 27 fragments (22 event copy, 5 other); 1 ambiguous ties left unclassified
+[2026-10-07T21:36:57Z INFO  spike::haplotype] Applied 15 het SNP variants to haplotype sequence
+[2026-10-07T21:36:57Z INFO  spike::simulate] Tiling 222 synthetic reads across 4001bp haplotype (cov=52.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:57Z INFO  spike::simulate] simulate_event: 2427 kept, 215 suppressed, 222 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:57Z INFO  spike] Event 6: 2427 kept + 222 chimeric, 215 suppressed
+[2026-10-07T21:36:57Z INFO  spike] Processing event 7/23: SmallVariant { chrom: "chr7", pos: 44999999, ref_allele: [71], alt_allele: [65], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:57Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:57Z INFO  spike::extract] Extracting read pairs from chr7:44989999-45010000 (MAPQ >= 20)
+[2026-10-07T21:36:57Z INFO  spike::extract] Pass 1: collected 3175 read1 + 3167 read2 records (3121 pairs already complete)
+[2026-10-07T21:36:57Z INFO  spike::extract] Extracted 3213 complete read pairs from chr7:44989999-45010000
+[2026-10-07T21:36:57Z INFO  spike::stats] Fragment distribution: mean=419.4, stddev=178.2, n=3178
+[2026-10-07T21:36:57Z INFO  spike::extract] Built read pool: 3213 pairs
+[2026-10-07T21:36:57Z INFO  spike]   Reads over the event spike cannot edit: 0 of 63 (0.000)
+[2026-10-07T21:36:57Z INFO  spike::synth] Quality profile: 3213 pairs, 151 cycles. R1 mean Q: start=35.8 mid=35.6 end=34.3, R2: start=35.7 end=33.3. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2628/4832, cycle 900/1208 usable
+[2026-10-07T21:36:57Z INFO  spike::loh] chr7:44997999-45002000: 1 het SNPs, 4 hom-alt SNPs
+[2026-10-07T21:36:57Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:57Z INFO  spike::loh] classified 39 fragments (20 event copy, 19 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:57Z INFO  spike::haplotype] Applied 5 het SNP variants to haplotype sequence
+[2026-10-07T21:36:57Z INFO  spike::simulate] Tiling 316 synthetic reads across 4001bp haplotype (cov=73.9, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:57Z INFO  spike::simulate] simulate_event: 2901 kept, 312 suppressed, 316 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:57Z INFO  spike] Event 7: 2901 kept + 316 chimeric, 312 suppressed
+[2026-10-07T21:36:57Z INFO  spike] Processing event 8/23: SmallVariant { chrom: "chr8", pos: 53701294, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:57Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:57Z INFO  spike::extract] Extracting read pairs from chr8:53691294-53711295 (MAPQ >= 20)
+[2026-10-07T21:36:57Z INFO  spike::extract] Pass 1: collected 2567 read1 + 2562 read2 records (2527 pairs already complete)
+[2026-10-07T21:36:58Z INFO  spike::extract] Extracted 2596 complete read pairs from chr8:53691294-53711295
+[2026-10-07T21:36:58Z INFO  spike::stats] Fragment distribution: mean=427.2, stddev=178.9, n=2573
+[2026-10-07T21:36:58Z INFO  spike::extract] Built read pool: 2596 pairs
+[2026-10-07T21:36:58Z INFO  spike]   Reads over the event spike cannot edit: 1 of 49 (0.020)
+[2026-10-07T21:36:58Z INFO  spike::synth] Quality profile: 2596 pairs, 151 cycles. R1 mean Q: start=36.1 mid=35.9 end=34.7, R2: start=35.7 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1935/4832, cycle 897/1208 usable
+[2026-10-07T21:36:58Z INFO  spike::loh] chr8:53699294-53703295: 1 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:36:58Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:58Z INFO  spike::loh] classified 39 fragments (21 event copy, 18 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:58Z INFO  spike::haplotype] Applied 1 het SNP variants to haplotype sequence
+[2026-10-07T21:36:58Z INFO  spike::simulate] Tiling 239 synthetic reads across 4001bp haplotype (cov=57.2, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:58Z INFO  spike::simulate] simulate_event: 2369 kept, 227 suppressed, 239 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:58Z INFO  spike] Event 8: 2369 kept + 239 chimeric, 227 suppressed
+[2026-10-07T21:36:58Z INFO  spike] Processing event 9/23: SmallVariant { chrom: "chr10", pos: 49505045, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:58Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:58Z INFO  spike::extract] Extracting read pairs from chr10:49495045-49515046 (MAPQ >= 20)
+[2026-10-07T21:36:58Z INFO  spike::extract] Pass 1: collected 2815 read1 + 2820 read2 records (2780 pairs already complete)
+[2026-10-07T21:36:58Z INFO  spike::extract] Extracted 2855 complete read pairs from chr10:49495045-49515046
+[2026-10-07T21:36:58Z INFO  spike::stats] Fragment distribution: mean=424.1, stddev=180.7, n=2829
+[2026-10-07T21:36:58Z INFO  spike::extract] Built read pool: 2855 pairs
+[2026-10-07T21:36:58Z INFO  spike]   Reads over the event spike cannot edit: 0 of 44 (0.000)
+[2026-10-07T21:36:58Z INFO  spike::synth] Quality profile: 2855 pairs, 151 cycles. R1 mean Q: start=36.2 mid=36.2 end=34.8, R2: start=35.9 end=34.1. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1926/4832, cycle 895/1208 usable
+[2026-10-07T21:36:58Z INFO  spike::loh] chr10:49503045-49507046: 2 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:36:58Z INFO  spike::loh] phased 2 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:36:58Z INFO  spike::loh] classified 81 fragments (40 event copy, 41 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:58Z INFO  spike::haplotype] Applied 2 het SNP variants to haplotype sequence
+[2026-10-07T21:36:58Z INFO  spike::simulate] Tiling 222 synthetic reads across 4001bp haplotype (cov=52.6, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:58Z INFO  spike::simulate] simulate_event: 2597 kept, 258 suppressed, 222 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:58Z INFO  spike] Event 9: 2597 kept + 222 chimeric, 258 suppressed
+[2026-10-07T21:36:58Z INFO  spike] Processing event 10/23: SmallVariant { chrom: "chr11", pos: 49982049, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:58Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:58Z INFO  spike::extract] Extracting read pairs from chr11:49972049-49992050 (MAPQ >= 20)
+[2026-10-07T21:36:59Z INFO  spike::extract] Pass 1: collected 2553 read1 + 2555 read2 records (2516 pairs already complete)
+[2026-10-07T21:36:59Z INFO  spike::extract] Extracted 2590 complete read pairs from chr11:49972049-49992050
+[2026-10-07T21:36:59Z INFO  spike::stats] Fragment distribution: mean=426.8, stddev=180.1, n=2574
+[2026-10-07T21:36:59Z INFO  spike::extract] Built read pool: 2590 pairs
+[2026-10-07T21:36:59Z INFO  spike]   Reads over the event spike cannot edit: 0 of 31 (0.000)
+[2026-10-07T21:36:59Z INFO  spike::synth] Quality profile: 2590 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.0 end=34.8, R2: start=36.0 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1863/4832, cycle 880/1208 usable
+[2026-10-07T21:36:59Z INFO  spike::loh] chr11:49980049-49984050: 0 het SNPs, 3 hom-alt SNPs
+[2026-10-07T21:36:59Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:36:59Z INFO  spike::haplotype] Applied 3 het SNP variants to haplotype sequence
+[2026-10-07T21:36:59Z INFO  spike::simulate] Tiling 227 synthetic reads across 4001bp haplotype (cov=54.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:59Z INFO  spike::simulate] simulate_event: 2371 kept, 219 suppressed, 227 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:59Z INFO  spike] Event 10: 2371 kept + 227 chimeric, 219 suppressed
+[2026-10-07T21:36:59Z INFO  spike] Processing event 11/23: SmallVariant { chrom: "chr12", pos: 49311863, ref_allele: [71], alt_allele: [65], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:59Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:59Z INFO  spike::extract] Extracting read pairs from chr12:49301863-49321864 (MAPQ >= 20)
+[2026-10-07T21:36:59Z INFO  spike::extract] Pass 1: collected 2836 read1 + 2819 read2 records (2789 pairs already complete)
+[2026-10-07T21:36:59Z INFO  spike::extract] Extracted 2858 complete read pairs from chr12:49301863-49321864
+[2026-10-07T21:36:59Z INFO  spike::stats] Fragment distribution: mean=412.7, stddev=174.1, n=2832
+[2026-10-07T21:36:59Z INFO  spike::extract] Built read pool: 2858 pairs
+[2026-10-07T21:36:59Z INFO  spike]   Reads over the event spike cannot edit: 0 of 47 (0.000)
+[2026-10-07T21:36:59Z INFO  spike::synth] Quality profile: 2858 pairs, 151 cycles. R1 mean Q: start=35.9 mid=35.7 end=34.5, R2: start=35.8 end=33.5. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2438/4832, cycle 893/1208 usable
+[2026-10-07T21:36:59Z INFO  spike::loh] chr12:49309863-49313864: 11 het SNPs, 1 hom-alt SNPs
+[2026-10-07T21:36:59Z INFO  spike::loh] phased 11 het SNPs into 3 block(s); one haplotype picked per block
+[2026-10-07T21:36:59Z INFO  spike::loh] classified 227 fragments (139 event copy, 88 other); 9 ambiguous ties left unclassified
+[2026-10-07T21:36:59Z INFO  spike::haplotype] Applied 12 het SNP variants to haplotype sequence
+[2026-10-07T21:36:59Z INFO  spike::simulate] Tiling 258 synthetic reads across 4001bp haplotype (cov=59.4, vaf=0.50, bp_only=false)
+[2026-10-07T21:36:59Z INFO  spike::simulate] simulate_event: 2573 kept, 285 suppressed, 258 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:36:59Z INFO  spike] Event 11: 2573 kept + 258 chimeric, 285 suppressed
+[2026-10-07T21:36:59Z INFO  spike] Processing event 12/23: SmallVariant { chrom: "chr13", pos: 42314800, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:36:59Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:36:59Z INFO  spike::extract] Extracting read pairs from chr13:42304800-42324801 (MAPQ >= 20)
+[2026-10-07T21:36:59Z INFO  spike::extract] Pass 1: collected 2830 read1 + 2841 read2 records (2800 pairs already complete)
+[2026-10-07T21:36:59Z INFO  spike::extract] Extracted 2871 complete read pairs from chr13:42304800-42324801
+[2026-10-07T21:36:59Z INFO  spike::stats] Fragment distribution: mean=418.1, stddev=182.5, n=2848
+[2026-10-07T21:36:59Z INFO  spike::extract] Built read pool: 2871 pairs
+[2026-10-07T21:36:59Z INFO  spike]   Reads over the event spike cannot edit: 0 of 45 (0.000)
+[2026-10-07T21:36:59Z INFO  spike::synth] Quality profile: 2871 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.1 end=34.3, R2: start=35.9 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2052/4832, cycle 887/1208 usable
+[2026-10-07T21:36:59Z INFO  spike::loh] chr13:42312800-42316801: 4 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:00Z INFO  spike::loh] phased 4 het SNPs into 3 block(s); one haplotype picked per block
+[2026-10-07T21:37:00Z INFO  spike::loh] classified 132 fragments (72 event copy, 60 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:00Z INFO  spike::haplotype] Applied 4 het SNP variants to haplotype sequence
+[2026-10-07T21:37:00Z INFO  spike::simulate] Tiling 243 synthetic reads across 4001bp haplotype (cov=56.8, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:00Z INFO  spike::simulate] simulate_event: 2621 kept, 250 suppressed, 243 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:00Z INFO  spike] Event 12: 2621 kept + 243 chimeric, 250 suppressed
+[2026-10-07T21:37:00Z INFO  spike] Processing event 13/23: SmallVariant { chrom: "chr14", pos: 39606174, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:00Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:00Z INFO  spike::extract] Extracting read pairs from chr14:39596174-39616175 (MAPQ >= 20)
+[2026-10-07T21:37:00Z INFO  spike::extract] Pass 1: collected 2740 read1 + 2734 read2 records (2701 pairs already complete)
+[2026-10-07T21:37:00Z INFO  spike::extract] Extracted 2771 complete read pairs from chr14:39596174-39616175
+[2026-10-07T21:37:00Z INFO  spike::stats] Fragment distribution: mean=417.0, stddev=175.5, n=2739
+[2026-10-07T21:37:00Z INFO  spike::extract] Built read pool: 2771 pairs
+[2026-10-07T21:37:00Z INFO  spike]   Reads over the event spike cannot edit: 0 of 30 (0.000)
+[2026-10-07T21:37:00Z INFO  spike::synth] Quality profile: 2771 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.0 end=34.5, R2: start=35.9 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2034/4832, cycle 892/1208 usable
+[2026-10-07T21:37:00Z INFO  spike::loh] chr14:39604174-39608175: 2 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:00Z INFO  spike::loh] phased 2 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:37:00Z INFO  spike::loh] classified 79 fragments (43 event copy, 36 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:00Z INFO  spike::haplotype] Applied 2 het SNP variants to haplotype sequence
+[2026-10-07T21:37:00Z INFO  spike::simulate] Tiling 226 synthetic reads across 4001bp haplotype (cov=52.6, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:00Z INFO  spike::simulate] simulate_event: 2529 kept, 242 suppressed, 226 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:00Z INFO  spike] Event 13: 2529 kept + 226 chimeric, 242 suppressed
+[2026-10-07T21:37:00Z INFO  spike] Processing event 14/23: SmallVariant { chrom: "chr15", pos: 37736738, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:00Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:00Z INFO  spike::extract] Extracting read pairs from chr15:37726738-37746739 (MAPQ >= 20)
+[2026-10-07T21:37:00Z INFO  spike::extract] Pass 1: collected 2692 read1 + 2700 read2 records (2662 pairs already complete)
+[2026-10-07T21:37:00Z INFO  spike::extract] Extracted 2729 complete read pairs from chr15:37726738-37746739
+[2026-10-07T21:37:00Z INFO  spike::stats] Fragment distribution: mean=419.3, stddev=179.1, n=2716
+[2026-10-07T21:37:00Z INFO  spike::extract] Built read pool: 2729 pairs
+[2026-10-07T21:37:00Z INFO  spike]   Reads over the event spike cannot edit: 0 of 30 (0.000)
+[2026-10-07T21:37:00Z INFO  spike::synth] Quality profile: 2729 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.0 end=34.7, R2: start=35.8 end=34.0. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1933/4832, cycle 898/1208 usable
+[2026-10-07T21:37:00Z INFO  spike::loh] chr15:37734738-37738739: 1 het SNPs, 4 hom-alt SNPs
+[2026-10-07T21:37:00Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:37:00Z INFO  spike::loh] classified 38 fragments (17 event copy, 21 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:00Z INFO  spike::haplotype] Applied 5 het SNP variants to haplotype sequence
+[2026-10-07T21:37:00Z INFO  spike::simulate] Tiling 252 synthetic reads across 4001bp haplotype (cov=59.0, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:00Z INFO  spike::simulate] simulate_event: 2466 kept, 263 suppressed, 252 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:00Z INFO  spike] Event 14: 2466 kept + 252 chimeric, 263 suppressed
+[2026-10-07T21:37:00Z INFO  spike] Processing event 15/23: SmallVariant { chrom: "chr16", pos: 19999999, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:00Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:00Z INFO  spike::extract] Extracting read pairs from chr16:19989999-20010000 (MAPQ >= 20)
+[2026-10-07T21:37:00Z INFO  spike::extract] Pass 1: collected 2742 read1 + 2723 read2 records (2700 pairs already complete)
+[2026-10-07T21:37:01Z INFO  spike::extract] Extracted 2763 complete read pairs from chr16:19989999-20010000
+[2026-10-07T21:37:01Z INFO  spike::stats] Fragment distribution: mean=420.4, stddev=177.7, n=2743
+[2026-10-07T21:37:01Z INFO  spike::extract] Built read pool: 2763 pairs
+[2026-10-07T21:37:01Z INFO  spike]   Reads over the event spike cannot edit: 1 of 46 (0.022)
+[2026-10-07T21:37:01Z INFO  spike::synth] Quality profile: 2763 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.0 end=34.5, R2: start=35.9 end=33.7. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1935/4832, cycle 896/1208 usable
+[2026-10-07T21:37:01Z INFO  spike::loh] chr16:19997999-20002000: 2 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:01Z INFO  spike::loh] phased 2 het SNPs into 2 block(s); one haplotype picked per block
+[2026-10-07T21:37:01Z INFO  spike::loh] classified 66 fragments (24 event copy, 42 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:01Z INFO  spike::haplotype] Applied 2 het SNP variants to haplotype sequence
+[2026-10-07T21:37:01Z INFO  spike::simulate] Tiling 198 synthetic reads across 4001bp haplotype (cov=46.4, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:01Z INFO  spike::simulate] simulate_event: 2543 kept, 220 suppressed, 198 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:01Z INFO  spike] Event 15: 2543 kept + 198 chimeric, 220 suppressed
+[2026-10-07T21:37:01Z INFO  spike] Processing event 16/23: SmallVariant { chrom: "chr17", pos: 30805252, ref_allele: [67], alt_allele: [84], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:01Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:01Z INFO  spike::extract] Extracting read pairs from chr17:30795252-30815253 (MAPQ >= 20)
+[2026-10-07T21:37:01Z INFO  spike::extract] Pass 1: collected 3102 read1 + 3098 read2 records (3061 pairs already complete)
+[2026-10-07T21:37:01Z INFO  spike::extract] Extracted 3133 complete read pairs from chr17:30795252-30815253
+[2026-10-07T21:37:01Z INFO  spike::stats] Fragment distribution: mean=419.1, stddev=176.6, n=3101
+[2026-10-07T21:37:01Z INFO  spike::extract] Built read pool: 3133 pairs
+[2026-10-07T21:37:01Z INFO  spike]   Reads over the event spike cannot edit: 0 of 67 (0.000)
+[2026-10-07T21:37:01Z INFO  spike::synth] Quality profile: 3133 pairs, 151 cycles. R1 mean Q: start=36.0 mid=35.5 end=33.8, R2: start=35.6 end=33.0. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2730/4832, cycle 900/1208 usable
+[2026-10-07T21:37:01Z INFO  spike::loh] chr17:30803252-30807253: 1 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:01Z INFO  spike::loh] phased 1 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:37:01Z INFO  spike::loh] classified 53 fragments (28 event copy, 25 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:01Z INFO  spike::haplotype] Applied 1 het SNP variants to haplotype sequence
+[2026-10-07T21:37:01Z INFO  spike::simulate] Tiling 279 synthetic reads across 4001bp haplotype (cov=65.4, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:01Z INFO  spike::simulate] simulate_event: 2834 kept, 299 suppressed, 279 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:01Z INFO  spike] Event 16: 2834 kept + 279 chimeric, 299 suppressed
+[2026-10-07T21:37:01Z INFO  spike] Processing event 17/23: SmallVariant { chrom: "chr18", pos: 29738114, ref_allele: [67], alt_allele: [84], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:01Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:01Z INFO  spike::extract] Extracting read pairs from chr18:29728114-29748115 (MAPQ >= 20)
+[2026-10-07T21:37:01Z INFO  spike::extract] Pass 1: collected 2511 read1 + 2511 read2 records (2483 pairs already complete)
+[2026-10-07T21:37:02Z INFO  spike::extract] Extracted 2538 complete read pairs from chr18:29728114-29748115
+[2026-10-07T21:37:02Z INFO  spike::stats] Fragment distribution: mean=416.3, stddev=175.3, n=2517
+[2026-10-07T21:37:02Z INFO  spike::extract] Built read pool: 2538 pairs
+[2026-10-07T21:37:02Z INFO  spike]   Reads over the event spike cannot edit: 1 of 44 (0.023)
+[2026-10-07T21:37:02Z INFO  spike::synth] Quality profile: 2538 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.0 end=34.7, R2: start=35.9 end=33.9. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1821/4832, cycle 884/1208 usable
+[2026-10-07T21:37:02Z INFO  spike::loh] chr18:29736114-29740115: 3 het SNPs, 1 hom-alt SNPs
+[2026-10-07T21:37:02Z INFO  spike::loh] phased 3 het SNPs into 2 block(s); one haplotype picked per block
+[2026-10-07T21:37:02Z INFO  spike::loh] classified 111 fragments (58 event copy, 53 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:02Z INFO  spike::haplotype] Applied 4 het SNP variants to haplotype sequence
+[2026-10-07T21:37:02Z INFO  spike::simulate] Tiling 260 synthetic reads across 4001bp haplotype (cov=60.4, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:02Z INFO  spike::simulate] simulate_event: 2303 kept, 235 suppressed, 260 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:02Z INFO  spike] Event 17: 2303 kept + 260 chimeric, 235 suppressed
+[2026-10-07T21:37:02Z INFO  spike] Processing event 18/23: SmallVariant { chrom: "chr19", pos: 21688516, ref_allele: [67], alt_allele: [84], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:02Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:02Z INFO  spike::extract] Extracting read pairs from chr19:21678516-21698517 (MAPQ >= 20)
+[2026-10-07T21:37:02Z INFO  spike::extract] Pass 1: collected 2539 read1 + 2530 read2 records (2499 pairs already complete)
+[2026-10-07T21:37:02Z INFO  spike::extract] Extracted 2562 complete read pairs from chr19:21678516-21698517
+[2026-10-07T21:37:02Z INFO  spike::stats] Fragment distribution: mean=424.0, stddev=175.6, n=2535
+[2026-10-07T21:37:02Z INFO  spike::extract] Built read pool: 2562 pairs
+[2026-10-07T21:37:02Z INFO  spike]   Reads over the event spike cannot edit: 6 of 44 (0.136)
+[2026-10-07T21:37:02Z WARN  spike] SNV  chr19:21688517 C>T: 6 of 44 reads over it (14%) are ones spike cannot edit (below --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the merged BAM as they are, so the event is weaker than requested; truth.vcf records the share as SIM_RESIST (CR4).
+[2026-10-07T21:37:02Z INFO  spike::synth] Quality profile: 2562 pairs, 151 cycles. R1 mean Q: start=35.9 mid=36.0 end=34.7, R2: start=35.7 end=34.0. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1802/4832, cycle 891/1208 usable
+[2026-10-07T21:37:02Z INFO  spike::loh] chr19:21686516-21690517: 12 het SNPs, 10 hom-alt SNPs
+[2026-10-07T21:37:02Z INFO  spike::loh] phased 12 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:37:02Z INFO  spike::loh] classified 260 fragments (102 event copy, 158 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:02Z INFO  spike::haplotype] Applied 22 het SNP variants to haplotype sequence
+[2026-10-07T21:37:02Z INFO  spike::simulate] Tiling 217 synthetic reads across 4001bp haplotype (cov=51.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:02Z INFO  spike::simulate] simulate_event: 2374 kept, 188 suppressed, 217 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:02Z INFO  spike] Event 18: 2374 kept + 217 chimeric, 188 suppressed
+[2026-10-07T21:37:02Z INFO  spike] Processing event 19/23: SmallVariant { chrom: "chr20", pos: 23844340, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:02Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:02Z INFO  spike::extract] Extracting read pairs from chr20:23834340-23854341 (MAPQ >= 20)
+[2026-10-07T21:37:02Z INFO  spike::extract] Pass 1: collected 2630 read1 + 2624 read2 records (2585 pairs already complete)
+[2026-10-07T21:37:02Z INFO  spike::extract] Extracted 2669 complete read pairs from chr20:23834340-23854341
+[2026-10-07T21:37:02Z INFO  spike::stats] Fragment distribution: mean=427.6, stddev=181.2, n=2646
+[2026-10-07T21:37:02Z INFO  spike::extract] Built read pool: 2669 pairs
+[2026-10-07T21:37:02Z INFO  spike]   Reads over the event spike cannot edit: 0 of 38 (0.000)
+[2026-10-07T21:37:03Z INFO  spike::synth] Quality profile: 2669 pairs, 151 cycles. R1 mean Q: start=36.0 mid=36.1 end=34.7, R2: start=35.9 end=34.1. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1904/4832, cycle 890/1208 usable
+[2026-10-07T21:37:03Z INFO  spike::loh] chr20:23842340-23846341: 0 het SNPs, 10 hom-alt SNPs
+[2026-10-07T21:37:03Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:03Z INFO  spike::haplotype] Applied 10 het SNP variants to haplotype sequence
+[2026-10-07T21:37:03Z INFO  spike::simulate] Tiling 231 synthetic reads across 4001bp haplotype (cov=55.2, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:03Z INFO  spike::simulate] simulate_event: 2411 kept, 258 suppressed, 231 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:03Z INFO  spike] Event 19: 2411 kept + 231 chimeric, 258 suppressed
+[2026-10-07T21:37:03Z INFO  spike] Processing event 20/23: SmallVariant { chrom: "chr21", pos: 17282692, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:03Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracting read pairs from chr21:17272692-17292693 (MAPQ >= 20)
+[2026-10-07T21:37:03Z INFO  spike::extract] Pass 1: collected 2365 read1 + 2360 read2 records (2334 pairs already complete)
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracted 2388 complete read pairs from chr21:17272692-17292693
+[2026-10-07T21:37:03Z INFO  spike::stats] Fragment distribution: mean=418.2, stddev=180.6, n=2366
+[2026-10-07T21:37:03Z INFO  spike::extract] Built read pool: 2388 pairs
+[2026-10-07T21:37:03Z INFO  spike]   Reads over the event spike cannot edit: 0 of 29 (0.000)
+[2026-10-07T21:37:03Z INFO  spike::synth] Quality profile: 2388 pairs, 151 cycles. R1 mean Q: start=36.1 mid=35.9 end=34.3, R2: start=35.5 end=33.4. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1933/4832, cycle 891/1208 usable
+[2026-10-07T21:37:03Z INFO  spike::loh] chr21:17280692-17284693: 0 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:03Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:03Z INFO  spike::simulate] Tiling 207 synthetic reads across 4001bp haplotype (cov=48.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:03Z INFO  spike::simulate] simulate_event: 2181 kept, 207 suppressed, 207 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:03Z INFO  spike] Event 20: 2181 kept + 207 chimeric, 207 suppressed
+[2026-10-07T21:37:03Z INFO  spike] Processing event 21/23: SmallVariant { chrom: "chr22", pos: 29999999, ref_allele: [65], alt_allele: [71], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:03Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracting read pairs from chr22:29989999-30010000 (MAPQ >= 20)
+[2026-10-07T21:37:03Z INFO  spike::extract] Pass 1: collected 3011 read1 + 3005 read2 records (2964 pairs already complete)
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracted 3049 complete read pairs from chr22:29989999-30010000
+[2026-10-07T21:37:03Z INFO  spike::stats] Fragment distribution: mean=420.7, stddev=177.2, n=3034
+[2026-10-07T21:37:03Z INFO  spike::extract] Built read pool: 3049 pairs
+[2026-10-07T21:37:03Z INFO  spike]   Reads over the event spike cannot edit: 0 of 55 (0.000)
+[2026-10-07T21:37:03Z INFO  spike::synth] Quality profile: 3049 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.1 end=34.8, R2: start=35.9 end=34.3. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2050/4832, cycle 899/1208 usable
+[2026-10-07T21:37:03Z INFO  spike::loh] chr22:29997999-30002000: 4 het SNPs, 4 hom-alt SNPs
+[2026-10-07T21:37:03Z INFO  spike::loh] phased 4 het SNPs into 4 block(s); one haplotype picked per block
+[2026-10-07T21:37:03Z INFO  spike::loh] classified 150 fragments (63 event copy, 87 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:03Z INFO  spike::haplotype] Applied 8 het SNP variants to haplotype sequence
+[2026-10-07T21:37:03Z INFO  spike::simulate] Tiling 235 synthetic reads across 4001bp haplotype (cov=55.3, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:03Z INFO  spike::simulate] simulate_event: 2826 kept, 223 suppressed, 235 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:03Z INFO  spike] Event 21: 2826 kept + 235 chimeric, 223 suppressed
+[2026-10-07T21:37:03Z INFO  spike] Processing event 22/23: SmallVariant { chrom: "chrX", pos: 57735130, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:03Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracting read pairs from chrX:57725130-57745131 (MAPQ >= 20)
+[2026-10-07T21:37:03Z INFO  spike::extract] Pass 1: collected 1328 read1 + 1318 read2 records (1303 pairs already complete)
+[2026-10-07T21:37:03Z INFO  spike::extract] Extracted 1342 complete read pairs from chrX:57725130-57745131
+[2026-10-07T21:37:03Z INFO  spike::stats] Fragment distribution: mean=424.2, stddev=177.0, n=1331
+[2026-10-07T21:37:03Z INFO  spike::extract] Built read pool: 1342 pairs
+[2026-10-07T21:37:03Z INFO  spike]   Reads over the event spike cannot edit: 0 of 11 (0.000)
+[2026-10-07T21:37:03Z INFO  spike::synth] Quality profile: 1342 pairs, 151 cycles. R1 mean Q: start=36.0 mid=35.9 end=34.7, R2: start=35.9 end=33.6. Base-conditioned bins: 1208/1208 usable. Markov bins: base 1261/4832, cycle 784/1208 usable
+[2026-10-07T21:37:03Z INFO  spike::loh] chrX:57733130-57737131: 0 het SNPs, 0 hom-alt SNPs
+[2026-10-07T21:37:03Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-07T21:37:03Z INFO  spike::simulate] Tiling 117 synthetic reads across 4001bp haplotype (cov=27.7, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:04Z INFO  spike::simulate] simulate_event: 1229 kept, 113 suppressed, 117 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:04Z INFO  spike] Event 22: 1229 kept + 117 chimeric, 113 suppressed
+[2026-10-07T21:37:04Z INFO  spike] Processing event 23/23: SmallVariant { chrom: "chr9", pos: 32999999, ref_allele: [84], alt_allele: [67], gene: "unknown", allele_fraction: None }
+[2026-10-07T21:37:04Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:37:04Z INFO  spike::extract] Extracting read pairs from chr9:32989999-33010000 (MAPQ >= 20)
+[2026-10-07T21:37:04Z INFO  spike::extract] Pass 1: collected 3097 read1 + 3080 read2 records (3043 pairs already complete)
+[2026-10-07T21:37:04Z INFO  spike::extract] Extracted 3130 complete read pairs from chr9:32989999-33010000
+[2026-10-07T21:37:04Z INFO  spike::stats] Fragment distribution: mean=425.6, stddev=178.7, n=3108
+[2026-10-07T21:37:04Z INFO  spike::extract] Built read pool: 3130 pairs
+[2026-10-07T21:37:04Z INFO  spike]   Reads over the event spike cannot edit: 1 of 62 (0.016)
+[2026-10-07T21:37:04Z INFO  spike::synth] Quality profile: 3130 pairs, 151 cycles. R1 mean Q: start=36.1 mid=35.8 end=34.4, R2: start=35.8 end=33.7. Base-conditioned bins: 1208/1208 usable. Markov bins: base 2397/4832, cycle 898/1208 usable
+[2026-10-07T21:37:04Z INFO  spike::loh] chr9:32997999-33002000: 2 het SNPs, 1 hom-alt SNPs
+[2026-10-07T21:37:04Z INFO  spike::loh] phased 2 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T21:37:04Z INFO  spike::loh] classified 49 fragments (41 event copy, 8 other); 4 ambiguous ties left unclassified
+[2026-10-07T21:37:04Z INFO  spike::haplotype] Applied 3 het SNP variants to haplotype sequence
+[2026-10-07T21:37:04Z INFO  spike::simulate] Tiling 273 synthetic reads across 4001bp haplotype (cov=65.0, vaf=0.50, bp_only=false)
+[2026-10-07T21:37:04Z INFO  spike::simulate] simulate_event: 2828 kept, 302 suppressed, 273 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T21:37:04Z INFO  spike] Event 23: 2828 kept + 273 chimeric, 302 suppressed
+[2026-10-07T21:37:05Z INFO  spike] Duplicates of the removed originals: 843 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-07T21:37:05Z INFO  spike::fastq] Wrote 64311 read pairs to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/R2.fq.gz
+[2026-10-07T21:37:05Z INFO  spike::truth] Wrote truth VCF with 23 events to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/truth.vcf
+[2026-10-07T21:37:05Z INFO  spike] Originals removed from the BAM: 65209 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-07T21:37:06Z INFO  spike] Originals to remove from the raw FASTQ: 6592 read pairs (fastq_removed_reads.txt); the 58617 spike kept stay as the raw reads they are
+[2026-10-07T21:37:06Z INFO  spike] === spike complete ===
+[2026-10-07T21:37:06Z INFO  spike] Output directory: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2
+[2026-10-07T21:37:06Z INFO  spike] spike's reads, around the events only (not the whole sample): /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/R2.fq.gz
+[2026-10-07T21:37:06Z INFO  spike] Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/truth.vcf
+[2026-10-07T21:37:06Z INFO  spike] Total read pairs: 64311
+[2026-10-07T21:37:06Z INFO  spike] README: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/README.md
+[2026-10-07T21:37:06Z INFO  spike] Next steps: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/align.sh  →  bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/merge.sh; or, for the whole sample as spiked FASTQ: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m26/out2/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)
+WALL 21.13 USER 11.26 SYS 7.81 MAXRSS_KB 6114252

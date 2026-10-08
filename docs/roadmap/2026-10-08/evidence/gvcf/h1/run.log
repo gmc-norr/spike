@@ -1,0 +1,87 @@
+Review artifacts: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox
+{
+  "hom_only": {
+    "ref": 0,
+    "alt": 5
+  },
+  "hom_and_het": {
+    "ref": 0,
+    "alt": 7
+  },
+  "existing_event": {
+    "refused": "existing_event: [2026-10-04T19:26:16Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)\n[2026-10-04T19:26:16Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...\n[2026-10-04T19:26:16Z INFO  spike::bam_stats] Stats: 100 cycles (the most common read length); 995 of 4080 full-length reads end in A, so the library was not adapter-trimmed (4080 records sampled)\n[2026-10-04T19:26:16Z INFO  spike] Read names: of 4080 sampled, 0 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 4080 are other; spike's reads take the shape no flowcell position Picard can read, e.g. SPIKE_ev0001_hap_000000\n[2026-10-04T19:26:16Z INFO  spike] Simulated read group: @RG ID:sim SM:sample\n[2026-10-04T19:26:16Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (0 MB)\n[2026-10-04T19:26:16Z INFO  spike] SNV  chr1:5001 T>A: 38 of 38 reads carry another allele here\nError: the sample already carries another allele at 1 small variant(s): SNV  chr1:5001 T>A (38 of 38 reads). spike edits one copy and keeps the other copy's reads, so those reads keep that allele and the requested fraction cannot be reached (a hom-alt site asked for at 0.5 comes out all ALT). Remove these events from the input"
+  },
+  "asymmetric_mates": {
+    "1": [
+      150
+    ],
+    "2": [
+      150
+    ]
+  },
+  "mismatched_mates": {
+    "exit": 1,
+    "names": [
+      null,
+      null
+    ],
+    "stderr": "Error: record 1: RAW_R1 has a and RAW_R2 has b; the mates are not in the same order.\nRAW_R1/RAW_R2 must be the sample's full raw FASTQ (every lane, concatenated), from the run whose BAM spike was given."
+  },
+  "input_output_alias": {
+    "exit": 1,
+    "raw_input_still_exists": true,
+    "raw_input_unchanged": true,
+    "stderr": "Error: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/alias_R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/alias_R1.fq.gz are the same file; an output must not be one of fastq.sh's inputs."
+  }
+}
+{
+  "low_fraction": {
+    "exit": 0,
+    "synth_pairs": 2,
+    "alt_probe_reads": 0,
+    "truth": [
+      "chr1\t5001\tsim_var_1\tT\tA\t999\tPASS\tSIM_VAF=0.014;SIM_REQ_VAF=0.001;SIM_RESIST=0.000;SIM_DEPTH_FOLD=1.00;SIM_GENE=unknown\tGT\t0/1"
+    ]
+  },
+  "indel_rate_NaN": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "indel_rate_2.0": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "indel_rate_-0.5": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "true_del_validate": {
+    "exit": 1,
+    "stdout": "{\n  \"summary\": { \"total\": 8, \"pass\": 5, \"fail\": 3, \"counted_total\": 5, \"counted_pass\": 4, \"counted_fail\": 1, \"strict\": false },\n  \"checks\": [\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"coverage_ratio\", \"expected\": \"0.00\", \"observed\": \"0.00\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"coverage_any_mapq\", \"expected\": \"0.00\", \"observed\": \"0.00\", \"pass\": true, \"advisory\": true },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"del_planted\", \"expected\": \">=1 ev0001 read carrying\", \"observed\": \"28\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"split_reads\", \"expected\": \">=2 joining chr1:5051\", \"observed\": \"0\", \"pass\": false, \"advisory\": true },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"split_reads_each_end\", \"expected\": \">=2 at each end\", \"observed\": \"0/0\", \"pass\": false, \"advisory\": true },\n    { \"event\": \"[global]\", \"check\": \"insert_size\", \"expected\": \"mean 50-1000, sd 5-300\", \"observed\": \"302+/-9\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"[global]\", \"check\": \"dup_rate\", \"expected\": \"<50%\", \"observed\": \"no dup flags\", \"pass\": false, \"advisory\": false },\n    { \"event\": \"[global]\", \"check\": \"mean_mapq\", \"expected\": \">20\", \"observed\": \"60.0\", \"pass\": true, \"advisory\": false }\n  ]\n}\n"
+  },
+  "true_del_base_depth": [
+    0
+  ]
+}
+{
+  "clean": {
+    "exit": 0,
+    "log": [
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] Tiling 148 synthetic reads across 4001bp haplotype (cov=12.0, vaf=1.00, bp_only=false)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] simulate_event: 23 kept, 149 suppressed, 148 chimeric (haplotype-tiled), 0 depth copies"
+    ],
+    "removed_pairs": 149,
+    "synthetic_pairs": 148
+  },
+  "origin": {
+    "exit": 0,
+    "log": [
+      "[2026-10-04T19:26:17Z INFO  spike::simulate]   origin depth at chr1:4999: 9.0x (the donor pool's there: 12.0x)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] Tiling 111 synthetic reads across 4001bp haplotype (cov=9.0, vaf=1.00, bp_only=false)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] simulate_event: 172 kept, 0 suppressed, 111 chimeric (haplotype-tiled), 0 depth copies",
+      "[2026-10-04T19:26:17Z INFO  spike] SNV  chr1:5001 T>A: origin removed 149 fragment(s) at the spot and 0 at its look-alikes"
+    ],
+    "removed_pairs": 149,
+    "synthetic_pairs": 111
+  }
+}

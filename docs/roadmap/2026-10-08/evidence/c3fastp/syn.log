@@ -1,0 +1,49 @@
+Detecting adapter sequence for read1...
+No adapter detected for read1
+
+Detecting adapter sequence for read2...
+No adapter detected for read2
+
+Read1 before filtering:
+total reads: 4801
+total bases: 716239
+Q20 bases: 705359(98.481%)
+Q30 bases: 670910(93.6712%)
+
+Read2 before filtering:
+total reads: 4801
+total bases: 716074
+Q20 bases: 702355(98.0841%)
+Q30 bases: 667020(93.1496%)
+
+Read1 after filtering:
+total reads: 4774
+total bases: 712086
+Q20 bases: 702180(98.6089%)
+Q30 bases: 668793(93.9203%)
+
+Read2 after filtering:
+total reads: 4774
+total bases: 711920
+Q20 bases: 699509(98.2567%)
+Q30 bases: 665398(93.4653%)
+
+Filtering result:
+reads passed filter: 9548
+reads failed due to low quality: 46
+reads failed due to too many N: 0
+reads failed due to too short: 8
+reads with adapter trimmed: 12
+bases trimmed due to adapters: 1149
+reads corrected by overlap analysis: 114
+bases corrected by overlap analysis: 218
+
+Duplication rate: 0%
+
+Insert size peak (evaluated by paired-end reads): 234
+
+JSON report: syn.json
+HTML report: syn.html
+
+/home/parlar_ai/.pixi/envs/fastp/bin/fastp --in1 syn_R1.fq --in2 syn_R2.fq --out1 syno1.fq --out2 syno2.fq --json syn.json --html syn.html --thread 4 --detect_adapter_for_pe --length_required 40 --correction --overrepresentation_analysis 
+fastp v0.22.0, time used: 5 seconds

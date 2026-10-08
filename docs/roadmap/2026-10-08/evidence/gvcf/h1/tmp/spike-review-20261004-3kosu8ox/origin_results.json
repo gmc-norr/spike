@@ -1,0 +1,22 @@
+{
+  "clean": {
+    "exit": 0,
+    "log": [
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] Tiling 148 synthetic reads across 4001bp haplotype (cov=12.0, vaf=1.00, bp_only=false)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] simulate_event: 23 kept, 149 suppressed, 148 chimeric (haplotype-tiled), 0 depth copies"
+    ],
+    "removed_pairs": 149,
+    "synthetic_pairs": 148
+  },
+  "origin": {
+    "exit": 0,
+    "log": [
+      "[2026-10-04T19:26:17Z INFO  spike::simulate]   origin depth at chr1:4999: 9.0x (the donor pool's there: 12.0x)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] Tiling 111 synthetic reads across 4001bp haplotype (cov=9.0, vaf=1.00, bp_only=false)",
+      "[2026-10-04T19:26:17Z INFO  spike::simulate] simulate_event: 172 kept, 0 suppressed, 111 chimeric (haplotype-tiled), 0 depth copies",
+      "[2026-10-04T19:26:17Z INFO  spike] SNV  chr1:5001 T>A: origin removed 149 fragment(s) at the spot and 0 at its look-alikes"
+    ],
+    "removed_pairs": 149,
+    "synthetic_pairs": 111
+  }
+}

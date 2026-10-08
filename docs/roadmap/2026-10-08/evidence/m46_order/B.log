@@ -1,0 +1,91 @@
+Looking to launch executable "/home/parlar_ai/.pixi/envs/bwa-mem2/bin/bwa-mem2.avx512bw", simd = .avx512bw
+Launching executable "/home/parlar_ai/.pixi/envs/bwa-mem2/bin/bwa-mem2.avx512bw"
+-----------------------------
+Executing in AVX512 mode!!
+-----------------------------
+* SA compression enabled with xfactor: 8
+* Ref file: ref.fa
+* Entering FMI_search
+* Index file found. Loading index from ref.fa.bwt.2bit.64
+* Reference seq len for bi-index = 130001
+* sentinel-index: 5903
+* Count:
+0,	1
+1,	40825
+2,	65001
+3,	89177
+4,	130001
+
+* Reading other elements of the index from files ref.fa
+* Index prefix: ref.fa
+* Read 0 ALT contigs
+* Done reading Index!!
+* Reading reference genome..
+* Binary seq file = ref.fa.0123
+* Reference genome size: 130000 bp
+* Done reading reference genome !!
+
+------------------------------------------
+1. Memory pre-allocation for Chaining: 1393.3971 MB
+2. Memory pre-allocation for BSW: 958.4681 MB
+3. Memory pre-allocation for BWT: 309.2567 MB
+------------------------------------------
+* Threads used (compute): 4
+* No. of pipeline threads: 2
+
+[0000] read_chunk: 100000000, work_chunk_size: 2596898, nseq: 17198
+	[0000][ M::kt_pipeline] read 17198 sequences (2596898 bp)...
+[0000] Calling mem_process_seqs.., task: 0
+[0000] 1. Calling kt_for - worker_bwt
+[0000] read_chunk: 100000000, work_chunk_size: 0, nseq: 0
+[0000] 2. Calling kt_for - worker_aln
+[0000] Inferring insert size distribution of PE reads from data, l_pac: 65000, n: 17198
+[0000][PE] # candidate unique pairs for (FF, FR, RF, RR): (0, 7733, 0, 0)
+[0000][PE] skip orientation FF as there are not enough pairs
+[0000][PE] analyzing insert size distribution for orientation FR...
+[0000][PE] (25, 50, 75) percentile: (277, 373, 510)
+[0000][PE] low and high boundaries for computing mean and std.dev: (1, 976)
+[0000][PE] mean and std.dev: (405.51, 168.41)
+[0000][PE] low and high boundaries for proper pairs: (1, 1209)
+[0000][PE] skip orientation RF as there are not enough pairs
+[0000][PE] skip orientation RR as there are not enough pairs
+[0000] 3. Calling kt_for - worker_sam
+	[0000][ M::mem_process_seqs] Processed 17198 reads in 0.743 CPU sec, 0.198 real sec
+[0000] read_chunk: 100000000, work_chunk_size: 0, nseq: 0
+[0000] Computation ends..
+No. of OMP threads: 4
+Processor is running @3100.335236 MHz
+Runtime profile:
+
+	Time taken for main_mem function: 0.24 sec
+
+	IO times (sec) :
+	Reading IO time (reads) avg: 0.02, (0.02, 0.02)
+	Writing IO time (SAM) avg: 0.02, (0.02, 0.02)
+	Reading IO time (Reference Genome) avg: 0.00, (0.00, 0.00)
+	Index read time avg: 0.00, (0.00, 0.00)
+
+	Overall time (sec) (Excluding Index reading time):
+	PROCESS() (Total compute time + (read + SAM) IO time) : 0.24
+	MEM_PROCESS_SEQ() (Total compute time (Kernel + SAM)), avg: 0.20, (0.20, 0.20)
+
+	 SAM Processing time (sec):
+	--WORKER_SAM avg: 0.07, (0.07, 0.07)
+
+	Kernels' compute time (sec):
+	Total kernel (smem+sal+bsw) time avg: 0.12, (0.12, 0.12)
+		SMEM compute avg: 0.05, (0.05, 0.05)
+		SAL compute avg: 0.01, (0.01, 0.01)
+				MEM_SA avg: 0.01, (0.01, 0.01)
+
+		BSW time, avg: 0.06, (0.06, 0.05)
+
+Important parameter settings: 
+	BATCH_SIZE: 512
+	MAX_SEQ_LEN_REF: 256
+	MAX_SEQ_LEN_QER: 128
+	MAX_SEQ_LEN8: 128
+	SEEDS_PER_READ: 500
+	SIMD_WIDTH8 X: 64
+	SIMD_WIDTH16 X: 32
+	AVG_SEEDS_PER_READ: 64

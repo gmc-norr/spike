@@ -1,0 +1,49 @@
+Detecting adapter sequence for read1...
+No adapter detected for read1
+
+Detecting adapter sequence for read2...
+No adapter detected for read2
+
+Read1 before filtering:
+total reads: 62682
+total bases: 9464982
+Q20 bases: 9243766(97.6628%)
+Q30 bases: 8846227(93.4627%)
+
+Read2 before filtering:
+total reads: 62682
+total bases: 9464982
+Q20 bases: 9155820(96.7336%)
+Q30 bases: 8666651(91.5654%)
+
+Read1 after filtering:
+total reads: 62129
+total bases: 9380973
+Q20 bases: 9181095(97.8693%)
+Q30 bases: 8793827(93.7411%)
+
+Read2 after filtering:
+total reads: 62129
+total bases: 9381011
+Q20 bases: 9103652(97.0434%)
+Q30 bases: 8626468(91.9567%)
+
+Filtering result:
+reads passed filter: 124258
+reads failed due to low quality: 1102
+reads failed due to too many N: 0
+reads failed due to too short: 4
+reads with adapter trimmed: 20
+bases trimmed due to adapters: 1338
+reads corrected by overlap analysis: 2408
+bases corrected by overlap analysis: 4075
+
+Duplication rate: 0%
+
+Insert size peak (evaluated by paired-end reads): 240
+
+JSON report: fp_spike21.json
+HTML report: fp_spike21.html
+
+/home/parlar_ai/.pixi/envs/fastp/bin/fastp -i /home/parlar_ai/quality-speed-run/evidence/k2b/spike21_R1.fq -I /home/parlar_ai/quality-speed-run/evidence/k2b/spike21_R2.fq -o fpo_spike21_1.fq.gz -O fpo_spike21_2.fq.gz --detect_adapter_for_pe --length_required 40 --correction --overrepresentation_analysis -w 4 -j fp_spike21.json -h fp_spike21.html 
+fastp v0.22.0, time used: 17 seconds

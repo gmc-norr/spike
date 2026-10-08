@@ -1,0 +1,51 @@
+== H1
+h1: exit 0
+PASS  spiked_R1.fastq.gz identical (decompressed)
+PASS  spiked_R2.fastq.gz identical (decompressed)
+PASS  R1.fq.gz identical (decompressed)
+PASS  R2.fq.gz identical (decompressed)
+PASS  replaced_reads.txt identical
+PASS  fastq_removed_reads.txt identical
+PASS  truth.vcf identical
+control (spiked_R1 against the raw stand-in R1, must differ):
+FAIL  spiked_R1 vs raw R1 differs
+== H2
+h2: exit 2
+PASS  no output folder
+Extracting lines (want 0): 0
+clap says:
+error: unexpected argument '--raw-fastq' found
+
+  tip: a similar argument exists: '--into-fastq'
+
+Usage: spike-if --bam <BAM> --reference <REFERENCE> --vcf <VCF> --seed <SEED> --threads <THREADS> --aligner <ALIGNER> --align --into-fastq <RAW_R1> <RAW_R2>
+
+For more information, try '--help'.
+== H3
+last log line:
+[2026-10-04T17:41:52Z INFO  spike] The whole sample, spiked -- the pair for a pipeline that starts from FASTQ: out/spiked_R1.fastq.gz and out/spiked_R2.fastq.gz
+74:| `R1.fq.gz`, `R2.fq.gz` | spike's reads around the events only, not the whole sample: the originals it kept unchanged and its own new reads (100513 pairs) |
+75:| `spiked_R1.fastq.gz`, `spiked_R2.fastq.gz` | The whole sample, spiked: the pair for a pipeline that starts from FASTQ. Written at the end of this run (`--into-fastq`) |
+99:bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz spiked_R1.fastq.gz spiked_R2.fastq.gz
+== H4
+h4: exit 0
+PASS  S1_R1.fastq.gz against the after-check's spiked_R1 identical (decompressed)
+PASS  S1_R2.fastq.gz against the after-check's spiked_R2 identical (decompressed)
+spiked_ files (want 0): 0
+last log line:
+[2026-10-04T17:42:39Z INFO  spike] The whole sample, spiked -- the pair for a pipeline that starts from FASTQ: out/S1_R1.fastq.gz and out/S1_R2.fastq.gz
+75:| `S1_R1.fastq.gz`, `S1_R2.fastq.gz` | The whole sample, spiked: the pair for a pipeline that starts from FASTQ. Written at the end of this run (`--into-fastq`) |
+99:bash fastq.sh RAW_R1.fastq.gz RAW_R2.fastq.gz S1_R1.fastq.gz S1_R2.fastq.gz
+h4slash: exit 1
+FAIL  an output folder was made
+Extracting lines (want 0): 0
+Error: --fastq-prefix "a/b" is not a plain name; give a name such as the sample's: S1 writes S1_R1.fastq.gz and S1_R2.fastq.gz into the -o folder
+h4alone: exit 2
+PASS  no output folder
+Extracting lines (want 0): 0
+error: the following required arguments were not provided:
+  --into-fastq <RAW_R1> <RAW_R2>
+
+Usage: spike-if --bam <BAM> --reference <REFERENCE> --into-fastq <RAW_R1> <RAW_R2> --vcf <VCF> --seed <SEED> --threads <THREADS> --aligner <ALIGNER> --align --fastq-prefix <NAME> --output <OUTPUT>
+
+For more information, try '--help'.

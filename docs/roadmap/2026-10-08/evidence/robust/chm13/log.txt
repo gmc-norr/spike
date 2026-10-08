@@ -1,0 +1,95 @@
+[2026-10-07T17:17:25Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T17:17:25Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T17:17:25Z INFO  spike::bam_stats] Stats: 150 cycles (the most common read length); 13603 of 47919 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T17:17:25Z INFO  spike] Read names: of 50000 sampled, 0 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 50000 are other; spike's reads take the shape no flowcell position Picard can read, e.g. SPIKE_ev0001_hap_000000
+[2026-10-07T17:17:25Z INFO  spike] Simulated read group: @RG ID:sim SM:ERR3239334
+[2026-10-07T17:17:25Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (55 MB)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr1:76365824-76415824 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr2:134889472-134939472 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr9:73302016-73352016 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr15:75350016-75400016 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr4:153042944-153092944 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr3:44957696-45007696 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr1:230129664-230179664 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Extracting read pairs from chr11:94191616-94241616 (MAPQ >= 20)
+[2026-10-07T17:17:25Z INFO  spike::extract] Pass 1: collected 5353 read1 + 5347 read2 records (5312 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5689 read1 + 5686 read2 records (5656 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5506 read1 + 5488 read2 records (5470 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5386 complete read pairs from chr1:230129664-230179664
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 0 read1 + 0 read2 records (0 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5719 read1 + 5716 read2 records (5687 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr19:23592960-23642960 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5716 complete read pairs from chr15:75350016-75400016
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr17:34865152-34915152 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5448 read1 + 5445 read2 records (5423 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 995 read1 + 992 read2 records (973 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5661 read1 + 5678 read2 records (5632 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5524 complete read pairs from chr4:153042944-153092944
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr5:113098752-113148752 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 0 complete read pairs from chr11:94191616-94241616
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr12:111804416-111854416 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5748 complete read pairs from chr3:44957696-45007696
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr3:198197248-198247248 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5470 complete read pairs from chr1:76365824-76415824
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 974 complete read pairs from chr9:73302016-73352016
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr10:75825152-75875152 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr22:5799936-5849936 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5707 complete read pairs from chr2:134889472-134939472
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chrX:109248512-109298512 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5161 read1 + 5150 read2 records (5126 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5463 read1 + 5434 read2 records (5305 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5412 read1 + 5414 read2 records (5375 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5182 complete read pairs from chr19:23592960-23642960
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr14:23330816-23380816 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5560 read1 + 5558 read2 records (5533 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5451 complete read pairs from chr5:113098752-113148752
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr6:85164032-85214032 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5638 read1 + 5648 read2 records (5610 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5360 complete read pairs from chr3:198197248-198247248
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr7:65781760-65831760 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 4996 read1 + 4989 read2 records (4964 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5584 complete read pairs from chr12:111804416-111854416
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5676 complete read pairs from chr17:34865152-34915152
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracting read pairs from chr8:58146816-58196816 (MAPQ >= 20)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5337 read1 + 5338 read2 records (5307 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Pass 1: collected 5632 read1 + 5632 read2 records (5606 pairs already complete)
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 4995 complete read pairs from chr22:5799936-5849936
+[2026-10-07T17:17:26Z INFO  spike::extract] Extracted 5367 complete read pairs from chrX:109248512-109298512
+[2026-10-07T17:17:27Z INFO  spike::extract] Extracted 5657 complete read pairs from chr10:75825152-75875152
+[2026-10-07T17:17:27Z INFO  spike::extract] Pass 1: collected 5378 read1 + 5368 read2 records (5340 pairs already complete)
+[2026-10-07T17:17:27Z INFO  spike::extract] Pass 1: collected 5420 read1 + 5436 read2 records (5386 pairs already complete)
+[2026-10-07T17:17:27Z INFO  spike::extract] Pass 1: collected 5225 read1 + 5227 read2 records (5189 pairs already complete)
+[2026-10-07T17:17:27Z INFO  spike::extract] Pass 1: collected 5414 read1 + 5428 read2 records (5387 pairs already complete)
+[2026-10-07T17:17:27Z INFO  spike::extract] Extracted 5406 complete read pairs from chr14:23330816-23380816
+[2026-10-07T17:17:27Z INFO  spike::extract] Extracted 5463 complete read pairs from chr7:65781760-65831760
+[2026-10-07T17:17:27Z INFO  spike::extract] Extracted 5263 complete read pairs from chr6:85164032-85214032
+[2026-10-07T17:17:27Z INFO  spike::extract] Extracted 5454 complete read pairs from chr8:58146816-58196816
+[2026-10-07T17:17:28Z INFO  spike::quality] Quality profile: 99383 pairs in 20 block(s); qualities 2,3,4,5,6,10,20,30; read classes cut at mean Q 24.8,26.9,28.6,29.5,29.8,29.9,30.0; 8782 full contexts with at least 20 observations. Error table from 7169493 sampled bases (20623489 at the sample's own variant sites, 89020 in clipped ends that are not the reference read badly, 1886722 inserted, N or off the reference left out)
+[2026-10-07T17:17:28Z INFO  spike::quality] Quality sample: 20 blocks of 50 kb from chr1:76364253 to chrX:109247055, 99383 pairs; read in 1.7 s, learned in 0.9 s
+[2026-10-07T17:17:28Z INFO  spike] Processing event 1/1: Deletion { chrom: "chr19", del_start: 11100000, del_end: 11102000, gene: "unknown", exons: [], allele_fraction: None }
+[2026-10-07T17:17:28Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T17:17:28Z INFO  spike::extract] Extracting read pairs from chr19:11090000-11112000 (MAPQ >= 20)
+[2026-10-07T17:17:28Z INFO  spike::extract] Pass 1: collected 2588 read1 + 2581 read2 records (2553 pairs already complete)
+[2026-10-07T17:17:28Z INFO  spike::extract] Extracted 2614 complete read pairs from chr19:11090000-11112000
+[2026-10-07T17:17:28Z INFO  spike::stats] Fragment distribution: mean=447.8, stddev=101.4, n=2609
+[2026-10-07T17:17:28Z INFO  spike::extract] Built read pool: 2614 pairs
+[2026-10-07T17:17:28Z INFO  spike]   Reads over the event spike cannot edit: 5 of 453 (0.011)
+[2026-10-07T17:17:28Z INFO  spike::loh] chr19:11098000-11104000: 10 het SNPs, 4483 hom-alt SNPs
+[2026-10-07T17:17:28Z INFO  spike::loh] phased 10 het SNPs into 4 block(s); one haplotype picked per block
+[2026-10-07T17:17:28Z INFO  spike::loh] classified 235 fragments (111 event copy, 124 other); 6 ambiguous ties left unclassified
+[2026-10-07T17:17:28Z INFO  spike::haplotype] Applied 3012 het SNP variants to haplotype sequence
+[2026-10-07T17:17:28Z INFO  spike::simulate] Tiling 216 synthetic reads across 4000bp haplotype (cov=54.5, vaf=0.50, bp_only=false)
+[2026-10-07T17:17:28Z INFO  spike::simulate] simulate_event: 2306 kept, 308 suppressed, 216 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T17:17:28Z INFO  spike] Event 1: 2306 kept + 216 chimeric, 308 suppressed
+[2026-10-07T17:17:28Z INFO  spike] Duplicates of the removed originals: 36 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-07T17:17:28Z INFO  spike::fastq] Wrote 2522 read pairs to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/R2.fq.gz
+[2026-10-07T17:17:28Z INFO  spike::truth] Wrote truth VCF with 1 events to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/truth.vcf
+[2026-10-07T17:17:28Z INFO  spike] Originals removed from the BAM: 2650 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-07T17:17:28Z INFO  spike] Originals to remove from the raw FASTQ: 344 read pairs (fastq_removed_reads.txt); the 2306 spike kept stay as the raw reads they are
+[2026-10-07T17:17:28Z INFO  spike] === spike complete ===
+[2026-10-07T17:17:28Z INFO  spike] Output directory: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out
+[2026-10-07T17:17:28Z INFO  spike] spike's reads, around the events only (not the whole sample): /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/R2.fq.gz
+[2026-10-07T17:17:28Z INFO  spike] Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/truth.vcf
+[2026-10-07T17:17:28Z INFO  spike] Total read pairs: 2522
+[2026-10-07T17:17:28Z INFO  spike] README: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/README.md
+[2026-10-07T17:17:28Z INFO  spike] Next steps: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/align.sh  →  bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/merge.sh; or, for the whole sample as spiked FASTQ: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/robust/chm13/out/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)

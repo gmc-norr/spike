@@ -1,0 +1,18 @@
+
+spike validate -- 10 checks
+
+Event                               Check              Expected                  Observed        Status
+----------------------------------------------------------------------------------------------------
+DEL chr20:38900000-38910000 (un...  coverage_ratio     0.00                      0.01            PASS
+DEL chr20:38900000-38910000 (un...  coverage_any_mapq  0.00                      0.01            PASS (advisory)
+DEL chr20:38900000-38910000 (un...  del_planted        >=1 ev0001 read carrying  36              PASS
+DEL chr20:38900000-38910000 (un...  split_reads        >=2 joining chr20:389...  24              PASS (advisory)
+DEL chr20:38900000-38910000 (un...  split_reads_each_end >=2 at each end           8/16            PASS (advisory)
+DEL chr20:38900000-38910000 (un...  resistant          <=0.100                   0.007           PASS (advisory)
+DEL chr20:38900000-38910000 (un...  depth_fold         <=1.50                    1.27            PASS (advisory)
+[global]                            insert_size        mean 50-1000, sd 5-300    419+/-180       PASS
+[global]                            dup_rate           <50%                      8.4%            PASS
+[global]                            mean_mapq          >20                       59.7            PASS
+
+Result: 10/10 PASS
+Advisory: 5 checks, 5 PASS, 0 FAIL (not in the exit status; --strict includes them)

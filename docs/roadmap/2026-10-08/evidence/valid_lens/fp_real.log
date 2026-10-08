@@ -1,0 +1,49 @@
+Detecting adapter sequence for read1...
+No adapter detected for read1
+
+Detecting adapter sequence for read2...
+No adapter detected for read2
+
+Read1 before filtering:
+total reads: 62682
+total bases: 9464982
+Q20 bases: 9241457(97.6384%)
+Q30 bases: 8844666(93.4462%)
+
+Read2 before filtering:
+total reads: 62682
+total bases: 9464982
+Q20 bases: 9152550(96.6991%)
+Q30 bases: 8660223(91.4975%)
+
+Read1 after filtering:
+total reads: 62200
+total bases: 9390875
+Q20 bases: 9185264(97.8105%)
+Q30 bases: 8796695(93.6728%)
+
+Read2 after filtering:
+total reads: 62200
+total bases: 9391135
+Q20 bases: 9105979(96.9636%)
+Q30 bases: 8623322(91.8241%)
+
+Filtering result:
+reads passed filter: 124400
+reads failed due to low quality: 928
+reads failed due to too many N: 32
+reads failed due to too short: 4
+reads with adapter trimmed: 34
+bases trimmed due to adapters: 1948
+reads corrected by overlap analysis: 1663
+bases corrected by overlap analysis: 3169
+
+Duplication rate: 0%
+
+Insert size peak (evaluated by paired-end reads): 266
+
+JSON report: fp_real.json
+HTML report: fp_real.html
+
+/home/parlar_ai/.pixi/envs/fastp/bin/fastp -i /home/parlar_ai/quality-speed-run/evidence/k2b/real_R1.fq -I /home/parlar_ai/quality-speed-run/evidence/k2b/real_R2.fq -o fpo_real_1.fq.gz -O fpo_real_2.fq.gz --detect_adapter_for_pe --length_required 40 --correction --overrepresentation_analysis -w 4 -j fp_real.json -h fp_real.html 
+fastp v0.22.0, time used: 16 seconds

@@ -1,0 +1,11 @@
+set real pairs 118779 (train 120138)
+set v1 pairs 118779 (train 120138)
+set new pairs 118779 (train 120138)
+set      reads  bad-end clip          95% CI  z vs real  any clip  crashed      z  mm/100
+real    237549         1.40%   1.36- 1.45%       0.00     2.13%    1.11%   0.00   0.394
+v1      237410         1.13%   1.09- 1.18%      -8.31     1.22%    0.96%  -4.91   0.328
+new     237310         1.26%   1.22- 1.31%      -4.24     1.39%    0.98%  -4.29   0.282
+bad-end clip share by the template's longest-run bin (0 / 1 / 2 / 3), reads in brackets:
+  real     0.99% (186077)    1.27% (20141)    2.35% (23636)    8.76% (7695)
+  v1       1.12% (185966)    1.10% (20129)    1.17% (23622)    1.29% (7693)
+  new      0.71% (185938)    1.32% (20121)    2.02% (23612)   12.06% (7639)

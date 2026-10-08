@@ -1,0 +1,7 @@
+error: unexpected argument '--raw-fastq' found
+
+  tip: a similar argument exists: '--into-fastq'
+
+Usage: spike-if --bam <BAM> --reference <REFERENCE> --vcf <VCF> --seed <SEED> --threads <THREADS> --aligner <ALIGNER> --align --into-fastq <RAW_R1> <RAW_R2>
+
+For more information, try '--help'.

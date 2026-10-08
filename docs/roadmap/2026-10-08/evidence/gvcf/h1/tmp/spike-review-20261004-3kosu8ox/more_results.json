@@ -1,0 +1,29 @@
+{
+  "low_fraction": {
+    "exit": 0,
+    "synth_pairs": 2,
+    "alt_probe_reads": 0,
+    "truth": [
+      "chr1\t5001\tsim_var_1\tT\tA\t999\tPASS\tSIM_VAF=0.014;SIM_REQ_VAF=0.001;SIM_RESIST=0.000;SIM_DEPTH_FOLD=1.00;SIM_GENE=unknown\tGT\t0/1"
+    ]
+  },
+  "indel_rate_NaN": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "indel_rate_2.0": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "indel_rate_-0.5": {
+    "exit": 1,
+    "wrote_truth": false
+  },
+  "true_del_validate": {
+    "exit": 1,
+    "stdout": "{\n  \"summary\": { \"total\": 8, \"pass\": 5, \"fail\": 3, \"counted_total\": 5, \"counted_pass\": 4, \"counted_fail\": 1, \"strict\": false },\n  \"checks\": [\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"coverage_ratio\", \"expected\": \"0.00\", \"observed\": \"0.00\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"coverage_any_mapq\", \"expected\": \"0.00\", \"observed\": \"0.00\", \"pass\": true, \"advisory\": true },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"del_planted\", \"expected\": \">=1 ev0001 read carrying\", \"observed\": \"28\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"split_reads\", \"expected\": \">=2 joining chr1:5051\", \"observed\": \"0\", \"pass\": false, \"advisory\": true },\n    { \"event\": \"DEL chr1:5000-5050 (unknown)\", \"check\": \"split_reads_each_end\", \"expected\": \">=2 at each end\", \"observed\": \"0/0\", \"pass\": false, \"advisory\": true },\n    { \"event\": \"[global]\", \"check\": \"insert_size\", \"expected\": \"mean 50-1000, sd 5-300\", \"observed\": \"302+/-9\", \"pass\": true, \"advisory\": false },\n    { \"event\": \"[global]\", \"check\": \"dup_rate\", \"expected\": \"<50%\", \"observed\": \"no dup flags\", \"pass\": false, \"advisory\": false },\n    { \"event\": \"[global]\", \"check\": \"mean_mapq\", \"expected\": \">20\", \"observed\": \"60.0\", \"pass\": true, \"advisory\": false }\n  ]\n}\n"
+  },
+  "true_del_base_depth": [
+    0
+  ]
+}

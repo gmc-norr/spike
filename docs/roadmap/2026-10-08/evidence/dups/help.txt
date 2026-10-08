@@ -1,0 +1,113 @@
+Haplotype-based read spike-in simulator for genomic variants
+
+Usage: spike [OPTIONS] --bam <BAM> --reference <REFERENCE>
+
+Options:
+  -b, --bam <BAM>
+          Input BAM file (coordinate-sorted, indexed)
+
+  -r, --reference <REFERENCE>
+          Reference FASTA (with .fai index)
+
+  -e, --event <EVENT>
+          Event specification(s). Can be repeated. Formats: --event "del:chr20:30000000-30005000"           (coordinate-based) --event "del:GENE:exon4-exon8"                  (gene-based, requires --exon-bed) --event "dup:GENE:exon4-exon8"                  (gene-based duplication) --event "inv:GENE:exon4-exon8"                  (gene-based inversion) --event "fusion:GENEA:exon14:GENEB:exon2"       (fusion: adds one junction, not a balanced translocation; requires --exon-bed) --event "dup:chr20:30000000-30005000" --event "inv:chr20:30000000-30005000" --event "ins:chr20:30000000:500"                (random insertion sequence) --event "ins:chr20:30000000:ACGTACGT"           (explicit insertion sequence) --event "snp:chr20:30000000:A:T"                (SNP/small variant, POS is 1-based) --event "snp:chr20:30000000:A>T"                (alternate syntax, POS is 1-based) --event "snp:chr20:30000000:ACG:A"              (small deletion, POS is 1-based) --event "snp:chr20:30000000:A:ACGT"             (small insertion, POS is 1-based) Per-event AF (appended with ;): --event "del:GENE:exon4-exon8;af=0.15" --event "fusion:GENEA:exon14:GENEB:exon2;af=het" af=<number>: exact AF, af=het: 0.5, af=hom: 1.0
+
+      --vcf <VCF>
+          Input VCF file with variant records. Supports DEL, INS, DUP, INV, BND, and standard SNP/indel records (no SVTYPE, explicit REF/ALT alleles). Can be combined with --event. At least one of --event or --vcf required
+
+      --vcf-info-af
+          Read INFO/AF from --vcf records as the allele fraction to simulate.
+          
+          Off by default: in a population VCF (gnomAD, 1000G) AF is the allele frequency in the population, not the fraction of this sample's reads that should carry the allele, so using it silently produces a truth set at the wrong VAF. Without this flag only SIM_VAF and VAF are read, and a record that carries AF but has no usable SIM_VAF or VAF falls back to --allele-fraction, with a count of how many did on stderr.
+
+      --exon-bed <EXON_BED>
+          Exon BED file. Required when using gene-based --event specs (e.g. "del:GENE:exon4-exon8")
+
+      --allele-fraction <ALLELE_FRACTION>
+          Target allele fraction, in (0.0, 1.0] -- above 0 and at most 1.
+          
+          0 is rejected, not treated as "plant nothing": an event asked for at AF 0 would still be written to the truth VCF. NaN is rejected for the same reason.
+          
+          [default: 0.5]
+
+  -o, --output <OUTPUT>
+          Output directory
+          
+          [default: /tmp/spike]
+
+      --seed <SEED>
+          Random seed for reproducibility
+          
+          [default: 42]
+
+  -t, --threads <THREADS>
+          Threads for spike and for the align.sh and merge.sh scripts it writes.
+          
+          spike splits the work that draws no random numbers across this many threads, so a given --seed gives the same output at any count. The aligner (bwa-mem2 -t, minimap2 -t, bowtie2 -p) and samtools (sort -@, merge -@) get this many too.
+          
+          [default: 4]
+
+      --region <REGION>
+          Extra read extraction region (e.g. "chr19:11080000-11140000"), on top of event ± flank -- it does not replace the event window. Use this to ensure the output BAM covers the full gene/region of interest. For an event on the same chromosome, the region and the event ± flank are merged into one query when they overlap or touch, and kept as two queries when they do not, so a distant fusion partner costs one extra event-sized window rather than every read in between. A region on another chromosome than the event is ignored for that event
+
+      --flank <FLANK>
+          Flanking region (bp) to include around events. Always defines the event window; when --region is also set, the region adds another window alongside it (see --region) rather than replacing this one.
+          
+          Minimum 2000, and a smaller value is rejected: synthetic reads cover event +/- 2000bp, so a narrower extraction window would leave original reads the synthetic ones are meant to replace outside it.
+          
+          [default: 10000]
+
+      --min-mapq <MIN_MAPQ>
+          Minimum mapping quality for donor reads
+          
+          [default: 20]
+
+      --aligner <ALIGNER>
+          Aligner for alignment script. Presets: "bwa-mem2" (default), "minimap2", "bowtie2", or a custom command that accepts <ref> <r1.fq.gz> <r2.fq.gz> and produces SAM on stdout
+          
+          [default: bwa-mem2]
+
+      --samtools <SAMTOOLS>
+          Path to samtools binary (used for sort/index in align script)
+          
+          [default: samtools]
+
+      --align
+          Automatically run alignment after FASTQ generation
+
+      --raw-fastq <RAW_R1> <RAW_R2>
+          The sample's raw FASTQ pair (every lane concatenated), from the run whose BAM --bam is. At the end spike runs fastq.sh on it, writing the full spiked pair to <output>/spiked_R1.fastq.gz and spiked_R2.fastq.gz
+
+      --indel-error-rate <INDEL_ERROR_RATE>
+          Indel error rate per base in synthetic reads (fraction of total error that is indel rather than substitution). Default 0.0 means substitution-only. Typical Illumina: 0.0 to 0.05
+          
+          [default: 0]
+
+      --gvcf <GVCF>
+          Optional gVCF/VCF with SNP calls for LOH simulation. When provided, het SNP positions are extracted from this file to determine which reads belong to the deleted haplotype (more accurate than the default pileup-based approach). Supports .vcf and .vcf.gz (requires bcftools in PATH for .vcf.gz)
+
+      --allow-overlap
+          Allow events on the same chromosome that overlap or come within 7000bp of each other.
+          
+          By default they are rejected to keep event effects independent and truth interpretation unambiguous. The check is on each event's replacement footprint, not its span: an event replaces reads -- removes the originals and tiles synthetic ones -- across its span grown by 3500bp on each side (2000bp of haplotype flank + 1500bp of fragment). So two spans must be at least 7000bp apart, or each event's synthetic flank writes plain reference over the other event's edit and cancels it.
+
+      --allow-resistant
+          Simulate an event even when more than half the reads over it are ones spike cannot edit.
+          
+          Reads below --min-mapq, not in a proper pair, or with a mate that fails a filter stay in the merged BAM as they are, so the event that reaches the reads is about VAF x (1 - that share). Above one half, spike refuses by default rather than write a truth record the reads cannot back. truth.vcf records the share as SIM_RESIST either way. Under --edit-model origin a read in a pair origin may remove counts as editable too; the one-half threshold was set for --edit-model clean and is not yet checked for origin.
+
+      --dup-model <DUP_MODEL>
+          Duplication model: "full" (default) builds a full tandem haplotype with duplicated region appearing twice, producing both junction reads and correct depth increase from a single tiling pass. "junction" uses the legacy junction-only haplotype with separate depth copies
+          
+          [default: full]
+
+      --edit-model <EDIT_MODEL>
+          Which original reads an event replaces. "clean" (default): only the donor pool's pairs (both mates at --min-mapq or above, a proper pair, no duplicate, secondary, supplementary or QC-fail flag) inside the event's footprint, and the duplicates of those it removes. "origin" (experimental): every primary read at the event and at its look-alikes, each removed by its chance of having come from the edited copy, read from its MAPQ and its XA tag. It needs the aligner's XA tags (bwa-mem and bwa-mem2 write them)
+          
+          [default: clean]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

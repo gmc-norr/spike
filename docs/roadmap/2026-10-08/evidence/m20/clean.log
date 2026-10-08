@@ -1,0 +1,43 @@
+[2026-10-07T21:22:58Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T21:22:58Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T21:22:59Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 16 of 31295 full-length reads end in A, so the library was adapter-trimmed (50000 records sampled)
+[2026-10-07T21:22:59Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:45:227NC2LT1:2:TILE:X:Y, 247 tiles, x 1000-52208, y 1016-29759, e.g. SPIKE_ev0001_hap_000000:45:227NC2LT1:2:2218:22853:29387
+[2026-10-07T21:22:59Z INFO  spike] Simulated read group: @RG ID:sim SM:D24-14230_Seq25-7600_30x
+[2026-10-07T21:22:59Z INFO  spike] align.sh's bwa-mem2 takes the input's own options, from @PG ID:bwa-mem2: -M -K 100000000
+[2026-10-07T21:23:00Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (173 MB)
+[2026-10-07T21:23:00Z INFO  spike] Processing event 1/1: Deletion { chrom: "chr5", del_start: 70924941, del_end: 70953015, gene: "unknown", exons: [], allele_fraction: Some(0.5) }
+[2026-10-07T21:23:00Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-07T21:23:00Z INFO  spike::extract] Extracting read pairs from chr5:70914941-70963015 (MAPQ >= 20)
+[2026-10-07T21:23:00Z INFO  spike::extract] Pass 1: collected 996 read1 + 995 read2 records (995 pairs already complete)
+[2026-10-07T21:23:00Z INFO  spike::extract] Extracted 995 complete read pairs from chr5:70914941-70963015
+[2026-10-07T21:23:00Z INFO  spike::stats] Fragment distribution: mean=389.7, stddev=124.1, n=995
+[2026-10-07T21:23:00Z INFO  spike::extract] Built read pool: 995 pairs
+[2026-10-07T21:23:00Z INFO  spike]   Reads over the event spike cannot edit: 5765 of 6733 (0.856)
+[2026-10-07T21:23:00Z WARN  spike] DEL  chr5:70924942-70953015 (28074bp): 5765 of 6733 reads over it (86%) are ones spike cannot edit (below --min-mapq, not a proper pair, or a mate that fails a filter). They stay in the merged BAM as they are, so the event is weaker than requested; truth.vcf records the share as SIM_RESIST (CR4).
+Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+  DEL  chr5:70924942-70953015 (28074bp): 5765 of 6733 reads over it (85.6%) are ones spike cannot edit
+Those reads are below --min-mapq, not a proper pair, or have a mate that fails a filter, and they stay in the merged BAM as they are. If most of them are below --min-mapq, lowering it lets spike edit them. Otherwise remove the events from the input, or pass --allow-resistant to simulate them anyway; truth.vcf then records the share as SIM_RESIST.
+Command exited with non-zero status 1
+	Command being timed: "timeout 100 /home/parlar_ai/dev/spike/target/release/spike --bam /home/parlar_ai/dev/cnv_validation/from_rv/raredisease_seracare_na12878_resample/D24-14230_Seq25-7600_30x_resample/raredisease_results/alignment/D24-14230_Seq25-7600_30x_sorted_md.bam --reference /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta --event del:chr5:70924941-70953015;af=het --output /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/m20/clean --seed 1 --threads 4"
+	User time (seconds): 0.55
+	System time (seconds): 1.08
+	Percent of CPU this job got: 75%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.17
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 537212
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 65
+	Minor (reclaiming a frame) page faults: 166191
+	Voluntary context switches: 46
+	Involuntary context switches: 122
+	Swaps: 0
+	File system inputs: 441606
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

@@ -1,0 +1,19 @@
+windows 500; with a het call 336; hom-alt calls and no het call 88 (0.176); no SNV call 76
+hom-alt calls in those windows 377; missed by the pileup 17 (0.045); windows with a miss 11
+  missed: window 21 chr20:27161815 A pileup none:1
+  missed: window 97 chr20:27397876 C pileup none:0
+  missed: window 105 chr20:28132619 A pileup none:0
+  missed: window 126 chr20:27393548 G pileup none:2
+  missed: window 153 chr20:28143536 G pileup none:2
+  missed: window 167 chr20:26750937 T pileup none:7
+  missed: window 167 chr20:26751156 G pileup none:2
+  missed: window 167 chr20:26752225 C pileup none:5
+  missed: window 181 chr20:4767379 G pileup none:26
+  missed: window 259 chr20:26942663 G pileup none:0
+  missed: window 272 chr20:29969682 C pileup none:1
+  missed: window 272 chr20:29969795 T pileup none:1
+  missed: window 272 chr20:29969840 G pileup none:2
+  missed: window 272 chr20:29970918 A pileup none:0
+  missed: window 272 chr20:29971153 T pileup none:0
+  missed: window 277 chr20:27667031 T pileup none:0
+  missed: window 484 chr20:53717174 C pileup none:7

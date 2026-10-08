@@ -1,0 +1,60 @@
+[2026-10-07T17:18:01Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T17:18:01Z INFO  spike::bam_stats] Computing CRAM statistics from first 50000 records...
+[2026-10-07T17:18:02Z INFO  spike::bam_stats] Stats: 150 cycles (the most common read length); 12961 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T17:18:02Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:76:HFLT3DSXX:4:TILE:X:Y, 843 tiles, x 1027-32940, y 1016-37059, e.g. SPIKE_ev0001_hap_000000:76:HFLT3DSXX:4:1339:31778:11955
+[2026-10-07T17:18:02Z INFO  spike] Simulated read group: @RG ID:sim SM:NA12878
+[2026-10-07T17:18:02Z INFO  spike] align.sh's bwa-mem2 takes the input's own options, from @PG ID:bwa: -Y -K 100000000
+[2026-10-07T17:18:02Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (55 MB)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr1:77386322-77436322 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr4:166035085-166085085 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr1:234537778-234587778 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr6:114709844-114759844 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr17:11877442-11927442 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr2:137983019-138033019 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr9:131722654-131772654 (MAPQ >= 20)
+[2026-10-07T17:18:02Z INFO  spike::extract] Extracting read pairs (CRAM) from chr12:37296454-37346454 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5355 read1 + 5350 read2 records (5323 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5787 read1 + 5790 read2 records (5753 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5384 read1 + 5395 read2 records (5358 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5379 complete read pairs from chr17:11877442-11927442
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr19:4245203-4295203 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5758 read1 + 5762 read2 records (5723 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5821 complete read pairs from chr1:234537778-234587778
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5045 read1 + 5036 read2 records (5001 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr21:33971120-34021120 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5417 complete read pairs from chr1:77386322-77436322
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr11:12641052-12691052 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5306 read1 + 5308 read2 records (5282 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5790 complete read pairs from chr9:131722654-131772654
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr5:136278650-136328650 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5059 complete read pairs from chr12:37296454-37346454
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr13:75237633-75287633 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5250 read1 + 5248 read2 records (5222 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5746 read1 + 5732 read2 records (5695 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5331 complete read pairs from chr6:114709844-114759844
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr7:103117330-103167330 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5275 complete read pairs from chr4:166035085-166085085
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5346 read1 + 5359 read2 records (5319 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chrX:111077305-111127305 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5601 read1 + 5619 read2 records (5566 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5763 complete read pairs from chr19:4245203-4295203
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chrUn_JTFH01000280v1_decoy:0-50000 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5381 complete read pairs from chr2:137983019-138033019
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr3:55683320-55733320 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5652 complete read pairs from chr21:33971120-34021120
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracting read pairs (CRAM) from chr4:10016381-10066381 (MAPQ >= 20)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5480 read1 + 5486 read2 records (5443 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5539 read1 + 5540 read2 records (5507 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Pass 1 (CRAM): collected 5444 read1 + 5412 read2 records (5394 pairs already complete)
+[2026-10-07T17:18:03Z INFO  spike::extract] Extracted 5523 complete read pairs from chr5:136278650-136328650
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5570 complete read pairs from chr13:75237633-75287633
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5426 complete read pairs from chr11:12641052-12691052
+[2026-10-07T17:18:04Z INFO  spike::extract] Pass 1 (CRAM): collected 5478 read1 + 5495 read2 records (5452 pairs already complete)
+[2026-10-07T17:18:04Z INFO  spike::extract] Pass 1 (CRAM): collected 5589 read1 + 5584 read2 records (5541 pairs already complete)
+[2026-10-07T17:18:04Z INFO  spike::extract] Pass 1 (CRAM): collected 5406 read1 + 5408 read2 records (5368 pairs already complete)
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5520 complete read pairs from chr4:10016381-10066381
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5626 complete read pairs from chr7:103117330-103167330
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5445 complete read pairs from chrX:111077305-111127305
+[2026-10-07T17:18:04Z INFO  spike::extract] Pass 1 (CRAM): collected 5341 read1 + 5331 read2 records (5301 pairs already complete)
+[2026-10-07T17:18:04Z INFO  spike::extract] Extracted 5368 complete read pairs from chr3:55683320-55733320
+Error: invalid reference sequence name: chrUn_JTFH01000277v1_decoy

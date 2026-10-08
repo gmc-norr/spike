@@ -1,0 +1,19 @@
+QX 0: SD ratio 1.007 perfect z 0.56 crash z -4.97 (fake 0.99% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.99% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.94% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.04% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 1.03% real 14.57%
+QX 19: SD ratio 1.005 perfect z 1.53 crash z -4.98 (fake 0.99% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.42% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.88% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.45% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 13.41% real 14.57%
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running unittests src/main.rs (../qm-target/release/deps/spike-25467841c52e4f3e)
+QX 36: held-out bases; observed errors, the model's rate given the real history, and errors simulated along the real qualities
+  all counted bases        bases  35968087  observed 0.0037  predicted 0.0037 (1.00)  simulated 0.0037 (1.00)
+  crashed tails, Q<15      bases     41809  observed 0.3393  predicted 0.3138 (0.92)  simulated 0.3015 (0.89)
+  crashed tails, Q15-29    bases     12964  observed 0.1129  predicted 0.0917 (0.81)  simulated 0.0837 (0.74)
+  crashed tails, Q30+      bases     28939  observed 0.0323  predicted 0.0235 (0.73)  simulated 0.0212 (0.66)
+  not crashed, last 40     bases   9404598  observed 0.0048  predicted 0.0048 (1.02)  simulated 0.0049 (1.02)
+  crashed reads (>= 10 Q<15 tail bases): 2080; per-read tail rate SD observed 0.172, simulated 0.155

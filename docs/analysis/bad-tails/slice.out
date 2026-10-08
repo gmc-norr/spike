@@ -1,0 +1,42 @@
+quality values: [2, 11, 25, 37]
+  good           47130 reads
+  crash-noclip    1172 reads
+  crash-clip      1984 reads
+  clip-nocrash    2897 reads
+
+1. SHAPE OF THE TAIL
+  crash-noclip  last base < Q15:  55.2%   low run at the end, bases: median 1 (quartiles 0-2)   once low, low to the end:   0.0%
+  crash-clip    last base < Q15:  60.0%   low run at the end, bases: median 1 (quartiles 0-2)   once low, low to the end:   0.0%
+  clip-nocrash  last base < Q15:  42.5%   low run at the end, bases: median 0 (quartiles 0-1)   once low, low to the end:   0.1%
+  crash-clip    3' clip length: median 38 (quartiles 19-68); 1-4 bp 4%
+  clip-nocrash  3' clip length: median 11 (quartiles 5-33); 1-4 bp 24%
+  share at each quality, crashed reads (clip or not), by cycles from the 3' end:
+     1- 1 from end: Q2:  0.0%  Q11: 58.2%  Q25: 14.6%  Q37: 27.2%
+     2- 5 from end: Q2:  0.0%  Q11: 59.4%  Q25: 14.2%  Q37: 26.4%
+     6-10 from end: Q2:  0.0%  Q11: 59.1%  Q25: 14.2%  Q37: 26.7%
+    11-20 from end: Q2:  0.0%  Q11: 57.7%  Q25: 14.4%  Q37: 27.9%
+    21-40 from end: Q2:  0.0%  Q11: 43.2%  Q25: 17.4%  Q37: 39.4%
+    41-80 from end: Q2:  0.0%  Q11: 34.4%  Q25: 15.5%  Q37: 50.0%
+
+2. ERROR RATE BY QUALITY (counted bases; mismatches / bases)
+  group         part                   Q2              Q11              Q25              Q37
+  good          aligned     nan (      0)  0.082 ( 158672)  0.002 ( 313409)  0.000 (6631674)
+  crash-noclip  aligned     nan (      0)  0.175 (  43300)  0.017 (  23843)  0.001 ( 107683)
+  crash-clip    aligned     nan (      0)  0.181 (  45823)  0.024 (  26771)  0.002 ( 128864)
+  crash-clip    clipped     nan (      0)  0.486 (  55078)  0.216 (  14024)  0.078 (  25313)
+  clip-nocrash  aligned     nan (      0)  0.191 (  70752)  0.026 (  48195)  0.003 ( 237455)
+  clip-nocrash  clipped     nan (      0)  0.540 (  34316)  0.240 (  13019)  0.094 (  30558)
+
+3. WHICH BASE IS CALLED (sequencing orientation)
+  good reads, Q37 bases    bases 6631674  called A:28.6 C:21.6 G:21.6 T:28.2   reference A:28.6 C:21.6 G:21.6 T:28.2   wrong calls (623) A:27.3 C:25.5 G:24.1 T:23.1
+                           top ref>called: T>C 13%, T>A 12%, A>G 12%, G>T 12%
+  good reads, Q<15 bases   bases  158672  called A:29.3 C:16.2 G:19.1 T:35.4   reference A:27.7 C:16.3 G:19.0 T:37.0   wrong calls (12984) A:42.0 C:17.5 G:19.2 T:21.3
+                           top ref>called: T>A 24%, C>A 17%, T>G 16%, G>T 15%
+Traceback (most recent call last):
+  File "/tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/tails/analyze.py", line 87, in <module>
+    print(f"  {label:24s} bases {nc:7d}  called " + " ".join(f"{B[i]}:{100*called[i]/nc:4.1f}" for i in range(4)) +
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/tails/analyze.py", line 87, in <genexpr>
+    print(f"  {label:24s} bases {nc:7d}  called " + " ".join(f"{B[i]}:{100*called[i]/nc:4.1f}" for i in range(4)) +
+                                                                       ~~~~~~~~~~~~~^~~
+ZeroDivisionError: division by zero

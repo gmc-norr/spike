@@ -1,0 +1,35 @@
+[2026-10-04T17:02:44Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-04T17:02:44Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-04T17:02:44Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 12879 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-04T17:02:44Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1036-32931, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:17027:11939
+[2026-10-04T17:02:44Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-04T17:02:44Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-10-04T17:02:44Z INFO  spike] Processing event 1/1: Duplication { chrom: "chr20", dup_start: 14550000, dup_end: 17550000, gene: "unknown", allele_fraction: None }
+[2026-10-04T17:02:44Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-04T17:02:44Z INFO  spike::extract] Extracting read pairs from chr20:14540000-17560000 (MAPQ >= 20)
+[2026-10-04T17:02:45Z INFO  spike::extract] Pass 1: collected 389632 read1 + 389468 read2 records (389340 pairs already complete)
+[2026-10-04T17:02:46Z INFO  spike::extract] Extracted 389407 complete read pairs from chr20:14540000-17560000
+[2026-10-04T17:02:46Z INFO  spike::stats] Fragment distribution: mean=420.7, stddev=178.3, n=386187
+[2026-10-04T17:02:47Z INFO  spike::extract] Built read pool: 389407 pairs
+[2026-10-04T17:02:47Z INFO  spike]   Reads over the event spike cannot edit: 8291 of 781829 (0.011)
+[2026-10-04T17:02:47Z INFO  spike::synth] Quality profile: 389407 pairs, 151 cycles. R1 mean Q: start=36.1 mid=36.0 end=34.7, R2: start=35.9 end=34.0. Base-conditioned bins: 1208/1208 usable. Markov bins: base 3617/4832, cycle 926/1208 usable
+[2026-10-04T17:02:48Z INFO  spike::loh] chr20:14548000-17552000: 3177 het SNPs, 1183 hom-alt SNPs
+[2026-10-04T17:02:49Z INFO  spike::loh] phased 3177 het SNPs into 1067 block(s); one haplotype picked per block
+[2026-10-04T17:02:49Z INFO  spike::loh] classified 85545 fragments (42658 event copy, 42887 other); 342 ambiguous ties left unclassified
+[2026-10-04T17:02:49Z INFO  spike::haplotype] Applied 8716 het SNP variants to haplotype sequence
+[2026-10-04T17:02:49Z INFO  spike::simulate] Tiling 359174 synthetic reads across 6004000bp haplotype (cov=50.3, vaf=0.50, bp_only=false)
+[2026-10-04T17:03:04Z INFO  spike::simulate] simulate_event: 195907 kept, 193500 suppressed, 359174 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-04T17:03:04Z INFO  spike] Event 1: 195907 kept + 359174 chimeric, 193500 suppressed
+[2026-10-04T17:03:04Z WARN  spike] DUP  chr20:14550001-17550000 (3000000bp): the donor's depth over chr20:14862000-14863000 is 9.9x, but every fragment this event tiles is scaled by the 50.3x measured at one of its breakpoints (4.69-fold). Where the donor's depth differs from that, the event's depth there is wrong by about that much; truth.vcf records the fold as SIM_DEPTH_FOLD (CR2).
+[2026-10-04T17:03:07Z INFO  spike] Duplicates of the removed originals: 27018 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-04T17:03:10Z INFO  spike::fastq] Wrote 555081 read pairs to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/R2.fq.gz
+[2026-10-04T17:03:10Z INFO  spike::truth] Wrote truth VCF with 1 events to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/truth.vcf
+[2026-10-04T17:03:10Z INFO  spike] Originals removed from the BAM: 416425 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-04T17:03:10Z INFO  spike] Originals to remove from the raw FASTQ: 220518 read pairs (fastq_removed_reads.txt); the 195907 spike kept stay as the raw reads they are
+[2026-10-04T17:03:10Z INFO  spike] === spike complete ===
+[2026-10-04T17:03:10Z INFO  spike] Output directory: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc
+[2026-10-04T17:03:10Z INFO  spike] FASTQ: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/R2.fq.gz
+[2026-10-04T17:03:10Z INFO  spike] Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/truth.vcf
+[2026-10-04T17:03:10Z INFO  spike] Total read pairs: 555081
+[2026-10-04T17:03:10Z INFO  spike] README: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/README.md
+[2026-10-04T17:03:10Z INFO  spike] Next steps: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/align.sh  →  bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/merge.sh; or, for a full FASTQ: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/rt/out_spike-doc/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2

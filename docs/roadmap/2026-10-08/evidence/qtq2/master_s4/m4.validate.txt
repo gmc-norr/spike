@@ -1,0 +1,20 @@
+
+spike validate -- 12 checks
+
+Event                               Check              Expected                  Observed        Status
+----------------------------------------------------------------------------------------------------
+SNP chr20:38999999-39000002 (un...  allele_freq        0.50                      0.45            PASS
+SNP chr20:38999999-39000002 (un...  resistant          <=0.100                   0.020           PASS (advisory)
+SNP chr20:38999999-39000002 (un...  depth_fold         <=1.50                    1.05            PASS (advisory)
+SNP chr20:39099999-39100000 (un...  allele_freq        0.50                      0.56            PASS
+SNP chr20:39099999-39100000 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39099999-39100000 (un...  depth_fold         <=1.50                    1.12            PASS (advisory)
+SNP chr20:39199999-39200001 (un...  allele_freq        0.50                      0.54            PASS
+SNP chr20:39199999-39200001 (un...  resistant          <=0.100                   0.000           PASS (advisory)
+SNP chr20:39199999-39200001 (un...  depth_fold         <=1.50                    1.14            PASS (advisory)
+[global]                            insert_size        mean 50-1000, sd 5-300    423+/-181       PASS
+[global]                            dup_rate           <50%                      10.7%           PASS
+[global]                            mean_mapq          >20                       59.9            PASS
+
+Result: 12/12 PASS
+Advisory: 6 checks, 6 PASS, 0 FAIL (not in the exit status; --strict includes them)

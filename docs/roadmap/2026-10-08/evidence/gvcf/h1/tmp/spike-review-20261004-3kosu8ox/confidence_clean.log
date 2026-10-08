@@ -1,0 +1,35 @@
+[2026-10-04T19:26:17Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-04T19:26:17Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-04T19:26:17Z INFO  spike::bam_stats] Stats: 100 cycles (the most common read length); 186 of 816 full-length reads end in A, so the library was not adapter-trimmed (816 records sampled)
+[2026-10-04T19:26:17Z INFO  spike] Read names: of 816 sampled, 0 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 816 are other; spike's reads take the shape no flowcell position Picard can read, e.g. SPIKE_ev0001_hap_000000
+[2026-10-04T19:26:17Z INFO  spike] Simulated read group: @RG ID:sim SM:sample
+[2026-10-04T19:26:17Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (0 MB)
+[2026-10-04T19:26:17Z INFO  spike] SNV  chr1:5001 T>A: 0 of 6 reads carry another allele here
+[2026-10-04T19:26:17Z WARN  spike] SNV  chr1:5001 T>A: only 6 reads span it at MAPQ >= 0, fewer than 10, so whether the sample already carries another allele here was not checked
+[2026-10-04T19:26:17Z INFO  spike] Processing event 1/1: SmallVariant { chrom: "chr1", pos: 5000, ref_allele: [84], alt_allele: [65], gene: "unknown", allele_fraction: Some(1.0) }
+[2026-10-04T19:26:17Z INFO  spike]   Using VAF=1.000 for this event
+[2026-10-04T19:26:17Z INFO  spike::extract] Extracting read pairs from chr1:3000-7001 (MAPQ >= 0)
+[2026-10-04T19:26:17Z INFO  spike::extract] Pass 1: collected 164 read1 + 164 read2 records (156 pairs already complete)
+[2026-10-04T19:26:17Z INFO  spike::extract] Extracted 172 complete read pairs from chr1:3000-7001
+[2026-10-04T19:26:17Z INFO  spike::stats] Fragment distribution: mean=300.0, stddev=0.0, n=172
+[2026-10-04T19:26:17Z INFO  spike::extract] Built read pool: 172 pairs
+[2026-10-04T19:26:17Z INFO  spike]   Reads over the event spike cannot edit: 0 of 8 (0.000)
+[2026-10-04T19:26:17Z INFO  spike::synth] Quality profile: 172 pairs, 100 cycles. R1 mean Q: start=93.0 mid=93.0 end=93.0, R2: start=93.0 end=93.0. Base-conditioned bins: 790/800 usable. Markov bins: base 783/3200, cycle 198/800 usable
+[2026-10-04T19:26:17Z WARN  spike::synth] Quality profile learned from 172 donor pairs; below 1000 its low-quality runs come out shorter than the sample's (measured on HG002 35x). Base-conditioned bins: 790/800 usable. Markov bins: base 783/3200, cycle 198/800 usable. Widen --flank or --region for a larger pool.
+[2026-10-04T19:26:17Z INFO  spike::loh] chr1:3000-7001: 0 het SNPs, 0 hom-alt SNPs
+[2026-10-04T19:26:17Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-04T19:26:17Z INFO  spike::simulate] Tiling 148 synthetic reads across 4001bp haplotype (cov=12.0, vaf=1.00, bp_only=false)
+[2026-10-04T19:26:17Z INFO  spike::simulate] simulate_event: 23 kept, 149 suppressed, 148 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-04T19:26:17Z INFO  spike] Event 1: 23 kept + 148 chimeric, 149 suppressed
+[2026-10-04T19:26:17Z INFO  spike] Duplicates of the removed originals: 0 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-04T19:26:17Z INFO  spike::fastq] Wrote 171 read pairs to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R2.fq.gz
+[2026-10-04T19:26:17Z INFO  spike::truth] Wrote truth VCF with 1 events to /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/truth.vcf
+[2026-10-04T19:26:17Z INFO  spike] Originals removed from the BAM: 172 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-04T19:26:17Z INFO  spike] Originals to remove from the raw FASTQ: 149 read pairs (fastq_removed_reads.txt); the 23 spike kept stay as the raw reads they are
+[2026-10-04T19:26:17Z INFO  spike] === spike complete ===
+[2026-10-04T19:26:17Z INFO  spike] Output directory: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean
+[2026-10-04T19:26:17Z INFO  spike] spike's reads, around the events only (not the whole sample): /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R1.fq.gz and /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/R2.fq.gz
+[2026-10-04T19:26:17Z INFO  spike] Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/truth.vcf
+[2026-10-04T19:26:17Z INFO  spike] Total read pairs: 171
+[2026-10-04T19:26:17Z INFO  spike] README: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/README.md
+[2026-10-04T19:26:17Z INFO  spike] Next steps: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/align.sh  →  bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/merge.sh; or, for the whole sample as spiked FASTQ: bash /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/confidence_clean/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)

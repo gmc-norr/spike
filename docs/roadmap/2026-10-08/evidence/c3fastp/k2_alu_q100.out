@@ -1,0 +1,60 @@
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa1
+BAD own alu 150 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 0 aa1
+BAD own noalu 151 [('3p', '1-4', False)] nearestQ100 None mapq 60 - NM 7 aa1
+BAD own noalu 151 [('3p', '21+', False)] nearestQ100 None mapq 52 XA NM 0 aa1
+BAD own alu 151 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 0 aa1
+BAD own alu 150 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 9 aa2
+BAD spike alu 150 [('3p', '21+', False)] nearestQ100 (22, 2) mapq 60 - NM 1 aa2
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 5 aa3
+BAD own alu 149 [('3p', '21+', False)] nearestQ100 (34, 0) mapq 60 - NM 0 aa3
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 (50, 0) mapq 60 - NM 1 aa3
+BAD spike alu 151 [('5p', '1-4', False)] nearestQ100 (128, 1) mapq 60 - NM 0 aa3
+BAD spike alu 150 [('3p', '5-20', False)] nearestQ100 (66, 0) mapq 60 - NM 5 aa3
+BAD own alu 151 [('3p', '5-20', False)] nearestQ100 (181, 1) mapq 60 - NM 0 aa3
+BAD own alu 151 [('3p', '5-20', False)] nearestQ100 (198, 0) mapq 60 - NM 3 aa3
+BAD spike alu 151 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 1 aa5
+BAD spike noalu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa5
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa5
+BAD own alu 150 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 0 aa5
+BAD own noalu 151 [('3p', '21+', False)] nearestQ100 (42, 0) mapq 60 - NM 0 aa6
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 51 - NM 3 aa6
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa6
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa6
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 2 aa6
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 aa6
+BAD own noalu 151 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 13 aa7
+BAD spike noalu 151 [('5p', '21+', False), ('3p', '5-20', False)] nearestQ100 (98, 0) mapq 60 - NM 4 aa7
+BAD spike noalu 149 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 3 aa7
+BAD spike alu 151 [('3p', '21+', False)] nearestQ100 (60, 1) mapq 60 - NM 2 aa8
+BAD own alu 150 [('3p', '5-20', False)] nearestQ100 (47, 1) mapq 60 - NM 0 aa9
+BAD own alu 117 [('5p', '1-4', False)] nearestQ100 (191, 1) mapq 60 XA NM 4 aa9
+BAD own alu 117 [('3p', '1-4', False)] nearestQ100 (191, 1) mapq 60 XA NM 2 aa9
+BAD spike alu 150 [('3p', '5-20', False)] nearestQ100 None mapq 60 - NM 3 aa9
+BAD own noalu 151 [('5p', '21+', False)] nearestQ100 (107, 0) mapq 60 - NM 0 aa10
+BAD own noalu 149 [('3p', '5-20', False)] nearestQ100 None mapq 60 - NM 8 aa11
+BAD own alu 150 [('5p', '5-20', False)] nearestQ100 (123, 0) mapq 40 - NM 2 aa11
+BAD own alu 151 [('5p', '1-4', True)] nearestQ100 (0, 0) mapq 30 - NM 0 aa11
+BAD own alu 150 [('3p', '5-20', False)] nearestQ100 (76, 0) mapq 60 - NM 3 aa11
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 5 aa12
+BAD own alu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 2 aa12
+BAD own alu 151 [('5p', '5-20', False)] nearestQ100 None mapq 60 XA NM 7 aa12
+BAD own alu 151 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 2 aa12
+BAD own noalu 150 [('5p', '1-4', False)] nearestQ100 (46, 0) mapq 60 - NM 2 aa14
+BAD own alu 150 [('5p', '5-20', False)] nearestQ100 (151, 0) mapq 60 - NM 3 aa14
+BAD own alu 151 [('3p', '21+', False)] nearestQ100 (28, 0) mapq 60 - NM 4 aa14
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 (87, 0) mapq 60 - NM 1 aa14
+BAD spike noalu 150 [('3p', '5-20', False)] nearestQ100 None mapq 60 - NM 1 aa14
+BAD spike alu 151 [('3p', '5-20', False)] nearestQ100 None mapq 60 - NM 2 nn1
+BAD own noalu 150 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 4 nn5
+BAD own noalu 150 [('5p', '5-20', False)] nearestQ100 None mapq 60 - NM 4 nn5
+BAD spike noalu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 nn5
+BAD spike alu 150 [('3p', '5-20', False)] nearestQ100 None mapq 60 XA NM 3 nn5
+BAD own noalu 151 [('5p', '21+', False)] nearestQ100 None mapq 60 - NM 1 nn6
+BAD own noalu 148 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 0 nn6
+BAD own alu 150 [('5p', '1-4', False)] nearestQ100 None mapq 60 - NM 2 ld1
+BAD own alu 150 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 ld2
+BAD own alu 150 [('3p', '5-20', True)] nearestQ100 (10, 0) mapq 60 - NM 6 ld2
+BAD spike alu 151 [('3p', '5-20', False)] nearestQ100 None mapq 60 - NM 5 ld2
+BAD own alu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 2 ld2
+BAD own alu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 ld2
+BAD own alu 151 [('3p', '21+', False)] nearestQ100 None mapq 60 - NM 0 ld2

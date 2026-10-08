@@ -1,0 +1,56 @@
+Detecting adapter sequence for read1...
+>Illumina TruSeq Adapter Read 1
+AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+
+Detecting adapter sequence for read2...
+>Illumina TruSeq Adapter Read 2
+AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+
+Read1 before filtering:
+total reads: 257970
+total bases: 38953470
+Q20 bases: 38067720(97.7261%)
+Q30 bases: 36411300(93.4738%)
+Q40 bases: 0(0%)
+
+Read2 before filtering:
+total reads: 257970
+total bases: 38953470
+Q20 bases: 37754430(96.9219%)
+Q30 bases: 35737200(91.7433%)
+Q40 bases: 0(0%)
+
+Read1 after filtering:
+total reads: 256980
+total bases: 38760630
+Q20 bases: 37906710(97.7969%)
+Q30 bases: 36264510(93.5602%)
+Q40 bases: 0(0%)
+
+Read2 after filtering:
+total reads: 256980
+total bases: 38762820
+Q20 bases: 37629690(97.0768%)
+Q30 bases: 35633700(91.9275%)
+Q40 bases: 0(0%)
+
+Filtering result:
+reads passed filter: 513960
+reads failed due to low quality: 1800
+reads failed due to too many N: 180
+reads failed due to too short: 0
+reads failed due to adapter dimer: 0
+reads with adapter trimmed: 5430
+bases trimmed due to adapters: 84510
+reads corrected by overlap analysis: 8640
+bases corrected by overlap analysis: 15930
+
+Duplication rate: 96.8927%
+
+Insert size peak (evaluated by paired-end reads): 261
+
+JSON report: n2.json
+HTML report: /dev/null
+
+/home/parlar_ai/dev/vicon-ng/.pixi/envs/default/bin/fastp -i big_R1.fq -I big_R2.fq -o n2_R1.fq -O n2_R2.fq --detect_adapter_for_pe --length_required 40 --correction -w 8 -j n2.json -h /dev/null 
+fastp v1.3.3, time used: 20 seconds

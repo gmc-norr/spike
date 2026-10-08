@@ -1,0 +1,36 @@
+3. WHICH BASE IS CALLED (sequencing orientation)
+  good reads, Q37 bases    bases 6631674  called A:28.6 C:21.6 G:21.6 T:28.2   reference A:28.6 C:21.6 G:21.6 T:28.2   wrong calls (623) A:27.3 C:25.5 G:24.1 T:23.1
+                           top ref>called: T>C 13%, T>A 12%, A>G 12%, G>T 12%
+  good reads, Q<15 bases   bases  158672  called A:29.3 C:16.2 G:19.1 T:35.4   reference A:27.7 C:16.3 G:19.0 T:37.0   wrong calls (12984) A:42.0 C:17.5 G:19.2 T:21.3
+                           top ref>called: T>A 24%, C>A 17%, T>G 16%, G>T 15%
+  crashed tails, Q11       bases   63140  called A:28.5 C:21.4 G:24.7 T:25.4   reference A:25.1 C:25.0 G:18.2 T:31.6   wrong calls (21393) A:35.4 C:13.3 G:34.5 T:16.8
+                           top ref>called: T>G 17%, T>A 17%, C>A 16%, A>G 9%
+  crashed tails, Q25       bases   19808  called A:27.8 C:25.1 G:22.6 T:24.6   reference A:25.6 C:26.2 G:20.1 T:28.2   wrong calls (2160) A:39.9 C:12.7 G:34.7 T:12.7
+                           top ref>called: T>G 23%, T>A 22%, C>A 16%, A>C 9%
+  crashed tails, Q37       bases   41890  called A:28.7 C:20.7 G:24.8 T:25.9   reference A:28.1 C:20.9 G:23.7 T:27.3   wrong calls (1326) A:36.7 C:11.5 G:42.8 T: 9.1
+                           top ref>called: T>G 34%, T>A 21%, C>A 14%, A>C 8%
+  bad-end clipped bases    bases  145877  called A:31.3 C:21.2 G:24.8 T:22.7   reference A:25.8 C:24.1 G:20.4 T:29.6   wrong calls (47887) A:39.3 C:14.3 G:30.3 T:16.1
+                           top ref>called: T>A 20%, T>G 16%, C>A 16%, G>T 9%
+
+4. OUT OF STEP? (wrong calls that equal the next or previous reference base in sequencing order)
+  good reads, Q37          wrong calls    311: = next base 34.7%   = previous base 32.8%   (chance about 33% each)
+  good reads, Q11          wrong calls   6222: = next base 33.9%   = previous base 33.6%   (chance about 33% each)
+  crashed tails, Q11       wrong calls  12193: = next base 36.1%   = previous base 36.5%   (chance about 33% each)
+  crashed tails, Q25       wrong calls   1209: = next base 38.0%   = previous base 38.1%   (chance about 33% each)
+  crashed tails, Q37       wrong calls    721: = next base 39.4%   = previous base 40.4%   (chance about 33% each)
+  bad-end clipped bases    wrong calls  26882: = next base 37.2%   = previous base 37.9%   (chance about 33% each)
+  clips >= 8 bp (3599): identity in step 0.67, one ahead 0.30, one behind 0.31; clips better one ahead or behind than in step by 0.2+: 0.9%
+
+5. DO ERRORS COME IN RUNS? (crashed tails, last 40 cycles, counted bases with Q < 15)
+  crash-noclip  P(wrong | base before wrong) 0.156 (1831)   P(wrong | base before right) 0.188 (18020)
+  crash-clip    P(wrong | base before wrong) 0.435 (11725)   P(wrong | base before right) 0.408 (29637)
+
+6. ERROR RATE AT Q < 15 BY HOW FAR INTO THE LOW RUN (crashed reads; the low run ending at the base)
+  crash-noclip  1-1: 0.172  2-3: 0.180  4-7: 0.177  8-15: 0.153  16-31: 0.143  32-151: 0.000
+  crash-clip    1-1: 0.324  2-3: 0.359  4-7: 0.397  8-15: 0.398  16-31: 0.408  32-151: 0.471
+
+7. CRASHED READS: WHAT SEPARATES CLIP FROM NO CLIP
+  crash-noclip  wrong in last 30: median 3 (quartiles 2-4)   low in last 30: median 14   last wrong base, cycles from end: median 6
+                wrong in last 30, share of reads: 0: 7.1 1:15.3 2:23.7 3:22.3 4:17.7 5:10.2 6: 3.8 7: 0.0 8: 0.0 9+: 0.0
+  crash-clip    wrong in last 30: median 8 (quartiles 6-11)   low in last 30: median 17   last wrong base, cycles from end: median 1
+                wrong in last 30, share of reads: 0: 0.0 1: 0.1 2: 0.9 3: 2.8 4: 6.5 5:10.2 6:14.7 7:12.2 8:11.7 9+:41.0

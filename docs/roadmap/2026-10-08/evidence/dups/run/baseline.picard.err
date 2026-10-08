@@ -1,0 +1,24 @@
+17:17:38.561 INFO  NativeLibraryLoader - Loading libgkl_compression.so from jar:file:/tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/names/picard-3.3.0.jar!/com/intel/gkl/native/libgkl_compression.so
+[Sun Oct 04 17:17:38 CEST 2026] MarkDuplicates --MAX_SEQUENCES_FOR_DISK_READ_ENDS_MAP 50000 --INPUT /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/run/baseline.sorted.bam --OUTPUT /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/run/baseline.bam --METRICS_FILE /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/run/baseline.metrics.txt --TMP_DIR /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/dups/run/tmp --REFERENCE_SEQUENCE /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta --MAX_FILE_HANDLES_FOR_READ_ENDS_MAP 8000 --SORTING_COLLECTION_SIZE_RATIO 0.25 --TAG_DUPLICATE_SET_MEMBERS false --REMOVE_SEQUENCING_DUPLICATES false --TAGGING_POLICY DontTag --CLEAR_DT true --DUPLEX_UMI false --FLOW_MODE false --FLOW_DUP_STRATEGY FLOW_QUALITY_SUM_STRATEGY --FLOW_USE_END_IN_UNPAIRED_READS false --FLOW_USE_UNPAIRED_CLIPPED_END false --FLOW_UNPAIRED_END_UNCERTAINTY 0 --FLOW_UNPAIRED_START_UNCERTAINTY 0 --FLOW_SKIP_FIRST_N_FLOWS 0 --FLOW_Q_IS_KNOWN_END false --FLOW_EFFECTIVE_QUALITY_THRESHOLD 15 --ADD_PG_TAG_TO_READS true --REMOVE_DUPLICATES false --ASSUME_SORTED false --DUPLICATE_SCORING_STRATEGY SUM_OF_BASE_QUALITIES --PROGRAM_RECORD_ID MarkDuplicates --PROGRAM_GROUP_NAME MarkDuplicates --READ_NAME_REGEX <optimized capture of last three ':' separated fields as numeric values> --OPTICAL_DUPLICATE_PIXEL_DISTANCE 100 --MAX_OPTICAL_DUPLICATE_SET_SIZE 300000 --VERBOSITY INFO --QUIET false --VALIDATION_STRINGENCY STRICT --COMPRESSION_LEVEL 5 --MAX_RECORDS_IN_RAM 500000 --CREATE_INDEX false --CREATE_MD5_FILE false --help false --version false --showHidden false --USE_JDK_DEFLATER false --USE_JDK_INFLATER false
+[Sun Oct 04 17:17:38 CEST 2026] Executing as <user>@<host> on Linux 6.8.0-124-generic amd64; OpenJDK 64-Bit Server VM 21.0.12.1+1-1-24.04.4-Ubuntu; Deflater: Intel; Inflater: Intel; Provider GCS is available; Picard version: Version:3.3.0
+INFO	2026-10-04 17:17:38	MarkDuplicates	Start of doWork freeMemory: 268538792; totalMemory: 281018368; maxMemory: 8589934592
+INFO	2026-10-04 17:17:38	MarkDuplicates	Reading input file and constructing read end information.
+INFO	2026-10-04 17:17:38	MarkDuplicates	Will retain up to 31122951 data points before spilling to disk.
+INFO	2026-10-04 17:17:41	MarkDuplicates	Read 958514 records. 0 pairs never matched.
+INFO	2026-10-04 17:17:41	MarkDuplicates	After buildSortedReadEndLists freeMemory: 591844248; totalMemory: 960495616; maxMemory: 8589934592
+INFO	2026-10-04 17:17:41	MarkDuplicates	Will retain up to 268435456 duplicate indices before spilling to disk.
+INFO	2026-10-04 17:17:42	MarkDuplicates	Traversing read pair information and detecting duplicates.
+INFO	2026-10-04 17:17:42	MarkDuplicates	Traversing fragment information and detecting duplicates.
+INFO	2026-10-04 17:17:42	MarkDuplicates	Sorting list of duplicate records.
+INFO	2026-10-04 17:17:42	MarkDuplicates	After generateDuplicateIndexes freeMemory: 1903548720; totalMemory: 4068474880; maxMemory: 8589934592
+INFO	2026-10-04 17:17:42	MarkDuplicates	Marking 39914 records as duplicates.
+INFO	2026-10-04 17:17:42	MarkDuplicates	Found 14017 optical duplicate clusters.
+INFO	2026-10-04 17:17:42	MarkDuplicates	Reads are assumed to be ordered by: coordinate
+INFO	2026-10-04 17:17:50	MarkDuplicates	Writing complete. Closing input iterator.
+INFO	2026-10-04 17:17:50	MarkDuplicates	Duplicate Index cleanup.
+INFO	2026-10-04 17:17:50	MarkDuplicates	Getting Memory Stats.
+INFO	2026-10-04 17:17:50	MarkDuplicates	Before output close freeMemory: 279901328; totalMemory: 293601280; maxMemory: 8589934592
+INFO	2026-10-04 17:17:50	MarkDuplicates	Closed outputs. Getting more Memory Stats.
+INFO	2026-10-04 17:17:50	MarkDuplicates	After output close freeMemory: 86963344; totalMemory: 100663296; maxMemory: 8589934592
+[Sun Oct 04 17:17:50 CEST 2026] picard.sam.markduplicates.MarkDuplicates done. Elapsed time: 0.20 minutes.
+Runtime.totalMemory()=100663296

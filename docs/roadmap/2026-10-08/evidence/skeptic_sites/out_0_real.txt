@@ -1,0 +1,1 @@
+real minBQ 0 {'scored': 905756, 'cand': 453, 'cand_one_strand': 366, 'ss_sa>=2': 1247, 'ss_sa>=3': 181, 'ss_any>=3': 231, 'ss_any>=2': 1554, 'mismatches': 45148, 'bases': 17658760} cand/Mb 500.1

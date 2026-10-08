@@ -1,0 +1,13 @@
+h2a snp:chr20:10019032:A:C;af=0.5 gvcf=False: exit new 0 master 0; identical 5 of 5: PASS
+h2b snp:chr20:10019032:A:C;af=0.5 gvcf=True: exit new 0 master 0; identical 5 of 5: PASS
+h2c snp:chr20:5237028:C:G;af=0.5 gvcf=True: exit new 0 master 0; identical 5 of 5: PASS
+h3 skip chr20:27161815 (window 21): master refused: Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+h3 skip chr20:27397876 (window 97): master refused: Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+h3 skip chr20:28132619 (window 105): master refused: Error: event SNV  chr20:28133315 A>C has too few usable donor reads: 3 read pair(s) extracted from chr20:28123314-28143315, fewer than the 30 spike needs (0 rea
+h3 skip chr20:27393548 (window 126): master refused: Error: event SNV  chr20:27392903 T>A has too few usable donor reads: 5 read pair(s) extracted from chr20:27382902-27402903, fewer than the 30 spike needs (0 rea
+h3 skip chr20:28143536 (window 153): master refused: Error: event SNV  chr20:28144507 A>C has too few usable donor reads: 6 read pair(s) extracted from chr20:28134506-28154507, fewer than the 30 spike needs (0 rea
+h3 skip chr20:26750937 (window 167): master refused: Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+h3 skip chr20:26751156 (window 167): master refused: Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+h3 skip chr20:26752225 (window 167): master refused: Error: The reads over 1 event would carry less than half of what truth.vcf would claim, so spike stops rather than write it (RF8):
+h3 chr20:4767379 A>G (window 181, event snp:chr20:4768371:A:C;af=0.5): SPIKE_ reads new {'alt': 13} master {'ref': 13}: PASS
+H2/H3: PASS

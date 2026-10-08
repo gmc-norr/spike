@@ -1,0 +1,12 @@
+real: no-indel reads 122089 (clipped 1.83%)
+  cycles to 3p end   1- 10: class meanQ<30 3.00e-03 (39/13003)  class 30-35 7.70e-04 (90/116932)  class >=35 9.01e-05 (83/920783)
+  cycles to 3p end  11- 30: class meanQ<30 3.35e-03 (96/28657)  class 30-35 5.18e-04 (127/244950)  class >=35 7.09e-05 (133/1875171)
+  cycles to 3p end  31- 60: class meanQ<30 2.89e-03 (136/47007)  class 30-35 2.28e-04 (88/385537)  class >=35 5.26e-05 (150/2852486)
+  cycles to 3p end  61-200: class meanQ<30 1.46e-03 (270/184976)  class 30-35 1.28e-04 (162/1262866)  class >=35 6.98e-05 (614/8800014)
+  reads by aligned Q>=30 mismatches: 0:0.9858 1:0.0128 2:0.0010 3:0.0003 4:0.0001 5:0.0000 6+:0.00003
+spike21: no-indel reads 125258 (clipped 1.33%)
+  cycles to 3p end   1- 10: class meanQ<30 5.13e-03 (59/11491)  class 30-35 1.15e-03 (150/130798)  class >=35 3.77e-04 (353/937157)
+  cycles to 3p end  11- 30: class meanQ<30 7.25e-03 (186/25649)  class 30-35 8.01e-04 (217/270754)  class >=35 7.18e-05 (136/1894377)
+  cycles to 3p end  31- 60: class meanQ<30 5.90e-03 (266/45098)  class 30-35 4.78e-04 (205/428964)  class >=35 7.25e-05 (209/2883506)
+  cycles to 3p end  61-200: class meanQ<30 3.31e-03 (615/185575)  class 30-35 3.20e-04 (451/1408805)  class >=35 8.35e-05 (743/8894239)
+  reads by aligned Q>=30 mismatches: 0:0.9779 1:0.0184 2:0.0025 3:0.0007 4:0.0003 5:0.0001 6+:0.00017

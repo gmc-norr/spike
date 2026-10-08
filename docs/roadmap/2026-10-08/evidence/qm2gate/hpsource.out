@@ -1,0 +1,10 @@
+other   reads  234921: called-base bin above the template's  0.63%, below  0.59%
+    template bin 0: called-base bin 0-3  99.5%   0.3%   0.2%   0.0%  (185053)
+    template bin 1: called-base bin 0-3   2.9%  96.5%   0.6%   0.1%  (19975)
+    template bin 2: called-base bin 0-3   1.6%   0.6%  96.4%   1.4%  (23186)
+    template bin 3: called-base bin 0-3   0.4%   0.7%   3.3%  95.6%  (6707)
+crashed reads    2628: called-base bin above the template's 14.73%, below  6.93%
+    template bin 0: called-base bin 0-3  78.1%   7.0%   7.0%   7.8%  (1024)
+    template bin 1: called-base bin 0-3  34.9%  50.0%  10.8%   4.2%  (166)
+    template bin 2: called-base bin 0-3  11.1%   2.2%  56.0%  30.7%  (450)
+    template bin 3: called-base bin 0-3   2.2%   1.2%   3.0%  93.5%  (988)

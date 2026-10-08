@@ -1,0 +1,51 @@
+QX 16: SD ratio 1.002 perfect z 3.60 crash z -5.58 (fake 0.97% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.65% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 1.13% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.24% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 7.44% real 14.57%
+QX 18: SD ratio 0.995 perfect z 2.75 crash z -6.03 (fake 0.96% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.42% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.81% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.42% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 12.79% real 14.57%
+QX 19: SD ratio 0.995 perfect z 0.63 crash z -5.14 (fake 0.98% real 1.14%)
+  reads whose own bases reach run bin 0: 188155 -- crashed fake 0.43% real 0.53%
+  reads whose own bases reach run bin 1: 20291 -- crashed fake 0.90% real 0.90%
+  reads whose own bases reach run bin 2: 23424 -- crashed fake 1.45% real 1.64%
+  reads whose own bases reach run bin 3: 7980 -- crashed fake 12.81% real 14.57%
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running unittests src/main.rs (../qm-target/release/deps/spike-25467841c52e4f3e)
+QX 0: held-out bases; observed errors, the model's rate given the real history, and errors simulated along the real qualities
+  all counted bases        bases  35968087  observed 0.0037  predicted 0.0037 (1.00)  simulated 0.0037 (1.00)
+  crashed tails, Q<15      bases     41809  observed 0.3393  predicted 0.2704 (0.80)  simulated 0.2725 (0.80)
+  crashed tails, Q15-29    bases     12964  observed 0.1129  predicted 0.0638 (0.56)  simulated 0.0653 (0.58)
+  crashed tails, Q30+      bases     28939  observed 0.0323  predicted 0.0141 (0.44)  simulated 0.0141 (0.44)
+  not crashed, last 40     bases   9404598  observed 0.0048  predicted 0.0051 (1.08)  simulated 0.0051 (1.07)
+  crashed reads (>= 10 Q<15 tail bases): 2080; per-read tail rate SD observed 0.172, simulated 0.129
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/main.rs (../qm-target/release/deps/spike-25467841c52e4f3e)
+QX 12: held-out bases; observed errors, the model's rate given the real history, and errors simulated along the real qualities
+  all counted bases        bases  35968087  observed 0.0037  predicted 0.0037 (1.00)  simulated 0.0037 (1.00)
+  crashed tails, Q<15      bases     41809  observed 0.3393  predicted 0.2981 (0.88)  simulated 0.2956 (0.87)
+  crashed tails, Q15-29    bases     12964  observed 0.1129  predicted 0.0803 (0.71)  simulated 0.0814 (0.72)
+  crashed tails, Q30+      bases     28939  observed 0.0323  predicted 0.0200 (0.62)  simulated 0.0199 (0.62)
+  not crashed, last 40     bases   9404598  observed 0.0048  predicted 0.0050 (1.04)  simulated 0.0050 (1.04)
+  crashed reads (>= 10 Q<15 tail bases): 2080; per-read tail rate SD observed 0.172, simulated 0.123
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running unittests src/main.rs (../qm-target/release/deps/spike-25467841c52e4f3e)
+QX 36: held-out bases; observed errors, the model's rate given the real history, and errors simulated along the real qualities
+  all counted bases        bases  35968087  observed 0.0037  predicted 0.0037 (1.00)  simulated 0.0037 (1.00)
+  crashed tails, Q<15      bases     41809  observed 0.3393  predicted 0.3133 (0.92)  simulated 0.3011 (0.89)
+  crashed tails, Q15-29    bases     12964  observed 0.1129  predicted 0.0929 (0.82)  simulated 0.0884 (0.78)
+  crashed tails, Q30+      bases     28939  observed 0.0323  predicted 0.0233 (0.72)  simulated 0.0226 (0.70)
+  not crashed, last 40     bases   9404598  observed 0.0048  predicted 0.0049 (1.02)  simulated 0.0049 (1.03)
+  crashed reads (>= 10 Q<15 tail bases): 2080; per-read tail rate SD observed 0.172, simulated 0.155
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running unittests src/main.rs (../qm-target/release/deps/spike-25467841c52e4f3e)
+QX 44: held-out bases; observed errors, the model's rate given the real history, and errors simulated along the real qualities
+  all counted bases        bases  35968087  observed 0.0037  predicted 0.0037 (1.00)  simulated 0.0037 (1.00)
+  crashed tails, Q<15      bases     41809  observed 0.3393  predicted 0.3124 (0.92)  simulated 0.2952 (0.87)
+  crashed tails, Q15-29    bases     12964  observed 0.1129  predicted 0.0910 (0.81)  simulated 0.0878 (0.78)
+  crashed tails, Q30+      bases     28939  observed 0.0323  predicted 0.0230 (0.71)  simulated 0.0220 (0.68)
+  not crashed, last 40     bases   9404598  observed 0.0048  predicted 0.0048 (1.02)  simulated 0.0049 (1.03)
+  crashed reads (>= 10 Q<15 tail bases): 2080; per-read tail rate SD observed 0.172, simulated 0.154

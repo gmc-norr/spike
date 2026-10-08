@@ -1,0 +1,51 @@
+crashed reads with a clip of another cause (left out): 1309 [("sample's own variant", 950), ('not in the reference', 228), ('simple repeat', 59), ('bad end', 43), ('chimeric fragment', 22), ('adapter', 7)]
+crashed reads used: 3156  of which bad-end clipped: 1984
+
+8a. HOW WRONG IS EACH CRASHED READ'S TAIL? (Q11 bases in the last 40 cycles)
+  reads with >= 10 such bases: 3141; pooled error rate 0.339
+  reads by tail error rate: 0.0-0.1: 7.1%  0.1-0.2:15.3%  0.2-0.3:23.0%  0.3-0.4:22.2%  0.4-0.5:16.6%  0.5-0.6:10.9%  0.6-0.7: 3.5%  0.7-1.0: 1.4%
+  if every read erred alike:  0.0-0.1: 1.0%  0.1-0.2: 8.1%  0.2-0.3:26.9%  0.3-0.4:34.1%  0.4-0.5:20.9%  0.5-0.6: 8.1%  0.6-0.7: 0.9%  0.7-1.0: 0.1%
+  spread of the per-read rate: SD 0.160 against 0.108 if every read erred alike
+
+8b. DOES ANYTHING THE QUALITIES SHOW PREDICT IT? (mean tail Q11 error rate per bin; SD within the bin; binomial SD)
+  by Q11 count in the last 40:
+    [0, 15): reads   274  rate 0.222  SD 0.160  (binomial 0.114)
+    [15, 20): reads  1139  rate 0.280  SD 0.147  (binomial 0.113)
+    [20, 25): reads  1181  rate 0.350  SD 0.149  (binomial 0.101)
+    [25, 30): reads   440  rate 0.424  SD 0.150  (binomial 0.097)
+    [30, 41): reads   107  rate 0.431  SD 0.128  (binomial 0.084)
+  by read mean quality:
+    [0, 26): reads  1190  rate 0.393  SD 0.145  (binomial 0.105)
+    [26, 28): reads   666  rate 0.329  SD 0.146  (binomial 0.108)
+    [28, 30): reads   593  rate 0.300  SD 0.152  (binomial 0.105)
+    [30, 32): reads   399  rate 0.273  SD 0.153  (binomial 0.110)
+    [32, 40): reads   293  rate 0.258  SD 0.184  (binomial 0.117)
+  by Q37 count in the last 40:
+    [0, 5): reads   115  rate 0.429  SD 0.151  (binomial 0.083)
+    [5, 10): reads   548  rate 0.390  SD 0.149  (binomial 0.101)
+    [10, 15): reads  1225  rate 0.351  SD 0.156  (binomial 0.102)
+    [15, 41): reads  1253  rate 0.276  SD 0.152  (binomial 0.113)
+  by first cycle of the last 40 with Q11 (from start):
+    [0, 115): reads  2571  rate 0.349  SD 0.158  (binomial 0.106)
+    [115, 120): reads   390  rate 0.298  SD 0.159  (binomial 0.110)
+    [120, 125): reads   109  rate 0.246  SD 0.147  (binomial 0.117)
+    [125, 152): reads    71  rate 0.248  SD 0.190  (binomial 0.107)
+  by Q11 count in the first 100 cycles:
+    [0, 5): reads   468  rate 0.278  SD 0.177  (binomial 0.114)
+    [5, 10): reads   302  rate 0.294  SD 0.153  (binomial 0.107)
+    [10, 20): reads   648  rate 0.317  SD 0.157  (binomial 0.109)
+    [20, 40): reads  1325  rate 0.352  SD 0.150  (binomial 0.109)
+    [40, 101): reads   398  rate 0.417  SD 0.136  (binomial 0.105)
+  by mate crashed (1) or not (0); -1 mate not kept:
+    [-1, 0): reads  2450  rate 0.334  SD 0.161  (binomial 0.106)
+    [0, 1): reads   412  rate 0.349  SD 0.154  (binomial 0.115)
+    [1, 2): reads   279  rate 0.367  SD 0.162  (binomial 0.104)
+
+8c. IS IT THE SAME READ ALL ALONG? (crashed reads: Q11 error rate in cycles 111-130 against 131-150, per read)
+  reads 2713: correlation of the two halves' rates 0.40
+  pairs where both mates crashed and were kept: 142; correlation of R1's and R2's tail rates 0.25
+
+8d. IN A WRONG TAIL, ARE EVEN THE HIGH QUALITIES WRONG? (last 40 cycles, by the read's Q11 tail rate)
+  reads whose Q11 tail rate is 0.0-0.2 (706): Q11 0.122 (12242)  Q25 0.021 (4557)  Q37 0.005 (11025)
+  reads whose Q11 tail rate is 0.2-0.4 (1418): Q11 0.297 (28391)  Q25 0.087 (9056)  Q37 0.022 (18684)
+  reads whose Q11 tail rate is 0.4-1.0 (1017): Q11 0.511 (22378)  Q25 0.209 (6116)  Q37 0.073 (11837)

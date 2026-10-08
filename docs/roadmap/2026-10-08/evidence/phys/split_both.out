@@ -1,0 +1,8 @@
+HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam {'sites': 1765390, 'A==1': 41641, 'A==1 & B>=1': 1834, 'B>=1': 43042, 'B>=2': 1206, 'A>=3': 191, 'A>=3 & B>=1': 117, 'A>=3 & B>=2': 71, 'A>=3 & other strand B>=1': 7}
+base rate per (site,strand,alt): P(B>=1) 0.00813  P(B>=2) 0.000228
+given A>=3 same-strand same-alt: P(B>=1) 0.613  P(B>=2) 0.372  (other strand in B >=1: 0.037); n=191
+given A==1 (a single error): P(B>=1) 0.0440; n=41641
+D24-14230_Seq25-7600_30x_sorted_md.bam {'sites': 1652388, 'B>=1': 2803, 'A==1': 2729, 'A==1 & B>=1': 46, 'B>=2': 20, 'A>=3': 4, 'A>=3 & B>=1': 2, 'A>=3 & B>=2': 1, 'A>=3 & other strand B>=1': 0}
+base rate per (site,strand,alt): P(B>=1) 0.00057  P(B>=2) 0.000004
+given A>=3 same-strand same-alt: P(B>=1) 0.500  P(B>=2) 0.250  (other strand in B >=1: 0.000); n=4
+given A==1 (a single error): P(B>=1) 0.0169; n=2729

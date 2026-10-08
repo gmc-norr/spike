@@ -1,0 +1,6 @@
+spike-rule                 lo  bases    511046 errors   56707 rate 1.110e-01; errors within 5 bp of a Q100 record 1271 (2.2%), in counted clips 15019
+spike-rule                 mid bases    880201 errors    4683 rate 5.320e-03; errors within 5 bp of a Q100 record 145 (3.1%), in counted clips 2158
+spike-rule                 hi  bases  17436647 errors    4202 rate 2.410e-04; errors within 5 bp of a Q100 record 475 (11.3%), in counted clips 2226
+truth-mask, aligned only   lo  bases    477678 errors   45210 rate 9.465e-02
+truth-mask, aligned only   mid bases    855617 errors    2799 rate 3.271e-03
+truth-mask, aligned only   hi  bases  17110882 errors    2142 rate 1.252e-04

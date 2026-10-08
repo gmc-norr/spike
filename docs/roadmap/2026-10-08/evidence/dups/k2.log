@@ -1,0 +1,10 @@
+PASS  R1.fq.gz identical
+PASS  R2.fq.gz identical
+PASS  truth.vcf identical
+PASS  sim.bam records identical: 201212 records
+PASS  replaced_reads.txt new = old plus added: old 100938, new 101576, added 638
+PASS  fastq_removed_reads.txt new = old plus the same names: old 13920, new 14558
+PASS  every added name is a source duplicate: 0 not
+PASS  100% of added names are duplicates of a removed kept pair (independent key): 638 of 638
+PASS  >= 99% of such duplicate pairs are added: 638 of 638 = 1.0000
+K2: PASS

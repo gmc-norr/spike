@@ -1,0 +1,62 @@
+[2026-10-07T12:46:35Z INFO  spike::validate] spike validate
+[2026-10-07T12:46:35Z INFO  spike::validate]   BAM:       snv/merged.bam
+[2026-10-07T12:46:35Z INFO  spike::validate]   Truth VCF: snv/truth.vcf
+[2026-10-07T12:46:35Z INFO  spike::validate]   Reference: /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta
+[2026-10-07T12:46:35Z INFO  spike::validate] Loaded 25 truth events
+[2026-10-07T12:46:35Z WARN  spike::validate] allele_freq check is not evaluable for SNP chr20:38549999-38550000 (unknown): a correct spike-in would too often show no more alt reads than errors do
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38549999-38550000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38609999-38610000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38669999-38670000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38729999-38730000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38789999-38790000 (unknown)
+[2026-10-07T12:46:35Z WARN  spike::validate] allele_freq check is not evaluable for SNP chr20:38849999-38850000 (unknown): a correct spike-in would too often show no more alt reads than errors do
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38849999-38850000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38909999-38910000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:38969999-38970000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39029999-39030000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39089999-39090000 (unknown)
+[2026-10-07T12:46:35Z WARN  spike::validate] allele_freq check is not evaluable for SNP chr20:39149999-39150000 (unknown): a correct spike-in would too often show no more alt reads than errors do
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39149999-39150000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39209999-39210000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39269999-39270000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39329999-39330000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39389999-39390000 (unknown)
+[2026-10-07T12:46:35Z WARN  spike::validate] allele_freq check is not evaluable for SNP chr20:39449999-39450000 (unknown): a correct spike-in would too often show no more alt reads than errors do
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39449999-39450000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39509999-39510000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39569999-39570000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39629999-39630000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39689999-39690000 (unknown)
+[2026-10-07T12:46:35Z WARN  spike::validate] allele_freq check is not evaluable for SNP chr20:39749999-39750000 (unknown): a correct spike-in would too often show no more alt reads than errors do
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39749999-39750000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39809999-39810000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39869999-39870000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39929999-39930000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] Checked: SNP chr20:39989999-39990000 (unknown)
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3386 records from chr20:38545000-38555000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3368 records from chr20:38605000-38615000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3395 records from chr20:38665000-38675000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3631 records from chr20:38725000-38735000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3269 records from chr20:38785000-38795000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3479 records from chr20:38845000-38855000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3475 records from chr20:38905000-38915000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3387 records from chr20:38965000-38975000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3295 records from chr20:39025000-39035000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3113 records from chr20:39085000-39095000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3284 records from chr20:39145000-39155000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3321 records from chr20:39205000-39215000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3489 records from chr20:39265000-39275000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3276 records from chr20:39325000-39335000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3225 records from chr20:39385000-39395000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3314 records from chr20:39445000-39455000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3125 records from chr20:39505000-39515000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 2861 records from chr20:39565000-39575000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3180 records from chr20:39625000-39635000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 2929 records from chr20:39685000-39695000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3091 records from chr20:39745000-39755000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3332 records from chr20:39805000-39815000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3132 records from chr20:39865000-39875000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 2914 records from chr20:39925000-39935000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sampled 3085 records from chr20:39985000-39995000
+[2026-10-07T12:46:35Z INFO  spike::validate] [global] sample: 81356 records over 25 of 25 event regions (up to 8000 each)
+[2026-10-07T12:46:35Z ERROR spike] 5/28 validation checks failed

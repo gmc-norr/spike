@@ -1,0 +1,1 @@
+Error: --indel-error-rate must be in [0.0, 1.0]: it is the fraction of sequencing errors that are indels; got NaN

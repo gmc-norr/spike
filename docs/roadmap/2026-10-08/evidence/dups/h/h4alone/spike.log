@@ -1,0 +1,6 @@
+error: the following required arguments were not provided:
+  --into-fastq <RAW_R1> <RAW_R2>
+
+Usage: spike-if --bam <BAM> --reference <REFERENCE> --into-fastq <RAW_R1> <RAW_R2> --vcf <VCF> --seed <SEED> --threads <THREADS> --aligner <ALIGNER> --align --fastq-prefix <NAME> --output <OUTPUT>
+
+For more information, try '--help'.

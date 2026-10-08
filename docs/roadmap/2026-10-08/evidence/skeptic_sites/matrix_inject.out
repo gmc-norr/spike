@@ -1,0 +1,5 @@
+real {'cand': 453, 'ss_sa>=2': 1247, 'ss_sa>=3': 181, 'ss_any>=3': 231}
+spike {'cand': 85, 'ss_sa>=2': 329, 'ss_sa>=3': 2, 'ss_any>=3': 16}
+spike+real-matrix seed 1 {'cand': 158, 'ss_sa>=2': 545, 'ss_sa>=3': 6, 'ss_any>=3': 16}
+spike+real-matrix seed 2 {'cand': 158, 'ss_sa>=2': 565, 'ss_sa>=3': 4, 'ss_any>=3': 16}
+spike+real-matrix seed 3 {'cand': 154, 'ss_sa>=2': 548, 'ss_sa>=3': 6, 'ss_any>=3': 16}

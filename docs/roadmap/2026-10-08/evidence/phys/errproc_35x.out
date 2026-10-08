@@ -1,0 +1,46 @@
+==================== real reads 125364
+N bases 495 (2.61e-05/base); Q2 bases 495, Q2 on non-N 0
+ R1 mismatch by Q: Q11 7.6611% (n=190978); Q25 0.1839% (n=369758); Q37 0.0084% (n=8460024)
+ R2 mismatch by Q: Q11 10.4274% (n=262137); Q25 0.4248% (n=456417); Q37 0.0155% (n=8272358)
+ Q<15 R1 top-alt share 0.747 | A->C0.56/G0.12/T0.32(2379) C->A0.92/G0.08/T0.00(3131) G->A0.03/C0.13/T0.84(2904) T->A0.69/C0.01/G0.30(6217)
+ Q<15 R2 top-alt share 0.692 | A->C0.62/G0.09/T0.29(6495) C->A0.90/G0.10/T0.00(5163) G->A0.05/C0.17/T0.78(4718) T->A0.60/C0.01/G0.40(10958)
+ Q15-29 R1 top-alt share 0.682 | A->C0.47/G0.21/T0.32(115) C->A0.89/G0.06/T0.05(118) G->A0.05/C0.20/T0.75(102) T->A0.66/C0.07/G0.27(345)
+ Q15-29 R2 top-alt share 0.670 | A->C0.68/G0.07/T0.25(497) C->A0.92/G0.07/T0.01(296) G->A0.05/C0.20/T0.75(224) T->A0.57/C0.02/G0.41(922)
+ Q>=30 R1 top-alt share 0.594 | A->C0.17/G0.58/T0.25(130) C->A0.33/G0.13/T0.54(94) G->A0.27/C0.11/T0.61(218) T->A0.30/C0.60/G0.10(267)
+ Q>=30 R2 top-alt share 0.496 | A->C0.43/G0.38/T0.18(382) C->A0.77/G0.07/T0.16(237) G->A0.26/C0.27/T0.47(190) T->A0.42/C0.17/G0.40(470)
+ R1 mismatch% cycles 1-5 0.085, 6-10 0.057, 50-100 0.168, 141-145 0.298, 146-150 0.324, 151 0.538
+ R2 mismatch% cycles 1-5 0.176, 6-10 0.137, 50-100 0.319, 141-145 0.572, 146-150 0.535, 151 0.841
+ high-Q (>=30) mismatch rate by preceding dinucleotide (seq orientation), ratio to overall 1.19e-04:
+   CC 1.26x(129) AC 1.15x(115) CT 1.15x(158) GA 1.12x(129) GC 1.09x(93) TG 1.07x(155) CA 1.01x(146) AG 0.97x(135) GT 0.97x(97) GG 0.95x(99) TT 0.95x(186) CG 0.93x(18) AA 0.93x(180) AT 0.92x(145) TC 0.84x(99) TA 0.78x(104)
+ recurrent same-strand same-alt error sites: keys 44952, >=2 reads 1302, >=3 reads 196; mismatches in >=2 sites 2922 of 46572 (6.27%)
+ slips (1-2 bp indels) per read pass over a homopolymer run, by run length:
+      4-5 passes   342700  ins     4  del    11  rate 0.0044%
+      6-7 passes    33317  ins     5  del     3  rate 0.0240%
+      8-9 passes     5176  ins     8  del     3  rate 0.2125%
+    10-11 passes     1440  ins     7  del     7  rate 0.9722%
+    12-14 passes     1018  ins     4  del     2  rate 0.5894%
+      15+ passes      680  ins     6  del     9  rate 2.2059%
+   outside runs>=4: 129 indels over 17090685 bases (7.55e-06/base)
+==================== spike21 reads 125296
+N bases 0 (0.00e+00/base); Q2 bases 441, Q2 on non-N 441
+ R1 mismatch by Q: Q11 8.6766% (n=201472); Q25 0.3511% (n=384547); Q37 0.0186% (n=8649861)
+ R2 mismatch by Q: Q11 9.2517% (n=279137); Q25 0.4020% (n=470874); Q37 0.0234% (n=8466552)
+ Q<15 R1 top-alt share 0.337 | A->C0.33/G0.34/T0.33(5209) C->A0.32/G0.33/T0.34(3603) G->A0.34/C0.33/T0.33(3615) T->A0.33/C0.33/G0.34(5217)
+ Q<15 R2 top-alt share 0.338 | A->C0.34/G0.34/T0.33(7570) C->A0.33/G0.33/T0.34(5458) G->A0.34/C0.32/T0.34(5363) T->A0.33/C0.34/G0.33(7508)
+ Q15-29 R1 top-alt share 0.353 | A->C0.34/G0.32/T0.34(400) C->A0.31/G0.34/T0.35(301) G->A0.34/C0.35/T0.31(283) T->A0.30/C0.33/G0.37(366)
+ Q15-29 R2 top-alt share 0.364 | A->C0.27/G0.36/T0.36(535) C->A0.31/G0.32/T0.37(411) G->A0.32/C0.33/T0.35(423) T->A0.37/C0.34/G0.29(524)
+ Q>=30 R1 top-alt share 0.361 | A->C0.30/G0.31/T0.38(434) C->A0.33/G0.35/T0.32(345) G->A0.37/C0.30/T0.33(341) T->A0.34/C0.33/G0.33(489)
+ Q>=30 R2 top-alt share 0.355 | A->C0.30/G0.35/T0.35(561) C->A0.29/G0.36/T0.35(418) G->A0.32/C0.32/T0.36(426) T->A0.35/C0.33/G0.32(576)
+ R1 mismatch% cycles 1-5 0.087, 6-10 0.082, 50-100 0.209, 141-145 0.424, 146-150 0.414, 151 0.392
+ R2 mismatch% cycles 1-5 0.124, 6-10 0.127, 50-100 0.308, 141-145 0.555, 146-150 0.547, 151 0.574
+ high-Q (>=30) mismatch rate by preceding dinucleotide (seq orientation), ratio to overall 2.10e-04:
+   CG 1.30x(45) TC 1.11x(235) GC 1.08x(165) AT 1.07x(302) AG 1.05x(261) CC 1.05x(193) GT 1.03x(186) TT 1.02x(361) CA 1.00x(261) TA 0.98x(237) AA 0.98x(345) GA 0.97x(205) TG 0.97x(252) CT 0.96x(238) AC 0.87x(156) GG 0.80x(148)
+ recurrent same-strand same-alt error sites: keys 50034, >=2 reads 340, >=3 reads 2; mismatches in >=2 sites 682 of 50376 (1.35%)
+ slips (1-2 bp indels) per read pass over a homopolymer run, by run length:
+      4-5 passes   343083  ins     3  del     1  rate 0.0012%
+      6-7 passes    33427  ins     1  del     0  rate 0.0030%
+      8-9 passes     5167  ins     0  del     0  rate 0.0000%
+    10-11 passes     1439  ins     0  del     0  rate 0.0000%
+    12-14 passes     1003  ins     0  del     0  rate 0.0000%
+      15+ passes      728  ins     0  del     0  rate 0.0000%
+   outside runs>=4: 45 indels over 17104295 bases (2.63e-06/base)

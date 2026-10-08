@@ -1,0 +1,14 @@
+set real seed 21: 62682 held-out pairs written; learned from 63040 pairs in 20 blocks
+set spike seed 21: 62682 held-out pairs written; learned from 63040 pairs in 20 blocks
+set spike seed 22: 62682 held-out pairs written; learned from 63040 pairs in 20 blocks
+set spike seed 23: 62682 held-out pairs written; learned from 63040 pairs in 20 blocks
+set      reads  bad-end clip          95% CI  z vs real  any clip  crashed      z  mm/100
+real    125364         1.26%   1.20- 1.33%       0.00     1.95%    1.06%   0.00   0.367
+spike21  125263         1.23%   1.17- 1.29%      -0.86     1.33%    0.90%  -3.89   0.275
+spike22  125280         1.25%   1.19- 1.31%      -0.41     1.34%    0.91%  -3.79   0.271
+spike23  125294         1.27%   1.21- 1.33%       0.14     1.37%    0.91%  -3.67   0.276
+bad-end clip share by the template's longest-run bin (0 / 1 / 2 / 3), reads in brackets:
+  real     0.86% (98150)    1.00% (11778)    1.98% (11462)    9.91% (3974)
+  spike21   0.77% (98099)    0.73% (11775)    1.99% (11438)   11.67% (3951)
+  spike22   0.79% (98105)    0.75% (11774)    2.04% (11448)   11.84% (3953)
+  spike23   0.83% (98104)    0.67% (11780)    1.97% (11451)   11.92% (3959)

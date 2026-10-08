@@ -1,0 +1,8 @@
+[2026-10-07T17:22:52Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T17:22:52Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T17:22:52Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 12879 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T17:22:52Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1036-32931, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:17027:11939
+[2026-10-07T17:22:52Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-07T17:22:53Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-10-07T17:22:53Z INFO  spike] SNV  chr20:45000494 G>A: 42 of 43 reads carry another allele here
+Error: the sample already carries another allele at 1 small variant(s): SNV  chr20:45000494 G>A (42 of 43 reads). spike edits one copy and keeps the other copy's reads, so those reads keep that allele and the requested fraction cannot be reached (a hom-alt site asked for at 0.5 comes out all ALT). Remove these events from the input

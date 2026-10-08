@@ -1,0 +1,55 @@
+demo DELs: n=19 median_hom=0 >=2bp=1 blunt0=12 >=10bp=1
+ClinVar list DELs (as S=start,E=end): n=19 median_hom=2 >=2bp=11 blunt0=4 >=10bp=3
+ClinVar list DELs (as S=start-1,E=end-1): n=19 median_hom=0 >=2bp=3 blunt0=11 >=10bp=1
+ClinVar list DELs (as S=start,E=end-1): n=19 median_hom=1 >=2bp=8 blunt0=6 >=10bp=0
+ClinVar list DELs (as S=start-1,E=end): n=19 median_hom=0 >=2bp=3 blunt0=10 >=10bp=0
+demo all 22: n=22 bothInAlu=15 oneInAlu=6 sameOrientPair500=20
+ClinVar list: n=19 bothInAlu=6 oneInAlu=6 sameOrientPair500=16
+random same-length events in LDLR +-: n=3000 bothInAlu=870 oneInAlu=1484 sameOrientPair500=2441
+random same-length events: n=3000 median_hom=0 >=2bp=498 blunt0=1684 >=10bp=1
+
+SNAP (W=1000, minlen 10) of demo records
+LDLR_del_promoter_ex1_FrenchCanadian	DEL	dS=16	dE=-17	match=34	hom_after=34	AluSx/AluSx1	exons [1] -> [1]	SAME
+LDLR_del_ex5_Danish	DEL	dS=124	dE=-14	match=37	hom_after=37	AluSx/AluSx	exons [5] -> [5]	SAME
+LDLR_del_ex4-6_ClinVar	DEL	dS=-216	dE=-70	match=29	hom_after=29	AluSq10/AluSc8	exons [4, 5, 6] -> [4, 5, 6]	SAME
+LDLR_del_ex7-8_Danish	DEL	dS=-186	dE=-144	match=14	hom_after=14	AluJo/AluJb	exons [7, 8] -> [7, 8]	SAME
+LDLR_del_ex5-10_Czech	DEL	dS=-6	dE=650	match=10	hom_after=10	AluJo/AluY	exons [5, 6, 7, 8, 9, 10] -> [5, 6, 7, 8, 9, 10]	SAME
+LDLR_del_ex3-12_Czech	DEL	dS=119	dE=119	match=17	hom_after=17	FLAM_A/AluY	exons [3, 4, 5, 6, 7, 8, 9, 10, 11, 12] -> [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]	SAME
+LDLR_del_ex9-14_Czech	DEL	dS=-47	dE=-100	match=21	hom_after=21	AluY/AluSp	exons [9, 10, 11, 12, 13, 14] -> [9, 10, 11, 12, 13, 14]	SAME
+LDLR_del_ex9-15_Czech	DEL	dS=-38	dE=205	match=12	hom_after=12	AluJb/AluSx3	exons [9, 10, 11, 12, 13, 14, 15] -> [9, 10, 11, 12, 13, 14, 15]	SAME
+LDLR_del_ex13-15_Danish	DEL	dS=-88	dE=180	match=15	hom_after=15	AluSz6/AluSx1	exons [13, 14, 15] -> [13, 14, 15]	SAME
+LDLR_del_ex4-18_Italian	DEL	dS=601	dE=125	match=22	hom_after=22	AluSz/AluY	exons [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] -> [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]	SAME
+LDLR_del_ex2-3_FrenchCanadian	DEL	dS=-5	dE=-43	match=19	hom_after=19	AluJo/AluSq2	exons [2, 3] -> [2, 3]	SAME
+LDLR_del_ex16-17_partial18_Finnish	DEL	dS=-166	dE=419	match=18	hom_after=18	AluSp/AluSx	exons [16, 17]+part[18] -> [16, 17, 18]	CHANGED
+LDLR_del_ex2-12_Italian	DEL	dS=398	dE=814	match=11	hom_after=11	AluSz6/AluSx	exons [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] -> [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]	CHANGED
+LDLR_del_ex4_Taiwanese	DEL	dS=64	dE=200	match=21	hom_after=21	AluSz/AluSx	exons [4] -> [4]	SAME
+LDLR_del_ex11_Taiwanese	DEL	dS=-107	dE=-89	match=16	hom_after=16	AluSz/AluJo	exons [11] -> [11]	SAME
+LDLR_del_ex11-18_Taiwanese	DEL	dS=-9	dE=22	match=27	hom_after=27	AluSz/AluY	exons [11, 12, 13, 14, 15, 16, 17, 18] -> [11, 12, 13, 14, 15, 16, 17, 18]	SAME
+LDLR_del_ex17-18_Taiwanese	DEL	dS=-284	dE=-81	match=18	hom_after=18	AluJr/AluSx	exons [17, 18] -> [17, 18]	SAME
+LDLR_del_ex6-8_Taiwanese	DEL	dS=16	dE=56	match=13	hom_after=13	AluSx/AluJr	exons [6, 7, 8] -> [6, 7, 8]	SAME
+LDLR_del_promoter_ex2_Czech	DEL	dS=232	dE=135	match=11	hom_after=11	AluJr/FLAM_A	exons [1, 2] -> [1, 2]	SAME
+LDLR_dup_ex2-6_Czech	DUP	dS=95	dE=240	match=15	hom_after=15	AluJb/AluSq2	exons [2, 3, 4, 5, 6] -> [2, 3, 4, 5, 6]	SAME
+LDLR_dup_ex4-8_Czech	DUP	dS=123	dE=-154	match=20	hom_after=20	AluSz/AluJb	exons [4, 5, 6, 7, 8] -> [4, 5, 6, 7, 8]	SAME
+LDLR_dup_ex16-18_Czech	DUP	dS=147	dE=46	match=27	hom_after=27	AluSx1/AluY	exons [16, 17, 18] -> [16, 17, 18]	SAME
+snapped 22 of 22
+
+ACCURACY on ClinVar list: round ends to nearest 100, snap W=1000, distance to stated
+694275	hom_stated=2	Alu_ends=Yn	snap dS=121	dE=-587	match=22	AluY/AluSx1
+948222	hom_stated=3	Alu_ends=Yn	snap dS=-203	dE=-155	match=16	AluY/AluJo
+251055	hom_stated=7	Alu_ends=YY	snap dS=-21	dE=-21	match=33	AluY/AluSc8
+264666	hom_stated=1	Alu_ends=nn	snap dS=-88	dE=-232	match=27	AluSx1/AluJo
+251401	hom_stated=2	Alu_ends=nn	snap dS=591	dE=-106	match=22	AluSx/AluJo
+251407	hom_stated=22	Alu_ends=YY	snap dS=-70	dE=-64	match=28	AluSx/AluSz
+251409	hom_stated=4	Alu_ends=nY	snap dS=-199	dE=457	match=10	AluJo/AluY
+440726	hom_stated=1	Alu_ends=nn	snap dS=-229	dE=-165	match=30	AluJo/AluSz6
+251547	hom_stated=20	Alu_ends=YY	snap dS=135	dE=137	match=21	AluSz/AluY
+251616	hom_stated=0	Alu_ends=nn	snap dS=-221	dE=-359	match=30	AluSc8/AluSp
+264663	hom_stated=2	Alu_ends=nn	snap dS=551	dE=273	match=11	AluJb/AluSp
+4526720	hom_stated=0	Alu_ends=YY	snap dS=-29	dE=13	match=27	AluSx1/AluSp
+251726	hom_stated=1	Alu_ends=nn	snap dS=-285	dE=-251	match=19	AluJr/AluJo
+226298	hom_stated=20	Alu_ends=YY	snap dS=10	dE=10	match=20	AluSz/AluY
+3724	hom_stated=1	Alu_ends=nY	snap dS=-187	dE=63	match=16	AluSq/FLAM_C
+839359	hom_stated=0	Alu_ends=nY	snap dS=-188	dE=59	match=16	AluSq/FLAM_C
+3076070	hom_stated=3	Alu_ends=nY	snap dS=499	dE=-83	match=15	AluSx/AluSc8
+3711	hom_stated=5	Alu_ends=nn	snap dS=827	dE=350	match=17	FLAM_C/AluYb8
+4845403	hom_stated=0	Alu_ends=YY	snap dS=17	dE=16	match=33	AluSx1/AluSx1

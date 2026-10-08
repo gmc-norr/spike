@@ -1,0 +1,10 @@
+[2026-10-04T19:26:17Z INFO  spike::validate] spike validate
+[2026-10-04T19:26:17Z INFO  spike::validate]   BAM:       /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/true_del.bam
+[2026-10-04T19:26:17Z INFO  spike::validate]   Truth VCF: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/true_del.vcf
+[2026-10-04T19:26:17Z INFO  spike::validate]   Reference: /tmp/claude-1066/-home-parlar-ai-dev-spike/23a35c29-9600-4da2-a2c9-618425a1e0d3/scratchpad/gvcf/h1/tmp/spike-review-20261004-3kosu8ox/ref.fa
+[2026-10-04T19:26:17Z INFO  spike::validate] Loaded 1 truth events
+[2026-10-04T19:26:17Z INFO  spike::validate] Checked: DEL chr1:5000-5050 (unknown)
+[2026-10-04T19:26:17Z INFO  spike::validate] [global] sampled 3760 records from chr1:1-10050
+[2026-10-04T19:26:17Z INFO  spike::validate] [global] sample: 3760 records over 1 of 1 event regions (up to 200000 each)
+[2026-10-04T19:26:17Z WARN  spike::validate] dup_rate check is not evaluable for [global]: no sampled record carries the duplicate flag and no @PG record marked duplicates -- mark duplicates to evaluate it
+[2026-10-04T19:26:17Z ERROR spike] 1/5 validation checks failed

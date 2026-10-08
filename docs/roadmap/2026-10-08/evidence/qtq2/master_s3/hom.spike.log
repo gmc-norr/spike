@@ -1,0 +1,33 @@
+[2026-10-07T12:50:05Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-07T12:50:05Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T12:50:05Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 13793 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T12:50:05Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1018-32940, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:24974:11939
+[2026-10-07T12:50:05Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-07T12:50:05Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-10-07T12:50:05Z INFO  spike] Processing event 1/1: Deletion { chrom: "chr20", del_start: 38900000, del_end: 38910000, gene: "unknown", exons: [], allele_fraction: Some(1.0) }
+[2026-10-07T12:50:05Z INFO  spike]   Using VAF=1.000 for this event
+[2026-10-07T12:50:05Z INFO  spike::extract] Extracting read pairs from chr20:38890000-38920000 (MAPQ >= 20)
+[2026-10-07T12:50:05Z INFO  spike::extract] Pass 1: collected 4584 read1 + 4583 read2 records (4539 pairs already complete)
+[2026-10-07T12:50:05Z INFO  spike::extract] Extracted 4623 complete read pairs from chr20:38890000-38920000
+[2026-10-07T12:50:05Z INFO  spike::stats] Fragment distribution: mean=423.7, stddev=176.3, n=4591
+[2026-10-07T12:50:05Z INFO  spike::extract] Built read pool: 4623 pairs
+[2026-10-07T12:50:05Z INFO  spike]   Reads over the event spike cannot edit: 22 of 3183 (0.007)
+[2026-10-07T12:50:05Z INFO  spike::synth] Quality profile: 4623 pairs, 151 cycles. R1 mean Q: start=35.9 mid=35.8 end=34.3, R2: start=35.7 end=33.8. Base-conditioned bins: 1208/1208 usable. Markov bins: base 3167/4832, cycle 900/1208 usable
+[2026-10-07T12:50:05Z INFO  spike::loh] chr20:38898000-38912000: 2 het SNPs, 1 hom-alt SNPs
+[2026-10-07T12:50:05Z INFO  spike::loh] phased 2 het SNPs into 1 block(s); one haplotype picked per block
+[2026-10-07T12:50:05Z INFO  spike::loh] classified 31 fragments (22 event copy, 9 other); 17 ambiguous ties left unclassified
+[2026-10-07T12:50:05Z INFO  spike::simulate] Tiling 606 synthetic reads across 4000bp haplotype (cov=71.8, vaf=1.00, bp_only=false)
+[2026-10-07T12:50:05Z INFO  spike::simulate] simulate_event: 2497 kept, 2126 suppressed, 606 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-07T12:50:05Z INFO  spike] Event 1: 2497 kept + 606 chimeric, 2126 suppressed
+[2026-10-07T12:50:05Z INFO  spike] Duplicates of the removed originals: 301 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-07T12:50:05Z INFO  spike::fastq] Wrote 3103 read pairs to hom/R1.fq.gz and hom/R2.fq.gz
+[2026-10-07T12:50:05Z INFO  spike::truth] Wrote truth VCF with 1 events to hom/truth.vcf
+[2026-10-07T12:50:05Z INFO  spike] Originals removed from the BAM: 4924 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-07T12:50:05Z INFO  spike] Originals to remove from the raw FASTQ: 2427 read pairs (fastq_removed_reads.txt); the 2497 spike kept stay as the raw reads they are
+[2026-10-07T12:50:05Z INFO  spike] === spike complete ===
+[2026-10-07T12:50:05Z INFO  spike] Output directory: hom
+[2026-10-07T12:50:05Z INFO  spike] spike's reads, around the events only (not the whole sample): hom/R1.fq.gz and hom/R2.fq.gz
+[2026-10-07T12:50:05Z INFO  spike] Truth VCF: hom/truth.vcf
+[2026-10-07T12:50:05Z INFO  spike] Total read pairs: 3103
+[2026-10-07T12:50:05Z INFO  spike] README: hom/README.md
+[2026-10-07T12:50:05Z INFO  spike] Next steps: bash hom/align.sh  →  bash hom/merge.sh; or, for the whole sample as spiked FASTQ: bash hom/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)

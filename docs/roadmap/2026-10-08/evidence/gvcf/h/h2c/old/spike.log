@@ -1,0 +1,35 @@
+[2026-10-04T19:26:47Z INFO  spike] Parsed 1 --event spec(s) + 0 VCF event(s)
+[2026-10-04T19:26:47Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-04T19:26:47Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 16 of 31295 full-length reads end in A, so the library was adapter-trimmed (50000 records sampled)
+[2026-10-04T19:26:47Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:45:227NC2LT1:2:TILE:X:Y, 247 tiles, x 1000-52208, y 1016-29759, e.g. SPIKE_ev0001_hap_000000:45:227NC2LT1:2:2218:22853:29387
+[2026-10-04T19:26:47Z INFO  spike] Simulated read group: @RG ID:sim SM:D24-14230_Seq25-7600_30x
+[2026-10-04T19:26:48Z INFO  spike::reference] Loaded 1 chromosome(s) into shared reference (61 MB)
+[2026-10-04T19:26:48Z INFO  spike] SNV  chr20:5237028 C>G: 0 of 30 reads carry another allele here
+[2026-10-04T19:26:48Z INFO  spike] Processing event 1/1: SmallVariant { chrom: "chr20", pos: 5237027, ref_allele: [67], alt_allele: [71], gene: "unknown", allele_fraction: Some(0.5) }
+[2026-10-04T19:26:48Z INFO  spike]   Using VAF=0.500 for this event
+[2026-10-04T19:26:48Z INFO  spike::extract] Extracting read pairs from chr20:5227027-5247028 (MAPQ >= 20)
+[2026-10-04T19:26:48Z INFO  spike::extract] Pass 1: collected 2422 read1 + 2430 read2 records (2396 pairs already complete)
+[2026-10-04T19:26:48Z INFO  spike::extract] Extracted 2456 complete read pairs from chr20:5227027-5247028
+[2026-10-04T19:26:48Z INFO  spike::stats] Fragment distribution: mean=391.5, stddev=139.4, n=2456
+[2026-10-04T19:26:48Z INFO  spike::extract] Built read pool: 2456 pairs
+[2026-10-04T19:26:48Z INFO  spike]   Reads over the event spike cannot edit: 0 of 30 (0.000)
+[2026-10-04T19:26:48Z INFO  spike::synth] Quality profile: 2456 pairs, 151 cycles. R1 mean Q: start=39.2 mid=39.2 end=38.2, R2: start=38.5 end=38.0. Base-conditioned bins: 1206/1208 usable. Markov bins: base 1379/4832, cycle 693/1208 usable
+[2026-10-04T19:26:48Z INFO  spike::loh] no het SNPs from gVCF, trying pileup fallback
+[2026-10-04T19:26:48Z INFO  spike::loh] chr20:5235027-5239028: 0 het SNPs, 1 hom-alt SNPs
+[2026-10-04T19:26:48Z INFO  spike::loh] classified 0 fragments (0 event copy, 0 other); 0 ambiguous ties left unclassified
+[2026-10-04T19:26:48Z INFO  spike::haplotype] Applied 1 het SNP variants to haplotype sequence
+[2026-10-04T19:26:48Z INFO  spike::simulate] Tiling 222 synthetic reads across 4001bp haplotype (cov=48.2, vaf=0.50, bp_only=false)
+[2026-10-04T19:26:48Z INFO  spike::simulate] simulate_event: 2214 kept, 242 suppressed, 222 chimeric (haplotype-tiled), 0 depth copies
+[2026-10-04T19:26:48Z INFO  spike] Event 1: 2214 kept + 222 chimeric, 242 suppressed
+[2026-10-04T19:26:48Z INFO  spike] Duplicates of the removed originals: 20 pair(s), removed with them (replaced_reads.txt, fastq_removed_reads.txt); 0 removed pair(s) had a mate outside the windows read, so their duplicates were not looked for
+[2026-10-04T19:26:48Z INFO  spike::fastq] Wrote 2436 read pairs to out/R1.fq.gz and out/R2.fq.gz
+[2026-10-04T19:26:48Z INFO  spike::truth] Wrote truth VCF with 1 events to out/truth.vcf
+[2026-10-04T19:26:48Z INFO  spike] Originals removed from the BAM: 2476 read pairs (replaced_reads.txt); 0 of them were dropped for unusable quality and are not replaced
+[2026-10-04T19:26:48Z INFO  spike] Originals to remove from the raw FASTQ: 262 read pairs (fastq_removed_reads.txt); the 2214 spike kept stay as the raw reads they are
+[2026-10-04T19:26:48Z INFO  spike] === spike complete ===
+[2026-10-04T19:26:48Z INFO  spike] Output directory: out
+[2026-10-04T19:26:48Z INFO  spike] spike's reads, around the events only (not the whole sample): out/R1.fq.gz and out/R2.fq.gz
+[2026-10-04T19:26:48Z INFO  spike] Truth VCF: out/truth.vcf
+[2026-10-04T19:26:48Z INFO  spike] Total read pairs: 2436
+[2026-10-04T19:26:48Z INFO  spike] README: out/README.md
+[2026-10-04T19:26:48Z INFO  spike] Next steps: bash out/align.sh  →  bash out/merge.sh; or, for the whole sample as spiked FASTQ: bash out/fastq.sh RAW_R1 RAW_R2 OUT_R1 OUT_R2 (what --into-fastq RAW_R1 RAW_R2 runs at the end of a run)

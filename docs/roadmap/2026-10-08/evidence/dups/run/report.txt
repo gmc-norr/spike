@@ -1,0 +1,47 @@
+events: 20 het, 20 hom, 3 del; source duplicate names in chr20:9000000-13000000: 20184
+real sites passing the coverage test: 1435 hom, 2438 het
+
+per spiked hom SNV: position, old-allele reads / counted reads, of which source duplicates
+  chr20:9806690  2/37  2
+  chr20:10166290  1/35  1
+  chr20:10246166  1/31  1
+  chr20:10268010  0/39  0
+  chr20:10556271  1/33  1
+  chr20:10588808  2/32  2
+  chr20:10613857  3/33  3
+  chr20:10671966  2/58  2
+  chr20:10790935  1/34  1
+  chr20:10916573  0/36  0
+  chr20:11202668  2/21  2
+  chr20:11271062  2/48  2
+  chr20:11377069  0/33  0
+  chr20:11423804  1/31  1
+  chr20:11608464  1/27  1
+  chr20:11829692  2/28  2
+  chr20:11999260  0/28  0
+  chr20:12107613  0/37  0
+  chr20:12250868  0/23  0
+  chr20:12384597  2/32  2
+
+R_spk  = 23/676 = 0.0340  (20 spiked hom SNVs, spiked BAM)
+R_real = 81/47597 = 0.0017  (1435 real hom SNVs, baseline BAM)
+R_spk - R_real = 0.0323  (locked margin 0.02)
+L = 23/23 = 1.0000  (locked floor 0.5)
+old-allele reads at spiked hom SNVs, split: {'source duplicate': 23, 'not taken': 0, 'replaced': 0, 'SPIKE_': 0}
+
+C1: freed sets: 100 of 100 with the kept pair removed (>= 95), 0 of 100 untouched (<= 5); C1: PASS
+C2: R_real 0.0017 <= 0.10 and ref share at +1 bp 47234/47245 = 0.9998 (1421 sites) >= 0.90: PASS
+C3: spiked hom SNVs with >= 15 reads 20/20 (>= 15), real hom SNVs 1435 (>= 100): PASS
+
+reported, not judged:
+  BAM route (source minus replaced_reads.txt, plus sim.bam), hom SNVs: old allele 7/660 = 0.0106
+  het SNVs, alt share: spiked 314/678 = 0.4631
+  het SNVs, alt share: real 40113/80802 = 0.4964 (2438 sites)
+  duplicate share within 300 bp of the 40 spiked SNVs, spiked BAM: 60/6897 = 0.0087
+  duplicate share within 300 bp of the 40 spiked SNVs, baseline BAM: 253/7025 = 0.0360
+  hom DEL chr20:10856999-10857298: counted reads wholly inside: spiked 2 (source duplicates 2), baseline 34
+  hom DEL chr20:11012916-11013215: counted reads wholly inside: spiked 3 (source duplicates 3), baseline 38
+  hom DEL chr20:12334123-12334422: counted reads wholly inside: spiked 3 (source duplicates 3), baseline 37
+  Picard PERCENT_DUPLICATION: spiked 0.040578, baseline 0.041689
+
+D: matters

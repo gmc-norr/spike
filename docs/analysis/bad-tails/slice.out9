@@ -1,0 +1,32 @@
+crashed reads with a 3' clip: 3241; their causes: [('bad end', 1984), ("sample's own variant", 944), ('not in the reference', 227), ('simple repeat', 58), ('chimeric fragment', 21), ('adapter', 7)]
+
+9a. crashed 3'-clipped reads sharing their boundary (+-2 bp, same strand) with >= 1 other: 35.5%; with >= 2 others: 26.8%
+    shuffled boundaries, try 1: >= 1 other 15.7%; >= 2 others 3.3%
+    shuffled boundaries, try 2: >= 1 other 14.0%; >= 2 others 2.9%
+    shuffled boundaries, try 3: >= 1 other 15.8%; >= 2 others 2.4%
+    on the OTHER strand at the same spot: >= 1 2.5%
+
+9b. a true HG002 variant within 10 bp of the boundary:
+    shared boundary (>= 2 others)  reads   868: 27.2%
+    lone boundary (no other)       reads  2089: 7.9%
+    random positions                      : 3.1%
+
+9c. spots where >= 3 crashed reads clip at one boundary on one strand: 124
+    12 bp before the spot, in sequencing direction:   G share: 0.05 (random 0.21)  has GGC: 0.01 (random 0.12)  has GG: 0.08 (random 0.39)  homopolymer >= 4: 0.73 (random 0.20)  G-run >= 3: 0.03 (random 0.11)
+    examples (12 bp before | 6 bp after):
+      + chr20:38611435   TTTTTTTTTTTT | AGAAAC   crashed reads clipping here: 5
+      + chr20:38630149   TCCTCCCTCCTT | CCCTCC   crashed reads clipping here: 7
+      + chr20:38644620   TGCCCGTCACCC | ACCCAC   crashed reads clipping here: 4
+      + chr20:38644624   CGTCACCCACCC | ACTCAC   crashed reads clipping here: 5
+      + chr20:38657703   AAAAAAAAAAAA | GCCCCC   crashed reads clipping here: 6
+      + chr20:38668509   TTTTTTTTTTTT | GAGATA   crashed reads clipping here: 4
+      + chr20:38674508   CAAGCCCCGCCC | ATCCAT   crashed reads clipping here: 3
+      + chr20:38690634   AAAAAAAAAAAA | GCCCCG   crashed reads clipping here: 4
+      + chr20:38716676   GGTTACAGTGAG | CCGAGA   crashed reads clipping here: 4
+      + chr20:38777664   AAAAAAAAAAAA | CAAACT   crashed reads clipping here: 4
+      + chr20:38789631   AAAAAAAAAAAA | GAGGTG   crashed reads clipping here: 3
+      + chr20:38790326   GTCACCCCCCCC | TCCACG   crashed reads clipping here: 9
+
+9d. at those spots, all reads (crashed or not) on the strand that reads into the spot, against the other strand:
+    same  strand: wrong before 0.0113  after 0.0819   low quality before 0.0803  after 0.3281   (11427 / 11120 bases)
+    other strand: wrong before 0.0082  after 0.0081   low quality before 0.0470  after 0.0493   (24484 / 24026 bases)

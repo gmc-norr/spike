@@ -1,0 +1,2 @@
+real minBQ 10 {'scored': 905756, 'cand': 453, 'cand_one_strand': 366, 'ss_sa>=2': 1247, 'ss_sa>=3': 181, 'ss_any>=3': 231, 'ss_any>=2': 1554, 'mismatches': 45148, 'bases': 17658760} cand/Mb 500.1
+spike21 minBQ 10 {'scored': 917247, 'cand': 85, 'cand_one_strand': 46, 'ss_sa>=2': 329, 'ss_sa>=3': 2, 'ss_any>=3': 16, 'ss_any>=2': 935, 'mismatches': 48835, 'bases': 18140488} cand/Mb 92.7

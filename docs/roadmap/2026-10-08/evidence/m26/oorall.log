@@ -1,0 +1,31 @@
+[2026-10-07T21:33:25Z INFO  spike] Parsed 23 --event spec(s) + 0 VCF event(s)
+[2026-10-07T21:33:25Z INFO  spike::bam_stats] Computing BAM statistics from first 50000 records...
+[2026-10-07T21:33:25Z INFO  spike::bam_stats] Stats: 151 cycles (the most common read length); 12879 of 50000 full-length reads end in A, so the library was not adapter-trimmed (50000 records sampled)
+[2026-10-07T21:33:25Z INFO  spike] Read names: of 50000 sampled, 50000 have 7 fields and 0 5 (Picard reads a flowcell position from those) and 0 are other; spike's reads take the shape MACHINE:46:HV3C3DSXX:2:TILE:X:Y, 936 tiles, x 1036-32931, y 1000-37043, e.g. SPIKE_ev0001_hap_000000:46:HV3C3DSXX:2:1659:17027:11939
+[2026-10-07T21:33:25Z INFO  spike] Simulated read group: @RG ID:sim SM:HG002
+[2026-10-07T21:33:45Z INFO  spike::reference] Loaded 23 chromosome(s) into shared reference (2890 MB)
+Error: SNP/indel event start on chr1 is at or beyond chromosome length (248956521 >= 248956422)
+Command exited with non-zero status 1
+	Command being timed: "timeout 90 /home/parlar_ai/dev/spike/target/release/spike --bam /home/parlar_ai/dev/spike/data/giab_hg38/HG002/HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam --reference /home/parlar_ai/dev/spike/data/giab_hg38/reference/GCA_000001405.15_GRCh38_no_alt_analysis_set.fasta --seed 1 --event snp:chr1:248956522:A:G --event snp:chr2:242193629:A:G --event snp:chr3:198295659:A:G --event snp:chr4:190214655:A:G --event snp:chr5:181538359:A:G --event snp:chr6:170806079:A:G --event snp:chr7:159346073:A:G --event snp:chr8:145138736:A:G --event snp:chr9:138394817:A:G --event snp:chr10:133797522:A:G --event snp:chr11:135086722:A:G --event snp:chr12:133275409:A:G --event snp:chr13:114364428:A:G --event snp:chr14:107043818:A:G --event snp:chr15:101991289:A:G --event snp:chr16:90338445:A:G --event snp:chr17:83257541:A:G --event snp:chr18:80373385:A:G --event snp:chr19:58617716:A:G --event snp:chr20:64444267:A:G --event snp:chr21:46710083:A:G --event snp:chr22:50818568:A:G --event snp:chrX:156040995:A:G -o ./oorall"
+	User time (seconds): 3.72
+	System time (seconds): 16.32
+	Percent of CPU this job got: 95%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:20.98
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 6122108
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2257969
+	Voluntary context switches: 18
+	Involuntary context switches: 377
+	Swaps: 0
+	File system inputs: 6011588
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

@@ -1,0 +1,868 @@
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+
+Program stopped.
+0x00007ffff7fe4540 in _start () from /lib64/ld-linux-x86-64.so.2
+
+Program received signal SIGINT, Interrupt.
+dl_main (phdr=<optimized out>, phnum=<optimized out>, user_entry=<optimized out>, auxv=<optimized out>) at ./elf/rtld.c:2397
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d7944 in <noodles_bam::record::sequence::iter::Iter as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4975 in miniz_oxide::inflate::core::init_tree ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7d1bd6a in __GI___libc_read (nbytes=8192, buf=0x55555595e5c0, fd=3) at ../sysdeps/unix/sysv/linux/read.c:26
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7d1bd6a in __GI___libc_read (nbytes=8192, buf=0x55555595e5c0, fd=3) at ../sysdeps/unix/sysv/linux/read.c:26
+26	in ../sysdeps/unix/sysv/linux/read.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:377
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7d990c3 in __memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:765
+765	in ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7caba28 in _int_malloc (av=av@entry=0x7ffff7e04ac0 <main_arena>, bytes=bytes@entry=5) at ./malloc/malloc.c:1794
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556f41d4 in <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cbf84 in <spike::quality::QualityProfile>::from_input ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555557aa92f in <core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<core::iter::adapters::flatten::FlatMap<core::iter::adapters::flatten::FlatMap<core::slice::iter::Iter<spike::quality::DonorBlock>, core::slice::iter::Iter<spike::types::ReadPair>, <spike::quality::QualityProfile>::learn_counts::{closure#0}::{closure#0}>, [&alloc::vec::Vec<u8>; 2], <spike::quality::QualityProfile>::learn_counts::{closure#3}>, <spike::quality::QualityProfile>::learn_counts::{closure#4}>, <spike::quality::QualityProfile>::learn_counts::{closure#5}> as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cc9e4 in <spike::quality::QualityProfile>::from_input ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cc811 in <spike::quality::QualityProfile>::from_input ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cab0a9 in _int_free_merge_chunk (av=0x7ffff0000030, p=0x7ffff1d7c310, size=160) at ./malloc/malloc.c:4678
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cab115 in _int_free_create_chunk (nextsize=48, nextchunk=0x7fffe2437560, size=320, p=0x7fffe2437420, av=0x7ffff0000030) at ./malloc/malloc.c:4720
+4720	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+_int_malloc (av=av@entry=0x7ffff7e04ac0 <main_arena>, bytes=bytes@entry=64) at ./malloc/malloc.c:4332
+4332	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556f41d4 in <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555858540 in <hashbrown::raw::RawTable<(alloc::string::String, spike::extract::PartialRead)>>::reserve_rehash::<hashbrown::map::make_hasher<alloc::string::String, spike::extract::PartialRead, std::hash::random::RandomState>::{closure#0}> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4b41 in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:275
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cad764 in __GI___libc_malloc (bytes=351) at ./malloc/malloc.c:3301
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555581bbd2 in spike::extract::reverse_complement ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555858540 in <hashbrown::raw::RawTable<(alloc::string::String, spike::extract::PartialRead)>>::reserve_rehash::<hashbrown::map::make_hasher<alloc::string::String, spike::extract::PartialRead, std::hash::random::RandomState>::{closure#0}> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:164
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:166
+166	in ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7d1bd6a in __GI___libc_read (nbytes=8192, buf=0x555556b53200, fd=3) at ../sysdeps/unix/sysv/linux/read.c:26
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4d18 in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4e6e in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558b6d05 in <hashbrown::map::HashMap<alloc::string::String, (), std::hash::random::RandomState>>::insert ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:405
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555811981 in <std::io::buffered::bufreader::BufReader<std::fs::File> as std::io::Read>::read_exact ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555863007 in <noodles_bam::io::reader::query::Query<noodles_bgzf::reader::Reader<std::fs::File>> as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4e1f in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:166
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555557ef5c0 in spike::synth_generator ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555557efa92 in spike::synth_generator ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cfa1c in spike::quality::template_of ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe61 in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe0c in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4c3b in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe61 in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555582487b in <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d79b2 in <noodles_bam::record::sequence::iter::Iter as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555585dc13 in <hashbrown::raw::RawTable<(u64, [u32; 4])>>::reserve_rehash::<hashbrown::map::make_hasher<u64, [u32; 4], std::hash::random::RandomState>::{closure#0}> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe61 in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556f41a5 in <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:343
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558248bc in <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556f41ef in <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe61 in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555585dc13 in <hashbrown::raw::RawTable<(u64, [u32; 4])>>::reserve_rehash::<hashbrown::map::make_hasher<u64, [u32; 4], std::hash::random::RandomState>::{closure#0}> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555580fe61 in spike::loh::walk_cigar_count ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555805166 in spike::loh::sample_copies ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555810513 in spike::loh::walk_cigar_collect ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4b0a in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d4b0c in miniz_oxide::inflate::core::decompress_fast ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558104a9 in spike::loh::walk_cigar_collect ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:343
+343	in ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558104d6 in spike::loh::walk_cigar_collect ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555810307 in spike::loh::walk_cigar_collect ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d7999 in <noodles_bam::record::sequence::iter::Iter as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558103f0 in spike::loh::walk_cigar_collect ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d5013 in miniz_oxide::inflate::core::transfer ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558071ba in spike::loh::sample_copies ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555582493e in <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize> ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+_int_malloc (av=av@entry=0x7ffff7e04ac0 <main_arena>, bytes=bytes@entry=38) at ./malloc/malloc.c:4009
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+38	in ../sysdeps/unix/sysv/linux/x86_64/syscall.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826d40 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf85e in <spike::quality::QualityProfile>::emitted ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826f64 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555570c57c in rand_chacha::guts::refill_wide::impl_avx2 ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827870 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826b8e in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7ed03c5 in exp_inline (sign_bias=0, xtail=<optimized out>, x=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:243
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826b65 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826bd0 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf88f in <spike::quality::QualityProfile>::emitted ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf78e in <spike::quality::QualityProfile>::keys ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826d40 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555570c5ca in rand_chacha::guts::refill_wide::impl_avx2 ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558d57f7 in spike::simulate::simulate_event_inner ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827840 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827092 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf728 in <spike::quality::QualityProfile>::keys ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827810 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:365
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558270e5 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf3fc in <spike::quality::QualityProfile>::draw_classes ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cede6 in <spike::quality::QualityProfile>::draw_classes ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+exp_inline (sign_bias=0, xtail=<optimized out>, x=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:243
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826f40 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826c68 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+exp_inline (sign_bias=0, xtail=1.5487904686284071e-15, x=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:229
+229	in ../sysdeps/ieee754/dbl-64/e_pow.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+log_inline (tail=<synthetic pointer>, ix=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:91
+91	in ../sysdeps/ieee754/dbl-64/e_pow.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555826d40 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827826 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__pow (x=10, y=-3.7000000000000002) at ./w_pow_template.c:45
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7ed0400 in __ieee754_pow_fma (x=<optimized out>, y=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:380
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf7c2 in <spike::quality::QualityProfile>::emitted ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__ieee754_pow_fma (x=<optimized out>, y=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:379
+379	in ../sysdeps/ieee754/dbl-64/e_pow.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558cf725 in <spike::quality::QualityProfile>::keys ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__ieee754_pow_fma (x=<optimized out>, y=-3.7000000000000002) at ../sysdeps/ieee754/dbl-64/e_pow.c:379
+379	in ../sysdeps/ieee754/dbl-64/e_pow.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cae2f2 in __GI___libc_realloc (oldmem=0x55556ad575c0, bytes=23) at ./malloc/malloc.c:3519
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7ed02d9 in log_inline (tail=<synthetic pointer>, ix=<optimized out>) at ../sysdeps/ieee754/dbl-64/e_pow.c:91
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x0000555555827876 in <spike::synth::SynthReadGenerator>::generate_from_template ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cad89d in __GI___libc_malloc (bytes=151) at ./malloc/malloc.c:3318
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cab300 in _int_free (av=0x7ffff7e04ac0 <main_arena>, p=0x55555b686a10, have_lock=0) at ./malloc/malloc.c:4572
+4572	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7ca9bdd in unlink_chunk (p=p@entry=0x555559713380, av=0x7ffff7e04ac0 <main_arena>) at ./malloc/malloc.c:1616
+1616	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7ca9be3 in unlink_chunk (p=0x5555559db410, av=<optimized out>) at ./malloc/malloc.c:1613
+1613	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:167
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7d99086 in __memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:761
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cad7e3 in __GI___libc_malloc (bytes=54) at ./malloc/malloc.c:3334
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cade59 in __GI___libc_free (mem=0x55555981b610) at ./malloc/malloc.c:3371
+3371	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:166
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cae1b4 in __GI___libc_realloc (oldmem=0x55555c5a7080, bytes=32) at ./malloc/malloc.c:3413
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d7984 in <noodles_bam::record::sequence::iter::Iter as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d48c8 in miniz_oxide::inflate::core::init_tree ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558c4d8d in <core::iter::adapters::GenericShunt<alloc::boxed::Box<dyn core::iter::traits::iterator::Iterator<Item = core::result::Result<u8, std::io::error::Error>>>, core::result::Result<core::convert::Infallible, std::io::error::Error>> as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:412
+412	in ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d7959 in <noodles_bam::record::sequence::iter::Iter as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cab432 in tcache_put (tc_idx=0, chunk=0x5555591886e0) at ./malloc/malloc.c:3163
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cab65d in _int_malloc (av=av@entry=0x7ffff7e04ac0 <main_arena>, bytes=bytes@entry=129) at ./malloc/malloc.c:3846
+3846	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558c4d05 in <core::iter::adapters::GenericShunt<alloc::boxed::Box<dyn core::iter::traits::iterator::Iterator<Item = core::result::Result<u8, std::io::error::Error>>>, core::result::Result<core::convert::Infallible, std::io::error::Error>> as core::iter::traits::iterator::Iterator>::next ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cade4a in __GI___libc_free (mem=0x55555a134d80) at ./malloc/malloc.c:3359
+3359	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:765
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d48ab in miniz_oxide::inflate::core::init_tree ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcpy_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:266
+266	in ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555582eb2f in spike::origin::removed_duplicates ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555582e9eb in spike::origin::removed_duplicates ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memcmp_evex_movbe () at ../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:99
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555582f4bc in spike::origin::removed_duplicates ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555558308eb in spike::origin::removed_duplicates ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cade59 in __GI___libc_free (mem=0x55555d42cb90) at ./malloc/malloc.c:3371
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cade59 in __GI___libc_free (mem=0x55555bb23d20) at ./malloc/malloc.c:3371
+3371	in ./malloc/malloc.c
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x000055555588996e in spike::fastq::write_paired_fastq ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556bbfe5 in crc32fast::baseline::update_fast_16 ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d23f3 in miniz_oxide::deflate::core::compress ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d122d in miniz_oxide::deflate::core::compress ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:238
+238	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d1257 in miniz_oxide::deflate::core::compress ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556ce4d2 in miniz_oxide::deflate::core::flush_block ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555556d087c in miniz_oxide::deflate::core::compress ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+__memset_evex_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:228
+228	in ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00005555557e6348 in spike::fastq_removed_names ()
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+0x00007ffff7cade59 in __GI___libc_free (mem=0x55555bad6860) at ./malloc/malloc.c:3371
+
+Thread 1 "spike-bin" received signal SIGINT, Interrupt.
+_int_free (av=0x7ffff7e04ac0 <main_arena>, p=0x55555b73bf30, have_lock=0) at ./malloc/malloc.c:4547
+4547	in ./malloc/malloc.c
+[Inferior 1 (process 3704377) exited normally]

@@ -1,0 +1,4 @@
+HG002.novaseq.pcr-free.35x.bwamem2.dedup.grch38_no_alt.bam {'sites': 569338, 'A==1': 12115, 'A==1 & B>=1': 405, 'B>=1': 12173, 'B>=2': 252, 'A>=3': 21, 'A>=3 & B>=1': 9, 'A>=3 & B>=2': 7, 'A>=3 & other strand B>=1': 1}
+base rate per (site,strand,alt): P(B>=1) 0.00713  P(B>=2) 0.000148
+given A>=3 same-strand same-alt: P(B>=1) 0.429  P(B>=2) 0.333  (other strand in B >=1: 0.048); n=21
+given A==1 (a single error): P(B>=1) 0.0334; n=12115
